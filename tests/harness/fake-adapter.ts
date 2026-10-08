@@ -199,8 +199,8 @@ export const REPLAY_BARRIER: TurnEvent = {
   description: "history/live barrier: replayed history ends here",
 };
 
-/** The event kinds that are transcript content, and so are replayed as history
- *  on a load-with-replay resume. Request lifecycle, previews, and Session
+/** The settled message, tool, partial-output, and Thought facts replayed as
+ *  history on a load-with-replay resume. Request lifecycle, previews, and Session
  *  availability and cumulative diffs belong only to the Turn that produced them. */
 const HISTORY_KINDS = new Set<TurnEvent["kind"]>([
   "assistant-content",

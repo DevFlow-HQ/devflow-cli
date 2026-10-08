@@ -146,7 +146,7 @@ test("an allowlisted target file may touch its permitted Bun API", () => {
   assert.deepEqual(checkVendorProvenance(root), []);
 });
 
-test("the POSIX lifetime allowance permits only bun:ffi in its named file", () => {
+test("m10-audit-guidance-refresh: the POSIX lifetime allowance permits only bun:ffi in its named file", () => {
   for (const extra of ["", "export const child = Bun.spawn(['true']);\n"]) {
     const root = synthetic((folder) => {
       mkdirSync(join(folder, "src", "process"), { recursive: true });
@@ -264,7 +264,7 @@ test("the allowlisted `globalThis.Bun?.main` entry form is accepted (D8)", () =>
   assert.deepEqual(checkVendorProvenance(root), []);
 });
 
-test("a vendored file without the provenance records is rejected", () => {
+test("m10-audit-guidance-refresh: a vendored file without the provenance records is rejected", () => {
   const root = synthetic((r) => {
     writeFileSync(
       join(r, "src", "copied.ts"),
@@ -354,4 +354,9 @@ test("clean emitted declarations raise nothing", () => {
     }),
     [],
   );
+});
+
+test("m10-audit-guidance-refresh: current vendor records and notices cover target code", () => {
+  assert.deepEqual(checkVendorProvenance(process.cwd()), []);
+  assert.deepEqual(checkNoticesCoverage(process.cwd()), []);
 });

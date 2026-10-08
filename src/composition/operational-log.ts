@@ -60,7 +60,8 @@ const DETAIL_EVENTS = new Set([
 /** Each event's level, mapped here so no observer chooses one: a detail
  *  checkpoint is debug; a failed Harness phase, an unclean Harness cleanup, a
  *  not-ready Harness qualification, a child that never ran, timed out, or
- *  needed a force kill, and a failed runner scenario or stage are warnings;
+ *  needed a force kill, initial-preparation or invocation cleanup failures,
+ *  unresolved preparation cleanup, and a failed runner scenario or stage warn;
  *  every other record is info. */
 function recordLevel(record: OperationalRecord): "debug" | "info" | "warn" {
   if (DETAIL_EVENTS.has(record.event) || "step" in record) return "debug";

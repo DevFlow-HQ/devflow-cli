@@ -19,7 +19,8 @@ decide the screen and its routes.
   approve-reject gate keeps its headless path and shows only as the prompt's note, as does a checkpoint whose answer Offer is not current.
 - There is no header. Above 120 columns the 42-column `Sidebar` carries the Bundle, the state in words, the Steps by glyph, the current Step's Session (its
   plain name carries any Iteration), Harness, Model choice beside a differing observed model and any requested change still pending, and reported
-  context. At 120 or less the prompt's meta row carries Step, Session, and Model choice, and the two #418 metadata slots sit above the bottom region.
+  context and usage in two fixed slots outside history (#418). At 120 or less the prompt's meta row carries
+  Step, Session, and Model choice, and the two #418 metadata slots sit above the bottom region.
   Notices (Problem, conflict, view freshness, Operation receipts and refusals, Model choice messages) lead the conversation column and are counted; one
   status row under it carries the paused badge.
 - `PromptModel`/`promptHeight` (`run-workbench-views.tsx`) count exactly what `PromptControl` draws: a note, one field row per draft line up to four, the meta
@@ -43,49 +44,12 @@ decide the screen and its routes.
 - Every key clears the two-press Interrupt arm on arrival; only the prompt's Esc reads the arm it found, so dismissing a dialog, details, or inspection, or
   answering a request or gate, never arms or dispatches it. A withdrawn or replaced Turn Offer, or any interaction but the prompt, clears it too, and the
   next Esc after such a clear is consumed, so an Esc pair straddling the Turn's end never leaves. Ctrl+C clears a nonempty draft whatever holds focus.
-- The working scanner (`working-scanner.tsx`, #292) leads the prompt's hint only while a Turn works: `working · esc esc interrupt`, or `enter steer · esc esc
-interrupt` while Steer is available. Its words carry the meaning, so the cells yield first on a narrow row; `reducedMotion` draws a static `[⋯]`. A refusal
-  sits above the hint rather than replacing it. An applied Operation receipt leaves on the next key, which keeps its recipient.
+- The working scanner (`working-scanner.tsx`, #292) leads the prompt hint only while a Turn works.
+  The hint reads `working · esc esc interrupt`, or `enter steer · esc esc interrupt` while Steer is available.
+  Its words carry the meaning, so the cells yield first on a narrow row; `reducedMotion` draws a static `[⋯]`.
+  A refusal sits above the hint. An applied Operation receipt leaves on the next key, which keeps its recipient.
 
-## Workspace path completion
-
-- `searchWorkspacePaths` filters ignores/dots/symlinks and returns ten paths; unavailable leaves text sendable. It reads no candidate content.
-- `workspace-mentions.ts` keys replies by Workspace, draft and caret, and cancels old search. Known Slash names suppress mentions.
-- Enter/Tab edits only the native token: quote whitespace, retain file ranges, slash folders without ranges. Escape keeps text; arrows leave the cursor still.
-- Requests/gates have no list. Rows share `PromptModel`; a compact hint fits narrow terminals. Acknowledge native replacements so remount cannot replay them.
-
-## Slash discovery and dispatch
-
-- The catalog retains registered command identities with availability; `entries()` hides unavailable entries, and `knownSlash` recognizes their first word
-  and aliases even then. Names ignore leading whitespace and case, matching the Harness-input protection's breadth without copying Harness rules.
-- Discovery requires first-character `/` and no whitespace. It uses shared catalog search and initially highlights only a name prefix. Up/Down selects,
-  Enter/Tab resolves the current registered entry and runs its `run`. A withdrawn selection never silently chooses another command. Esc dismisses the list
-  and keeps text before Interrupt or leave; Tab runs a highlighted entry before details focus. Paths without a highlight keep ordinary Enter send/Steer.
-- The native textarea maps Up/Down to inert `submit` while discovery owns arrows. The Port alone moves the list; native delivery never moves the cursor.
-  Known unavailable names and inline arguments show a refusal and keep text. Unknown words and paths use unchanged Application send/Steer admission.
-- Successful invocation clears the command draft before its owner runs. The list joins `PromptModel` row accounting, clips by display columns, and bounds
-  its visible window around the selection. Pending receipts keep discovery available. Requests, gates, checkpoints, dialogs, and confirmations suppress
-  discovery; Ctrl+P retains its permitted scope.
-
-## Drafts and restoration
-
-- The draft belongs to a semantic input target: the current Step, plus the Attempt a follow-up names (never a parsed Turn id). A different Step, or a
-  follow-up for another Attempt, resets only the departed draft; a follow-up first naming the steered Step's Attempt keeps it. Requests, unrelated updates,
-  resize, and catch-ups keep the draft and focus. Each newly interrupted Turn's follow-up refocuses the prompt. After an Interrupt the prompt's note says
-  the agent waits on the person: the follow-up's, or an interactive Step's until a later Turn settles.
-- Enter captures and clears sent Turn, follow-up and Steer text immediately (#420); admission never clears newer typing. The field stays editable.
-  A still-pending capture cannot be dispatched twice. A pending Steer holds a second Steer or boundary send back without freezing native editing.
-  Step-ending confirmations own a separate receipt. An unavailable Steer shows its Offer's reason only at Enter.
-- Refused receipts and Interrupt drops share one ordered restore before unsent text, separated by a single newline. Earlier pending captures hold later
-  restores back. Restored captures keep their order across later restores while native edits preserve the restored prefix; edits to that prefix make it
-  ordinary draft text. Every capture restores once, even if both a refusal and a drop are observed. Late Steer refusals say that text returned to the draft.
-- Restoration is bound to the captured Step and known follow-up Attempt. Old-target text stays out of a replacement draft and remains saved behind a
-  counted notice and Ctrl+P's `Recover unsent text`. Only that command moves it into the current draft. Distinct bottom controls instead offer
-  `Copy unsent text` through the terminal clipboard; unavailable clipboard support leaves text saved. Automatic restores preserve details or dialog focus.
-- Interrupt drops wait for the live Turn and pending receipts to leave (#356). Full text comes from `RunTimelineEvent.steer`, never its capped `detail`.
-  Steer receipts carry their opaque Operation id to match durable `steerId`, including identical-text retries and different Attempts.
-  Captured send order wins; uncaptured drops retain recorded order. Opening old history and repeated snapshots never restore twice. Restore only into an
-  interactive Step's prompt or an Agent Step's follow-up (#354); a signal-halted Agent Step's same-target drops stay history.
+Before changing completion, Slash discovery, drafts, prompt captures, or restoration, read [Workbench compose](./tui-compose.md).
 
 ## Confirmations, details, and dialogs
 
@@ -108,7 +72,25 @@ interrupt` while Steer is available. Its words carry the meaning, so the cells y
   `q` enters guarded Exit (#392). Keep Running preserves the content, scroll, and focus.
 - Immediate durable Turn settlement clears the Run control overlay (`reduceRunUpdate`, `run-view.tsx`); a trailing `settling` observation cannot restore it (#412).
   History ids survive wrapping/settlement. Ctrl+O opens first visible detail; click opens its row. Output/Thoughts toggle; supplied diffs open uncapped inspection.
-  History-only observer loss is visible and reconnectable; reopening issues fresh ids and resets the viewport. Workflow facts follow their Turn, including equal-time ties.
+  History-only observer loss is visible and reconnectable; reopening issues fresh ids and resets the viewport. Workflow facts follow their Turn, including equal-time
+  ties.
+
+## History
+
+- Workbench history (#412) consumes keyed complete Session pages and complete preview values. `mapArray` retains subscriptions by semantic Session;
+  ordinary Run updates never reopen them. `run-history-scroll.ts` stores opaque row ids and displayed-line offsets, and uses ordinals only for layout.
+  Alt+Up/Down scroll lines, PageUp/Down half a viewport, minimum one, Alt+Home oldest and Alt+End latest; native arrows/Home/End edit the prompt.
+  Keys yield to modal/details focus; OpenTUI wheel events bubble with the same guards. The Renderer Adapter maps `meta` to the Port's `alt`.
+  Passive changes stay paused. Up starts at the actual anchor, including blank space below short pages; only latest or deliberate Down resumes following.
+  A removed anchor chooses the nearest prior survivor, ties later, at offset zero; a short or empty page stays paused. Dividers count toward their content row.
+- Ctrl+O/click opens a history detail: output and Thoughts toggle by row id; call patches and Turn diffs open complete supplied content (#415–#417).
+  Output collapses at ten wrapped lines, never auto-expands; diff inspection stays uncapped. Thought ticks change headings; modal/input key ownership stays unchanged.
+- The retained transcript reader anchors Resource entry ids, independently of live history row ids. Its reserved notice line never moves content.
+- Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
+  `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.
+- Agent completion reasons (#372) are sanitized and clipped to one display line. The agent-ended row omits the timestamp to leave room on narrow screens.
+- Step and Session dividers (#289) are `wrapRows` rules leading the row that begins the Step or Session, never rows of their own, so the badge counts events
+  and the anchor holds. Their words live in `run-timeline-rows.ts` for both views; they compare the Application's `step`/`session` and parse no name.
 
 ## Read next
 

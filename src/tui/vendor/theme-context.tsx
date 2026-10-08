@@ -10,7 +10,7 @@ import { createStore } from "solid-js/store";
 import type { AppearancePreferences } from "../../application/projection-port.js";
 import { DEFAULT_THEMES, resolveTheme, type Theme } from "./theme.js";
 
-// Rebuilt against OpenCode packages/tui/src/context/theme.tsx at 1ead9e3d7f.
+// Rebuilt against OpenCode packages/tui/src/context/theme.tsx at 228e9095ba3988a02664c3816cb51f98584e86c2.
 // Keep one reactive palette object for existing destructuring consumers. Secant
 // owns local preview; Application owns saved Preferences (ADR 0037).
 interface ThemeContext {

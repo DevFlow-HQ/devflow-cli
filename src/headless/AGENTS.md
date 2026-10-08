@@ -46,8 +46,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   re-offered at a later generation (a prior answer went stale) is retried. `--harness-requests` defaults to **`deny`** (`parseHarnessRequestPolicy`): an
   unattended Run denies every approval unless the operator opts into `allow` (the only other value; Claude Code offers no "always"). `withHarnessRequests` starts
   the follower before settlement is awaited, so an Agent Turn that pauses on approval is unblocked and the Run can rest; it is harmless for a Command-only Run.
-- Observer loss never strands headless work (#306): `followHarnessRequests` and `settledOutcome` reopen after `observer-lagged`. Any other end stops the follower, and
-  `settledOutcome` returns `operation-observation-ended` (unknown effects) instead of the still-pending snapshot, so neither reopens into a spin at shutdown.
+- `settledOutcome` is only the Run-local outcome extractor; `settledOperation` in `operation-settlement.ts` owns receipt observation for Run and settings.
+- Observer loss never strands headless work (#306): `followHarnessRequests` and `settledOperation` reopen after `observer-lagged`. Any other end stops the follower, and
+  `settledOperation` returns `operation-observation-ended` (unknown effects) instead of the still-pending snapshot, so neither reopens into a spin at shutdown.
 - Launch preparation and Harness inspection share a private readiness waiter (#390): only `observer-lagged` reopens; every other end fails with no effects.
   Launch waits for ready/not-ready; inspection waits for a missing Harness or qualification beyond `not-checked`, including valid negative results.
 - `run launch --harness claude-code|codex` forwards the semantic choice through `LaunchRunInput`; Application owns required/unknown/irrelevant refusal. Resume accepts

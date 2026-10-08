@@ -42,7 +42,7 @@ test("a compliant tree with an indexed Module-local file passes", async () => {
   assert.deepEqual(issues, []);
 });
 
-test("the root index and focused documents have hard line caps", async () => {
+test("m10-audit-guidance-refresh: the root index and focused documents have hard line caps", async () => {
   const { issues } = await audit({
     "AGENTS.md": "- line\n".repeat(limits.rootLines + 1),
     "docs/agents/testing.md": "line\n".repeat(limits.focusedLines + 1),
@@ -80,7 +80,7 @@ test("prose wraps at the column limit while URLs, table rows, and fences are exe
   assert.equal(issues[0]?.line, 1);
 });
 
-test("relative links and backticked guidance paths must resolve", async () => {
+test("m10-audit-guidance-refresh: relative links and backticked guidance paths must resolve", async () => {
   const { issues } = await audit({
     "AGENTS.md": "# Agent Instructions\n\n- Read `docs/agents/missing.md`.\n",
     "docs/agents/testing.md":
@@ -110,7 +110,7 @@ test("relative links and backticked guidance paths must resolve", async () => {
   );
 });
 
-test("Module-local AGENTS.md sits at a declared Module root and is indexed in root AGENTS.md", async () => {
+test("m10-audit-guidance-refresh: Module-local AGENTS.md sits at a declared Module root and is indexed in root AGENTS.md", async () => {
   const { issues } = await audit({
     "src/harness/AGENTS.md": "# Harness\n",
     "src/harness/native/AGENTS.md": "# Native\n",
@@ -249,4 +249,8 @@ test("Module-local AGENTS.md uses only the Module sections, each once and in ord
       },
     ],
   );
+});
+
+test("m10-audit-guidance-refresh: the current guidance tree passes its structural check", () => {
+  assert.deepEqual(checkGuidanceStructure(process.cwd()), []);
 });

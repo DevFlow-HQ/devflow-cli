@@ -36,7 +36,8 @@ VENDORED PATHS
 --------------
 
 The initial entries were copied on 2026-09-10. Later entries record their own
-copy date. Every path comes from the OpenCode checkout at commit 1ead9e3d7f.
+copy date. Initial copies come from OpenCode commit 1ead9e3d7f; later study
+revisions are recorded per change below. Palette values retain the initial pin.
 
 1. src/tui/vendor/theme.ts
    Copied from: packages/tui/src/theme/index.ts
@@ -72,7 +73,8 @@ copy date. Every path comes from the OpenCode checkout at commit 1ead9e3d7f.
    Copied from: packages/tui/src/ui/dialog.tsx
    Date: 2026-09-10 (Dialog un-exported 2026-09-12, #71 audit A12;
      DialogContext un-exported 2026-09-30, #281;
-     Port-driven dialog keys added 2026-10-05, #351)
+     Port-driven dialog keys added 2026-10-05, #351;
+     Port geometry and focus restoration refreshed 2026-10-06, #409)
    Local modifications:
      - Dropped the toast / clipboard copy-on-select handlers.
      - Dropped the OPENCODE_EXPERIMENTAL flag branches.
@@ -84,6 +86,10 @@ copy date. Every path comes from the OpenCode checkout at commit 1ead9e3d7f.
      - Entries may take Workbench Renderer Port keys via onKey. Such entries
        disable the primitive's Escape/Ctrl+C keymap dismissal so the shared
        Model-choice picker owns its Escape-to-step-back behavior (#351).
+     - #409 studied packages/tui/src/ui/dialog.tsx at OpenCode revision
+       228e9095ba3988a02664c3816cb51f98584e86c2. Port-driven entries supply
+       geometry as well as keys; delayed focus restoration yields while a
+       replacement dialog is on the stack or the saved renderable is destroyed.
    Kept: the backdrop plus centred panel, the dialog stack, focus
      save/restore, and Escape / Ctrl+C dismissal.
 
@@ -545,7 +551,7 @@ Dropped as OpenCode-branded (the "three extra" drops):
 2026-10-06, #409: Home commands and active appearance
     Studied the local OpenCode checkout at 228e9095ba3988a02664c3816cb51f98584e86c2:
     packages/tui/src/routes/home.tsx, context/theme.tsx,
-    component/dialog-theme-list.tsx and component/command-palette.tsx.
+    component/dialog-theme-list.tsx, component/command-palette.tsx and ui/dialog.tsx.
     Rebuilt src/tui/home.tsx, command-search.tsx, app-commands.tsx,
     shell-commands.tsx and vendor/theme-context.tsx.
     Taken: searchable choices, selection preview, capture of entry appearance,

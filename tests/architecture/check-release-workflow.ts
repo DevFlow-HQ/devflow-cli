@@ -188,6 +188,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-observed-harness-facts",
   "m10-audit-workbench-test-domains",
   "m10-audit-windows-release-check",
+  "m10-audit-guidance-refresh",
   "m12-focused-check-scenarios",
   "m12-test-interface-ownership",
   "m12-renderer-test-lifecycle",

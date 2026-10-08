@@ -72,46 +72,14 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   and effort on `turn/start` (#345), Claude Code `--model --effort` at launch and typed controls to a reused child (#348). The observed effective
   model never copies the request.
 
-### Interrupt, recovery, and cleanup
+- Context reports replace facts without calculation (#418): Claude keeps model capacity; Codex keeps total/last usage distinct. Tool ids are Turn-local opaque values
+  (#414).
 
-- Codex control timeouts and native RPC errors refuse the call while native terminal truth owns the Turn; unexpected refusals emit a live activity diagnostic.
-  A timed-out Interrupt stays sent: retries and Steer are refused, and later connection loss leaves interruption unknown. A native RPC error resets it to idle.
-  Refusal alone preserves attachment; malformed responses and transport failures still lose and detach the Turn.
-- A Turn settles `interrupted` only on confirmed interruption: a matching native terminal is `active-turn` (Codex; Claude Code since #346), a graceful
-  process stop `process-only`. A force-kill, lost connection, or unconfirmed termination settles it `lost` with `interruption-unknown`. Windows has no
-  graceful stage ([process notes](../process/AGENTS.md)), so a process stop of a live child there truthfully settles `lost`. The profile's interruption
-  evidence states each Harness's stop and its per-OS fallback; the conformance `interruptOutcome` and `recoveryInterruptOutcome` options pin them.
-  Windows launch evidence selects confirm-then-reap: close the producer, reap, then settle `interrupted`. EOF cannot erase native truth. Cleanup has its
-  own Session-keyed phase; an incomplete reap retains ownership and prevents a duplicate native process.
-- Recovery is caller- and history-driven: a relaunch of a Session that already ran, or any Turn carrying `resume`, resumes that exact native conversation.
-  A resume the native side does not acknowledge is a `recovery`-phase failure that marks the Session `unusable`; recovery never silently starts a fresh
-  conversation. Codex app-server replacement failures leave Sessions detached; only an unacknowledged thread resume makes its Session unusable.
-  Each Adapter's resume mechanics are in [harness-adapters](../../docs/agents/harness-adapters.md).
-- Context reports replace facts without calculation (#418): Claude keeps model capacity; Codex keeps total/last usage distinct. Tool ids are Turn-local opaque values (#414).
+- Before changing Interrupt, recovery, or Turn cleanup, read [Harness Turn control](../../docs/agents/harness-turn-control.md).
 
 ## Tests
 
-- `tests/harness` owns the fake, shared conformance and native replayers; fixtures retain `recording.json` provenance and opt-in recorders.
-- Prepare/lifecycle cases run all Adapters; Codex replay covers exact-thread recovery, approvals, native Steer, and leftover re-delivery, and
-  Claude replay covers native and pending Steer. Other control groups stay capability-specific.
-  Structured clarifications, after-acceptance checkpoint, load-with-replay, and caller-contract violations remain fake-only. The fake performs load-with-replay:
-  resumed Turn re-emits the Session's transcript history (`assistant-content`, `tool-call`), drops a scripted entry that repeats a replayed one, then
-  emits `REPLAY_BARRIER` (an `activity`) before any live event — history is historical by position, inside the closed vocabulary.
-- Native Adapter and replayer conformance that launches real children runs only in standalone runtime conformance (#198); scripted Process failure
-  cases through the Claude Code Seam run in the semantic suite (#332). The layer rules are in [testing](../../docs/agents/testing.md).
-- **Leftover recording race:** a leftover Steer lands only in the few milliseconds after a native turn's Stop hook completes, so its recorder
-  steers from the stdout observer and retries; a line-buffered pass-through shim missed 40 of 40, so any recorder shim forwards raw bytes (#357).
-- **Replayer startup-signal race:** a Bun child's `process.on("SIGTERM")` handler is only honoured once installed — a SIGTERM delivered before the
-  child's top-level code runs hits the default disposition and kills it (this is a startup race, not a `bun test` limitation; plain `bun` shows the same
-  window). So the replayer installs its SIGTERM handler at startup, and interrupt/close cases wait for the `session` event (init observed) before
-  interrupting. Never signal a freshly spawned child before it has announced readiness.
-- The replayer's `case.json` vocabulary (`tests/harness/fixtures/README.md` is the reference): a `control` step (#346: take the next stdin
-  `control_request` and emit recorded bytes echoing its `request_id`, or swallow it to model an unconfirmed stop; stdin is read while steps run;
-  `cancelQueued` requires `cancel_queued`), a `steer` step and a Turn's `uuid` (#359: echo the message's minted uuid in later bytes),
-  `ignoreSigterm` (swallow SIGTERM → force-kill path; moot on Windows, where every live child is force-killed regardless), per-turn `exitAfter`
-  (exit without a result → lost/corruption) and `workingAreaPatch` (applied in the launch's `--add-dir` directory), a `resume` section replayed when
-  the launch has `--resume`, and `sessions[]` (#224: the Nth fresh `--session-id` launch after the first plays `sessions[N-1]`, one conversation per
-  human-controlled Repeat iteration).
+- Before changing doubles, conformance, replayers, or recorders, read [Harness testing](../../docs/agents/harness-testing.md).
 
 ## Read next
 

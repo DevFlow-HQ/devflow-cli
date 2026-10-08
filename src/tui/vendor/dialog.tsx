@@ -13,6 +13,7 @@ import { useBindings } from "../keymap.js";
 import { useTheme } from "./theme-context.js";
 
 // Vendored from OpenCode packages/tui/src/ui/dialog.tsx at commit 1ead9e3d7f.
+// #409 geometry and focus changes studied 228e9095ba3988a02664c3816cb51f98584e86c2. See UPSTREAM.
 // Taken: the backdrop + centred panel, the dialog stack, focus save/restore, and
 // Escape / Ctrl+C dismissal. Dropped (features Secant lacks, ADR 0018 "no dead
 // UI"): the toast + clipboard copy-on-select handlers, the OPENCODE_EXPERIMENTAL

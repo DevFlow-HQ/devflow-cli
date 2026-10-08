@@ -13,7 +13,7 @@ import { useTheme } from "./vendor/theme-context.js";
 import { clip } from "./clip.js";
 
 // Rebuilt after studying OpenCode's dialog-theme-list and command palette at
-// 1ead9e3d7f. Keep preview/entry restoration; Application saves independently.
+// 228e9095ba3988a02664c3816cb51f98584e86c2. Keep preview/entry restoration; Application saves independently.
 export function ShellCommands(props: {
   preferences: PreferencesView;
   portDriven: boolean;

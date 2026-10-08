@@ -1,0 +1,23 @@
+# Run Store conversation records
+
+Read before changing Turn admission, settlement, event payloads, or transcript migration and reads.
+The [Run Store notes](../../src/run/store/AGENTS.md) keep ownership and fencing rules.
+
+- Harness Turn records (#116): `admitTurn` writes the `turn` row **before** the stdin frame is sent (the durable admission the Adapter awaits) — it upserts the
+  named Session `open` and a first conversation row referencing the exact Turn input in one transaction. A fenced owner refuses it, proving `not-started` before stdin.
+- `settleTurn` is immutable: it no-ops once the `turn` row's `result_kind` is set, so a second settle rewrites neither the result nor the Session availability.
+  `turn_event`s append only. The Attempt's `effective_model` is set through `publishAttempt` (the `attempt` row is written after the Turn settles), never through `settleTurn`.
+- Turn `kind` (#126): `admitTurn` records the Secant Step kind that produced the Turn — `agent` or `interactive-agent` — in the nullable `turn.kind` column, Secant-owned
+  durable truth independent of `origin` (`managed`/`human`). The column is nullable so a row admitted before it existed reads its kind back **null** (undefined in
+  `TurnRecord`) — a legacy row whose kind is genuinely unknown, never fabricated to a guess.
+- Turn request (ADR 0034): `admitTurn` writes the requested Model choice into the nullable, free-text `turn.requested_model`/`requested_effort`, null for
+  no request and on older rows; `TurnRecord.modelChoice` is present only when a model is stored, and settlement never touches them.
+- Conversation ordering (#411): nullable unique `turn_event.transcript_seq` keeps old transcript positions and allocates later ones under the owner fence.
+  Pages filter by Session and exclusive `before`; later appends never renumber retained rows. Legacy rows have no fabricated new metadata.
+  `turn-input` stores admitted input; `legacy-message` retains migrated conversation without invented Turn metadata. Both are excluded from `turnEvents()`.
+  Migration validates every old row before transactional drop; orphans fail and rollback preserves old rows/journal. `settleTurn` adds no final copy.
+- Turn ordering (#116): `turn.sequence` is `count(turn)` taken under the admit transaction, so it numbers every Turn in the Run regardless of Session.
+  Two Sessions' Turns interleave in one numbering.
+- `turn_event.payload` validates messages/tools with complete patches/Thoughts/Turn diffs/Steers and preserves first `historyOrder`; output keeps 30,000 characters.
+  `tool-partial` retains incomplete running tails. Duplicate starts/partials/terminals/Thoughts/Turn diffs are ignored; only conversation entries
+  get transcript positions.

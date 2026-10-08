@@ -29,47 +29,7 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   It reads the latest accepted call of the Attempt's latest clean Turn, publishes through `publishInteractiveEnd`, and loops over subsequent Entry Turns.
   An unowned blocked Run with such a call offers resume to close the settle-before-apply crash window. No execution callback applies a call.
 
-## Turn interrupt and steer
-
-- `interrupt-turn` (#298) reaches only its named live Turn through `RequestChannel.bindInterrupt`, bound and unbound alongside answer and steer in execution's
-  Turn driver. A rejected Harness receipt settles `not-applied` immediately; an accepted receipt waits only for that Turn's result: `interrupted` or `lost` settles
-  `applied`, anything else `not-applied` with `interrupt-rejected` and a reason. An applied interrupt ends only the Turn: the Run returns to `blocked` with
-  the Step's Harness held (ADR 0035). In an Interactive agent Step that is a Turn boundary like a completed Turn (#353); in an Agent Step the Attempt stays
-  open and the follow-up continues it (#354, below). A `lost` or signal-stopped Turn halts, by [execution's rules](../../src/run/execution/AGENTS.md).
-  Interrupt never fires the Run's controller, so a refused or ineffective interrupt cannot stop a following human Turn, Agent Turn, or Command step.
-- Both `interrupt-turn` and `steer-turn` are offered only while a live (unsettled) Turn exists in this process; a control naming a settled Turn is rejected as a value.
-- The steer Offer is discriminated on the prepared profile's steer evidence (live first, then persisted with the Attempt), never Adapter prose above the Seam: a Harness
-  with native steer (Codex, Claude Code since #359) offers it `available` with the live turnId, one without `available:false` with the evidence as `reason` (#148).
-- Steer admission (`steerRefusal`, #359) refuses before any Operation, in ADR 0040's order: `steer-unavailable`, `steer-blank`, the selected Harness's
-  `harness-input-reserved`, then `steer-session-command` for a word in `tracking.live.sessionCommands` (execution sets it from the live Turn's Session fact
-  through `RequestChannel.sessionCommands`, clearing it at Turn end). Workflow's one matcher serves both word checks.
-- Steer keeps the Turn working. An admitted Steer reaches the live Turn's `tracking.live.steer` (bound by `driveHarnessTurn` over `turn.steer` via the
-  `RequestChannel.bindSteer` hook, unbound at Turn end alongside `bindAnswer`); a native control race settles `steer-rejected`, a stale/settled turnId `turn-control-rejected`,
-  an accepted steer `applied`, Run still running. Its Operation id is the opaque Steer id through execution to the Harness; replay never sends it twice (#356). Settlement
-  carries full text and send time through `appendTurnEvent`, independently of when the acceptance receipt resolves.
-- A `change-model-choice` whose Offer reach is `live-turn` (#348) sends `RequestChannel.bindModelChange`'s control and stays `pending`; the Run and preference
-  are written only when the Harness reports it applied (`live-turn`), or when the receipt is rejected or the Turn ends unanswered (`next-turn`). A refusal writes
-  nothing and settles `model-choice-refused`; another change meanwhile is `model-choice-change-pending`. Every write happens in the synchronous settle, before
-  the next Turn reads the choice. A later Turn's own refused request restores the Run to the Harness's `kept` choice, saves it, and sets `modelChoiceNotice`.
-- `resume-run` continues a `detached` Session in the same native Session because the executor reads the stored Session availability and passes its coordinate as
-  `resume`; a Session recorded `unusable` fails the Attempt without ever opening a fresh Session (ADR 0022).
-
-## Follow-up after an Agent-step Interrupt
-
-- `send-follow-up-turn` (#354) is its own Operation and Offer, admitted only on the derived waiting basis: `deriveRun(...).hold` (`run-progress.ts`) reads the
-  Run `blocked`, no gate or checkpoint, and the Store's `waitingAgentTurn` on the current Agent Step. The same derivation serves the Offer, settle-time
-  admission (`claimHeldRun`, shared with the interactive controls), Harness adoption, and shutdown, so those readers agree. It is not the interactive send.
-- It re-walks the Routing through `executeTrackedRouting` with the human's text as `followUp`; execution decides whether it still applies. The walk
-  takes over the held Harness (`heldStep`, cleared from tracking first), so composition reuses it or, after a reopen, prepares one that resumes the
-  detached Session. Like `send`, it settles at the follow-up Turn's admission (`settleAtAdmission`); a drive resting without admitting it settles
-  `follow-up-turn-not-admitted`, and a fault after admission lands on the Run.
-- A follow-up while the previous drive is still in flight is refused as not waiting: the walk's `blocked` write pushes the Offer just before that drive's
-  `finally` clears `tracking.promise`, so a client acting on the very first waiting snapshot can be refused once, exactly as an interactive send is.
-- Closing on this Agent-step waiting basis leaves the claim for Store reconciliation, which halts it without an `indeterminate` marker (#355, ADR 0035).
-  Resume re-mints the same open Attempt and pauses `blocked` with the same follow-up Turn target; it sends no prompt and counts no retry. A follow-up resumes
-  the detached Session. Crash recovery uses the same rule, and the halted Repeat-boundary Projection still names the interrupted Agent Step.
-- An interrupted Interactive or Entry Turn stays `blocked` across close, like any ordinary interactive wait: its next Turn already resumes the Session.
-  Gates and checkpoints also retain their blocked rests. A follow-up live at close follows the existing signal-stop rule, cancelling its Attempt and halting.
+Before changing Turn interrupt, Steer, live Model choice changes, or Agent follow-up, read [live Turn control](./run-turn-control.md).
 
 ## Takeover
 
@@ -103,13 +63,15 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
 ## Live overlay
 
 - The private `live-overlay.ts` channel carries a `generation` that a raised or settled request bumps, each pushing a fresh overlay, so an answer formed against a
-  superseded generation is refused as stale. Identified message previews go to per-Session history without bumping this generation,
+  superseded generation is refused as stale. Message, tool, Thought, and diff previews go to per-Session history without bumping this generation,
   so an in-flight answer stays valid across them (#412).
 - At Turn end `bindAnswer(undefined)` clears any still-outstanding request, bumps the generation, and sets the live phase to `settling` before announcing the overlay, so
   a resumed Run starts clean. The durable `request-expired` timeline row is execution's write, not the live lane's.
 - A **durable** push (`pushRunUpdate`) fans out to this Run's observers **and** every Run-list observer and the Workspace Run summary (`pushRunCollectionUpdates`);
-  a **live overlay** channel push reaches this Run's observers only. Launch and resume admission, cancel, and delete call that fan-out directly. The summary
-  (`summarizeRuns`, #396) is one `countRuns` read and pushes only when a count changes; the quit guard trusts it, so a new ownership change or claim must reach the fan-out.
+  a **live overlay** channel push reaches this Run's observers only. `observedOwner` also fans out successful Turn-event and settlement writes (#412).
+  Launch and resume admission, cancel, and delete call that fan-out directly. The summary
+  (`summarizeRuns`, #396) is one `countRuns` read and pushes only when a count changes; the quit guard trusts it, so a new ownership change or claim must reach the
+  fan-out.
   Each fan-out with a Workspace observer open (always, in the TUI) opens every registered `run.db` once: O(Runs) per durable write.
 - A late-joining observer catches up on the current overlay at open, so a follower connecting after a request was raised still sees it. By design a client can
   therefore receive live control updates for a Turn whose durable start it never saw: a headless follower opening mid-Turn observes the live request even though its

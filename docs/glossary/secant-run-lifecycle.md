@@ -116,6 +116,9 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Human Gate** — a Secant-owned pause carrying a Bundle-authored question in one of its shapes: approve/reject, whose rejection ends the
   **Run** `failed`, or free text. A free-text Gate may offer authored suggestions: quick-choice answers plus an Other free-text entry, and either way
   the answer is one durable text **Run Artifact**, so a Run can wait on one indefinitely.
+- **Thought summary** — a Harness-reported reasoning summary qualified for its provider and model, identified within one **Turn**.
+  It previews in **Session history** and is retained once at settlement, with known incomplete text marked. It has no transcript position.
+  Raw reasoning and an unreported duration are never inferred. **Thought** is its display alias.
 - **Harness Request** — an ephemeral **Harness**-originated request raised during a **Turn**: either a tool approval with exact offered decisions
   or a structured clarification with an exact answer shape. A tool approval covers the Harness's own tools and the user's MCP servers' tools alike.
   It lives and dies with the Turn; an ordinary assistant question that ends a Turn is answered in the next Turn instead, and an **Agent call** is

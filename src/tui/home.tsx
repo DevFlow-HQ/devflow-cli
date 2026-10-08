@@ -11,7 +11,7 @@ import { useDialog } from "./vendor/dialog.js";
 import { useTheme } from "./vendor/theme-context.js";
 import { useWorkspaceView } from "./workspace-view.js";
 
-// Rebuilt against OpenCode Home at 1ead9e3d7f. Home owns navigation;
+// Rebuilt against OpenCode Home at 228e9095ba3988a02664c3816cb51f98584e86c2. Home owns navigation;
 // shell commands share discovery through Secant's catalog (ADR 0040).
 export function Home(props: {
   onStartRun: () => void;

@@ -2,10 +2,9 @@
 // speak this Interface; it exposes only normalized semantic values and imports
 // nothing, so no runtime, storage, or Adapter object can leak across it.
 //
-// M1 declares three of the closed families (`workspace`, `operation`,
-// `bundle-catalog`) and one Operation (`approve-workspace`). The unions grow
-// with later slices; families and actions not yet needed are deliberately
-// absent rather than stubbed.
+// Selectors enumerate the implemented families, including per-Session history
+// and home-scoped Preferences. New families and actions are added by their owning
+// slices; no placeholder family or action is declared ahead of its implementation.
 
 /** Which bounded Projection to open. Selectors are closed and typed. */
 export type ProjectionSelector =

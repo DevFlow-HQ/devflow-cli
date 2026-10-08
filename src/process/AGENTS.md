@@ -11,7 +11,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Module spawns is `windowsHide: true` and so has none — verified on a desktop, where the same executable closed politely only when launched visible. So
   contained owned children terminate their job, and Node children use `taskkill /T /F` for both signals. `interrupt` force-kills a live child at once
   and reports `escalated: true` (a child already gone reports `false`). The graceful-stop proof is POSIX-only. Off Windows: SIGTERM, then SIGKILL.
-- Windows owned launches attach a separate kill-on-close, no-breakaway job at creation. Only `windows-containment.ts` imports `bun:ffi`.
+- Windows owned launches attach a separate kill-on-close, no-breakaway job at creation. `windows-containment.ts` imports `bun:ffi` for Windows Job Objects;
+  `posix-lifetime.ts` imports it for POSIX spawn, wait, and group ownership.
   The root starts suspended until its exit wait is registered. Any pre-execution failure releases the attempt before the Node fallback runs.
   Root-handle exit captures member handles, terminates the job, and confirms those plus later-listed handles before releasing the job and publishing
   `closed()`; controlled stops capture before termination too. The active list can drop a member before its handle signals, so pipe EOF or a later job

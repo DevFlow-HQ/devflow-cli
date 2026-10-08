@@ -46,6 +46,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   `runId`, and each Application-owned `run-rest` as a `run-end` record (#331). It hands its `attempt-end` to that lifecycle observer, which holds the
   Attempt's start.
 - `OperationalLog.record` maps each event to its level (`recordLevel`): a failed Harness phase, unclean cleanup, or not-ready qualification warns.
+  Initial preparation failure, preparation-cleanup failure, and invocation-cleanup failure also warn (#407);
+  `harness-preparation-cleanup` is info only when `closed`, otherwise warn.
   `harness-log.ts` (`prepareRecorded`) hands each prepare its scope's Process and phase observer and wraps the Prepared Harness so it records its
   `CleanupReport` on first close and each completed Turn's usage: one seam for the qualify, Run, and interactive close sites, a double included. A
   test Adapter reads both from the prepare options (#322, #333). The Process observer (`process-observer.ts`, #321) is built per scope, and

@@ -182,6 +182,13 @@ jobs:
           tests/headless/run.test.ts
           tests/tui/run-workbench-appearance.test.tsx
           tests/tui/run-workbench-history-scroll.test.tsx
+      - name: m10-audit-guidance-refresh
+        run: >-
+          bun run test --
+          -t '^m10-audit-guidance-refresh(:|$)'
+          tests/architecture/guidance-structure.test.ts
+          tests/architecture/vendor-provenance.test.ts
+          tests/architecture/evidence-ledger.test.ts
       - name: m10-audit-workbench-test-domains
         run: >-
           bun run test --

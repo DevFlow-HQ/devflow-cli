@@ -16,8 +16,8 @@ decision says otherwise; closing one needs its own decision.
 | Identified Tool, Thought, Turn-diff, and Agent-call rows                             | none; the transcript carries human input, delivered Steers, and settled assistant messages                        | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
 | Reported context, per-model capacity, and distinct total/last usage                  | none; live-only metadata outside conversation history; `run show --json` unchanged                                | [ADR 0039](./adr/0039-grow-a-turns-history-in-place-through-a-per-session-history-projection.md) |
 
-Typed **Slash commands** and the Ctrl+P palette are TUI presentation, not a gap: each App command maps to an Operation headless has or to a gap
-above ([ADR 0040](./adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md)).
+Typed **Slash commands** and the Ctrl+P palette are TUI presentation: App commands cover navigation, local appearance preview, guarded Quit,
+and Operations headless has or gaps above ([ADR 0040](./adr/0040-type-app-commands-in-the-compose-and-refuse-harness-reserved-words.md)).
 
 The Workbench's headerless layout, its sidebar or prompt meta row, and its one bottom interaction (prompt, request, gate, checkpoint, or finished
 outcome) are TUI presentation, not a gap: `run show` prints the same state, Steps, gate, and Model choice facts ([#419](https://github.com/secantdev/secant/issues/419)).
@@ -27,8 +27,8 @@ TUI draft handling. Headless has no compose; its admission and stored transcript
 
 Bundle prompt rules apply to both clients. Build and install refuse authored prompts against all supported Harness rules, including Shipped Bundles.
 Launch Preparation and headless launch report a selected-Harness finding with `harness` as its correction; installed Bundles remain usable on a compatible
-Harness. Execution checks substituted prompts before Turn admission, failing an Agent Attempt or blocking an Interactive Entry. The missing resting
-explanation remains M11's presentation work. Headless still has no compose or typed Slash commands.
+Harness. Execution checks substituted prompts before Turn admission, failing an Agent Attempt or blocking an Interactive Entry. A substituted reserved-word refusal remains an Attempt failure or blocked Entry;
+neither client sends the refused prompt to the Harness. Headless still has no compose or typed Slash commands.
 
 Saved theme and dark/light Preferences have headless parity through `settings show` and `settings set` ([ADR 0037](./adr/0037-own-saved-presentation-preferences-in-catalog-and-apply-themes-independently.md)). The TUI Home launcher and app-wide Ctrl+P Themes picker preview all 25 palettes in Dark and Light. Escape restores the active pair on picker entry; a failed save keeps the confirmed appearance and offers retry. Preview and active appearance belong to the TUI; settings changes saved values for a later launch and leaves headless output plain.
 

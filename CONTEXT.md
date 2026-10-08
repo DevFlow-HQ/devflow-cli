@@ -76,6 +76,13 @@ cluster that matches the task, followed by its related ADRs when the task needs 
   **Operation**; it adds no authority of its own. _Avoid_: Command alone, which is ambiguous with **Command step**.
 - **Slash command** — the typed `/name` form of an **App command** in the Run Workbench compose. A draft whose first word is a Slash command's
   name is always that App command and is never sent to the **Harness**. _Avoid_: Harness command, for the Harness's own slash vocabulary.
+- **Session history** — the bounded conversation-and-work view of one **Harness Session**, including identified messages, tools, Thoughts, diffs,
+  Steers, Agent calls, and Turn outcomes. See [Projection Views](./docs/glossary/projection-views.md) for its Projection.
+- **Tool call** — one **Harness**-observed invocation of a tool during a **Turn**, with a Turn-local identity, reported input, and observed outcome.
+  Tool approval is a separate **Harness Request**; neither approval nor Turn success proves the tool completed.
+- **Workspace path cue** — a path token beginning with `@` in the Run Workbench compose that requests Workspace path completion.
+  Selecting a result edits that token in the native prompt. It reads no candidate content and creates no binding or Run Artifact.
+- **Thought** — the display alias for a qualified **Thought summary**, never raw reasoning. See the [Run lifecycle](./docs/glossary/secant-run-lifecycle.md).
 - **Preferences** — saved choices shared across **Workspaces** within one Secant home: the last **Model choice** per **Harness**, the theme, and its
   dark or light appearance. They preselect the next launch's Model choice and determine a TUI's initial appearance; its active appearance can differ
   during a preview or after an unsuccessful save.

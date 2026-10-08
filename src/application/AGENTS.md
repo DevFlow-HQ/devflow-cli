@@ -2,6 +2,8 @@
 
 ## Invariants
 
+- Before changing Run reads, history, observer delivery, progress, context/usage, or Workspace path search, read
+  [Application history](../../docs/agents/application-history.md).
 - Home-scoped `preferences` needs no Harness or approval. Its keys are raw strings; `change-preferences` returns the transaction's saved pair.
   The ledger replays receipts without saving again; failed saves are not-applied with no effects.
 - Windows fallback notices are live launch evidence retained per Run for this Application lifetime (#363), across tracking replacement and Projection reopen.
@@ -29,33 +31,23 @@
   It applies the effort lock to any preselection and refuses contradicting effort with correction `effort`; `submit` requires a model and trusts the Offer's effort.
 - Each focus open and assessment reads Preferences outside the qualification cache; stale model/effort skips the whole choice with a notice.
   `saveLastModelChoice` runs after Run creation or a fenced choice change; failure keeps the Run choice and its notice across Projection reopen.
-- `run` Offers follow `prepareModelChoice` or qualification. Ordinary reads never prepare a Harness. Changes share `model-choice.ts` and re-read authority after qualification.
+- `run` Offers follow `prepareModelChoice` or qualification. Ordinary reads never prepare a Harness. Changes share `model-choice.ts` and re-read authority after
+  qualification.
   `RunOwner.currentTurn` avoids history (#395). Halves use the Run, never Preferences. Push with the writer's owner. See [live control](../../docs/agents/run-control.md).
 - Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and
   strict-parse failures still use ordinary compatibility. Both launch assessment and resume use the stored archive's declared range (#367).
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.
-- A pre-M4 Run with no selection upgrades only once its still-installed pinned Snapshot proves the routing needs a Harness. Reopen and direct resume write `claude-code` once
-  through `observedOwner.selectHarness`; Command-only Runs and missing/corrupt Snapshot Problems stay unselected (#139). A Run with no Model choice takes the preselection once
+- A pre-M4 Run with no selection upgrades only once its still-installed pinned Snapshot proves the routing needs a Harness. Reopen and direct resume write `claude-code`
+  once
+  through `observedOwner.selectHarness`; Command-only Runs and missing/corrupt Snapshot Problems stay unselected (#139). A Run with no Model choice takes the preselection
+  once
   at the resume drive or a reopened human Turn (`upgradeLegacyModelChoice`), never at reopen; no preselection halts with a model correction naming `secant run model`.
 - Human Turn admission reads the Run's selected Harness and its registration's static input rules before ledger admission (#358). The read acquires no owner;
   a pre-M4 unselected Run uses Claude Code's rules, matching its reopen/resume upgrade. A refusal consumes no Operation id and records no Turn.
-- Never `acquireRun` a Run merely to read it when it is live in another process: acquiring bumps the owner-fencing epoch and would abort the process
-  running it. `readResource`/`runResult` read through the live in-process owner when present, else acquire-and-close a rested Run, else refuse with
-  `run-live-elsewhere`.
 - Execution stores `blocked` before returning a checkpoint pause, and the Application keeps that Run's owner open. The Projection still derives the checkpoint
   facts from the Attempt log, Verdict binding, and Gate answers; the stored state lets dead-owner reconciliation preserve the pending checkpoint.
-- The timeline is ordered by `at` (`buildTimeline`), then by Step instance (the Attempt's log index; an unsettled Attempt's Turns after every settled one), then
-  category, for equal instants (A2, #98, #289), so one Step's events never interleave with the next Step's. Events are still built category by category, then sorted,
-  so a later Attempt never moves an earlier event. ISO 8601 sorts lexicographically, so the string compare is the time compare.
-- Each event's `step` and each Session's plain name come from stored Attempt ids (`attemptStepId`, `attemptIteration`, #289): a Session whose recorded name
-  differs from its Step's authored one was scoped to an Attempt, so it reads "<authored>, iteration <n>". Nothing new is persisted.
-- `run-progress.ts` owns Run progress (#384): each Attempt counts for its Step and Iteration (`attemptStepId`/`attemptIteration`), never as another group's
-  Iteration, and a Review grant resets only its own group. A group ends once a later node is reached (an Attempt or pending Gate), End Stage closes its last
-  Iteration, or `until` passes. The Projection and every control (hold basis, Gate answers, interactive admission) read its `deriveRun`.
 - `liveElsewhere` (a Run live in another process, owner pid alive) is refused before resume/answer claim anything (`run-live-elsewhere`, owner named), and `readResource`
   refuses it too; `listRuns` throwing on a malformed row is caught in cancel/delete so nothing throws out of `submit` (A4).
-- The client `RunStateName` has no `created` and gains `cancelled` (A7); the Run Store still records `created` internally, and `toRunState` maps it to `running` for the
-  Projection — a launched Run reads `running` from admission.
 - The closed registry and prepared Harnesses live in composition, not Application (#116, #146): the Port sees normalized choices/availability, while selected-only
   Preflight sees normalized discovery and capabilities. `makeRunExecution` resolves the durable id and prepares only that Adapter; on a `blocked` rest
   composition transfers an opaque Step driver (`heldStep`), kept only on the hold basis ([run-control](../../docs/agents/run-control.md)) and closed
@@ -67,12 +59,6 @@
   `observedOwner`, settles the Operation `selected-harness-unavailable`, and releases the owner; an answer or Attempt committed before the drive stays
   committed. Composition reports the preparation refusal as `harness-unavailable`; Application reports its committed `halted` rest separately, so
   neither observer claims the other's outcome.
-- Every opened Projection owns one `UpdateStream` (#306): a FIFO that never coalesces or evicts, bounded at 1,000 unread updates and 8 Mi payload units (T3 Code's
-  limits). Overflow ends only that subscription through `end("observer-lagged")`, which releases the backlog and delivers one `closed` ahead of it; `pushRunClosed`
-  uses the same `end`. The producer never waits or fails, so the Run and its other observers continue, and a reopen reads a fresh snapshot and live catch-up.
-- `SubscriptionLifecycle` privately creates every stream, including delegated and idle views (#310); termination unregisters its producer and drops retained delivery
-  state. Shutdown ends observation before owner cleanup and awaiting work; [run-control](../../docs/agents/run-control.md) owns its claim rules.
-  Keep empty Run observer Sets: live fan-out retains their identity. Later opens remain supported; shutdown memoizes in-flight cleanup only.
 - `harness-catalog` caches one qualification promise/result per semantic Harness id for the Application lifetime (#188). List calls discovery only; focus initially
   reports `not-checked`, then publishes one durable normalized result. Qualification diagnostics are process-held Resources addressed by semantic id and checked time.
 - `launch-preparation` and `submitLaunch` share `LaunchPreparation.evaluate` in `launch-preparation.ts` (#189), admitting under identical rules.
@@ -87,14 +73,6 @@
   Tracked Operation admission, outcome, and replay carry their `runId`; pre-Run Operations omit it (#331). Application reports its own committed rests
   (cancel, Gate stop, prepare refusal, and each human Turn's `interactiveTurnRest`) through `run-rest`; a fenced write reports none.
   `preflight` and `assessPreflight` share one evaluator that reports their start/settle and each check they run (`preflight-check-start`/`-settle`, #325).
-- `session-history` (#412–#417) bounds messages/tools/Thoughts/Turn diffs together at 200 with one 50 ms budget for every pending row.
-  Final output replaces previews; empty clears, absent retains incomplete tails. Partials invalidate previews without settling tools; last observer cancels the timer.
-  Transcript Resources retain separate entry ids across reads/prepend, excluded from headless; pages still hold 20 entries.
-- The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and
-  independently exposes the latest Agent-step Attempt's normalized name/executable/version as `run.harness` plus its sibling `effectiveModel` (#125, #147).
-  Resume may replace only the observed fields; Command-only Runs omit both selection and observations.
-- The Run Store appends the reconciliation `indeterminate` marker row to `attempt_log` (see [the Run Store's notes](../run/store/AGENTS.md)). Its id names
-  no Step, so progress attributes it to none: it is neither a success nor evidence a node was reached.
 - One settle path (`submitEndInteractiveStep` → `startEndInteractiveStep`) backs `end-interactive-step`, `continue-repeat` (#217), and `end-stage` (#218), so no
   iteration settles twice. Run execution's `interactiveEndLegality` owns the position and mid-Turn rules; Application only translates its refusals
   through `interactiveControlMismatch` and `interactiveStepMidTurn`. Claim and promise ordering remain [run-control's](../../docs/agents/run-control.md).
@@ -103,8 +81,6 @@
   `app-release`. Equal bytes a user imported first keep their own origin and trust (#227).
 - `OperationLedger.submit/open` owns receipts and their subscriptions; settlers return applied metadata, never mutate ledger entries (#393).
   Run authorization, Trust ordering, owners and abort stay in `createApplication`. The shared `SubscriptionLifecycle` ends observation before Run cleanup.
-- `bindAnswer` clears context/usage for every new Turn; reports replace optional fields, including empty reports (#418). Accounting stays live-only.
-- Workspace search bounds traversal and reads only ignore metadata. Never read candidate content or suggest escaping symlinks/.git internals (#423).
 
 ## Tests
 

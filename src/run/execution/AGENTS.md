@@ -6,7 +6,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - The cancel Seam's Run-wide sentinel strings are owned here: `RUN_CANCEL_ABORT` ends the Run `cancelled`, while `SIGNAL_ABORT` stops live work and
   leaves it resumable (ADR 0019). Turn interrupt uses `RequestChannel.bindInterrupt`, unbound at Turn end; receipt/result mapping lives in that binding
-  ([run-control](../../../docs/agents/run-control.md#turn-interrupt-and-steer)), never on the Run's controller or routing promise.
+  ([live Turn control](../../../docs/agents/run-turn-control.md#turn-interrupt-and-steer)), never on the Run's controller or routing promise.
 - The Harness-facing half publishes nothing durable except through the three admitted Turn writes (`admitTurn`, `appendTurnEvent`, `settleTurn`); every
   other durable Run fact surfaces on the Attempt's later `publishAttempt`, never from executing a Turn.
   Turn-diff snapshots stay live until producer drainage; only the complete final snapshot is appended (#416).

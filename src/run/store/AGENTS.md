@@ -4,6 +4,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
+- Before changing Turn admission, settlement, event payloads, or transcript migration and reads, read
+  [Store conversation](../../../docs/agents/run-store-conversation.md).
+- Before changing Artifact reads/publication, Gate-answer publication, output receipts, or working-area access, read
+  [Store artifacts](../../../docs/agents/run-store-artifacts.md).
 - `run.db` is the only canonical truth and owns its Run's nullable process id plus monotonic fencing epoch. `coordination.db` holds only registration and
   create/delete admission and is rebuildable: a corrupt one is deleted and re-seeded from readable Run Stores without changing their owner records.
 - `run_record.selected_harness` is the immutable semantic Run selection, written in the staged store before create publishes. It is nullable only for
@@ -35,12 +39,6 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   next canonical write is refused. `resumeRun` refuses such a Run `run-live-elsewhere` with its `ownerPid`; a takeover is
   `acquireRun({ takeover: true })`.
 - Every `run.db` handle a Run Store opens is closed before its directory is renamed or the group closes, so Windows temp cleanup is never blocked by a lock.
-- Artifact publication (#80) is all-or-nothing: the private Artifact Module stages one Git commit (its id is the version id) into `artifacts.git`, then one
-  `run.db` transaction records the versions, moves the bindings, and settles the Attempt. A staged commit or ref alone is invisible candidate storage — only
-  that transaction publishes — so a fault between the commit and the transaction leaves no binding moved, and republishing the same attempt id is a no-op.
-- Git mechanics shell out to the `git` executable (no library); `artifacts.git` is created lazily on first publication. An absent `git` surfaces as a
-  precise `git-unavailable` Problem only on the stage/publish path; the read path deliberately throws `GitUnavailable` (an environment fault is not an
-  absent artifact) and `readArtifact` passes it through. Bindings/attempt reads validate their row at the read ingress like the coordination reads (D7).
 - Startup reconciliation (#86, #98 S2, ADR 0031): at open every registration opens its `run.db`, reads the owner, probes it, and performs any rest plus
   release inside that same immediate transaction (`process.kill(pid, 0)` is injectable as `isOwnerAlive`). An owner still alive in another process is a
   Run genuinely live there — left untouched, listed with its `ownerPid` so the Application can refuse `run-live-elsewhere`. A dead owner is reconciled
@@ -55,14 +53,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Diagnostics retention (ADR 0023, #96): `diagnostics/` has had a writer since #88, so the 90-day expiry is a best-effort prune at group open (`pruneDiagnostics`,
   driven by an injectable clock) — files with an mtime at or before `now - 90 days` are deleted, newer ones kept. It walks Run directories on the filesystem, not
   the registrations, so it runs before any Run is acquired and never fails the open.
-- D7 has two halves. The closed-set columns the Store itself branches on — `attempt_log.outcome`, `gate_answer.answer`, and `pending_gate.shape` — are validated with `z.enum`
-  at their read ingress (not cast), so a drifted value is rejected there rather than trusted by the resume cursor, the grant count, or the pending-gate derivation. The six
-  M3 columns — turn `origin`, `kind`, `result_kind`, `turn_event.kind`, `harness_session.availability`, and retained message `role` — are returned raw.
-  The shared `openAgentAttemptTurn`/`waitingAgentTurn` derivation (#355) compares `kind` and `result_kind` by equality, so unknown or legacy values
-  never establish an Agent wait. Projection narrows the other values tolerantly; the Store never rejects these rows over an unknown member.
-- A Human Gate answer (#85) is a bound Artifact recorded through `recordGateAnswer` — a publication-shaped write (stage a commit, then one transaction moves the
-  binding and appends the `gate_answer` row) that deliberately skips `attempt_log`, so `blocked` stays derived and iterations still count off the log. Idempotent
-  per `operation_id` (a UNIQUE column); its `iterations_at_grant` is the offset the derived "iterations since the last grant" count resets from.
+- Closed Store policy columns (`attempt_log.outcome`, `gate_answer.answer`, `pending_gate.shape`) validate at read ingress with `z.enum`.
+  Turn `origin`, `kind`, `result_kind`, event `kind`, and Session `availability` remain raw legacy-compatible strings.
+  `openAgentAttemptTurn`/`waitingAgentTurn` compares Turn kinds/results by equality; unknown values never establish an Agent wait.
+  Conversation payload roles validate through `messagePayload` at transcript read ingress, separately from those legacy-compatible columns.
 - An **authored** Human Gate (#108) is a different mechanism from the derived Review checkpoint above. `recordPendingGate` writes a durable `pending_gate` row (keyed on
   the producing Attempt id) **and rests the Run `blocked` in the same transaction**, so a crash cannot leave the record without the pause; it is idempotent on the Attempt
   id (`onConflictDoNothing`), so a resume that re-reaches the gate re-records nothing. The gate is "pending" only until that Attempt settles: `pendingGate()` returns the
@@ -74,39 +68,16 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   produces at least one output and stages a commit as before. Its `endsStage` sets the nullable `attempt_log.stage_ended` in that transaction (#218): the one
   durable End Stage fact, read back as `AttemptLogEntry.endsStage` only when stored `true` — a stored `false` reads absent exactly like
   `null`. `endedBy: "agent"` writes nullable `attempt_log.ended_by` in the same publication transaction (#372).
-- `outputReceiptDirectory` (#215) hands execution one emptied `.receipts/<first 32 hex characters of sha256(attemptId)>` directory inside the Run working
-  area (#220), so the one Harness grant covers it; hashed because Attempt ids carry `:`. `keep` (#354, a follow-up Turn) skips emptying, so it refuses any
-  non-directory there (a planted link too). Candidate storage, never canonical or fenced: only `publishAttempt` binds receipt bytes; Run deletion removes it.
-  A typed result, never a throw (#305): `working-area-unavailable`, or `output-receipt-directory-unavailable` for a squatted root, a root that does not
-  resolve to itself (an agent-planted link, refused before emptying through it), or a failed removal/creation.
-- Harness Turn records (#116): `admitTurn` writes the `turn` row **before** the stdin frame is sent (the durable admission the Adapter awaits) — it upserts the named Session
-  `open` and a first conversation row referencing the exact Turn input in one transaction. A fenced owner refuses it, proving `not-started` before stdin.
-- `settleTurn` is immutable: it no-ops once the `turn` row's `result_kind` is set, so a second settle rewrites neither the result nor the Session availability. `turn_event`s
-  append only. The Attempt's `effective_model` is set through `publishAttempt` (the `attempt` row is written after the Turn settles), never through `settleTurn`.
-- Turn `kind` (#126): `admitTurn` records the Secant Step kind that produced the Turn — `agent` or `interactive-agent` — in the nullable `turn.kind` column, Secant-owned
-  durable truth independent of `origin` (`managed`/`human`). The column is nullable so a row admitted before it existed reads its kind back **null** (undefined in
-  `TurnRecord`) — a legacy row whose kind is genuinely unknown, never fabricated to a guess.
-- Turn request (ADR 0034): `admitTurn` writes the requested Model choice into the nullable, free-text `turn.requested_model`/`requested_effort`, null for
-  no request and on older rows; `TurnRecord.modelChoice` is present only when a model is stored, and settlement never touches them.
 - The `attempt` row also carries the normalized Harness identity and steer evidence of an Agent-step Attempt (#125, #134):
   `harness`/`executable`/`executable_version` plus `steer_available`/`steer_evidence`, written together by `publishAttempt` from the prepared profile (all null for a
   Command/Gate Attempt). `PublishAttemptRequest` carries an optional `agentEvidence` (identity required, model optional), so a write can never create a model-only
   row; the read-side `HarnessEvidenceRecord` union is what still admits a legacy model-only row written before identity existed. `harnessEvidence()` reads both
   facts from the one latest Agent-evidence row, so a model-less resumed Attempt clears the projected model rather than inheriting an older value. Which Attempts
   carry evidence is [execution's](../execution/AGENTS.md).
-- Conversation ordering (#411): nullable unique `turn_event.transcript_seq` keeps old transcript positions and allocates later ones under the owner fence.
-  Pages filter by Session and exclusive `before`; later appends never renumber retained rows. Legacy rows have no fabricated new metadata.
-  Migration validates every old row before transactional drop; orphans fail and rollback preserves old rows/journal. `settleTurn` adds no final copy.
-- Turn ordering (#116): `turn.sequence` is `count(turn)` taken under the admit transaction, so it numbers every Turn in the Run regardless of Session — two Sessions' Turns
-  interleave in one numbering.
-- `turn_event.payload` validates messages/tools with complete patches/Thoughts/Turn diffs/Steers and preserves first `historyOrder`; output keeps 30,000 characters.
-  `tool-partial` retains incomplete running tails. Duplicate starts/partials/terminals/Thoughts/Turn diffs are ignored; only conversation entries get transcript positions.
 - There are no foreign keys and no `foreign_keys` pragma anywhere in either schema (only `busy_timeout` is set), so referential integrity rests entirely on the write
   transactions that keep related rows consistent; nothing the database enforces stands behind them.
-- Run delete drops the registration and reclaims the directory as one lifecycle unit; with no foreign keys there is nothing to cascade — the directory holds the whole Run.
-- `workingArea()` (#214, #479) lazily creates `working/` in the published Run directory; pre-M6 Runs gain it on resume. Its canonical `realpath` matches sandbox roots.
-  It is unfenced working state, granted whole, with no private files; Output receipts are its only Store-named child. Refuse a linked leaf before grants or receipts.
-  Parent aliases remain valid. This filesystem check cannot prevent replacement between validation and use.
+- Run delete drops the registration and reclaims the directory as one lifecycle unit; with no foreign keys there is nothing to cascade — the directory holds the whole
+  Run.
 - Resume reads registration only to answer `unknown-run`, then claims ownership in `run.db`. Listing and startup reconciliation open each registered Run
   Store to read ownership and close every handle before returning; a damaged store lists unowned, matching its exact-read Problem.
   `countRuns` (#396) opens each store once and reads ownership apart from the record, counting unreadable ownership rather than unowned. A coordinator rebuild
@@ -115,5 +86,6 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 ## Tests
 
 - Store Interface tests are split by concern into `ownership-and-recovery.test.ts`, `attempt-and-artifact-publication.test.ts`,
-  `session-and-transcript-evidence.test.ts`, `materialization.test.ts`, `reconcile-turn.test.ts`, and `working-area.test.ts`, with the private Artifact
+  `session-and-transcript-evidence.test.ts`, `conversation-migration.test.ts`, `materialization.test.ts`, `reconcile-turn.test.ts`, and
+  `working-area.test.ts`, with the private Artifact
   Module's own `artifacts/artifacts.test.ts` beside them; keep every file independently runnable with explicit fixtures.

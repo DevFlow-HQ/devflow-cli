@@ -8,7 +8,9 @@ const root = process.cwd();
 const testsRoot = join(root, "tests");
 const ledgerPath = join(root, "docs", "subprocess-test-migration-ledger.md");
 
-const PROCESS_FREE_MARKER_EXCEPTIONS = new Set([
+// A suite born over doubles has no real-child assertion to migrate. Keep its
+// rationale here, not as a second classification in the historical ledger.
+const PROCESS_FREE_TEST_FILES = new Set([
   // Production composition is present, but every wiring injects the fake Bundle
   // Process (#314): executable resolution (the default Codex Adapter's discovery
   // included), Commands, and Git stay on the double, and the scripted Turns run on
@@ -45,6 +47,65 @@ const PROCESS_FREE_MARKER_EXCEPTIONS = new Set([
   // Born process-free (#317): the spawn trap's own test reaches every spawn route,
   // and each lands on the trap, which throws before any child exists.
   "tests/helpers/spawnTrap.test.ts",
+  // Written against the scripted Claude Process; no child spawns. Native channel fixtures replay
+  // separately in standalone runtime conformance (#371).
+  "tests/harness/claude-code-channel.test.ts",
+  // Written against the scripted Claude Process; no child spawns. The recorded model-change
+  // fixtures replay separately in standalone runtime conformance (#348).
+  "tests/harness/claude-code-model-change.test.ts",
+  // Written over injected Process and Harness doubles from the start.
+  "tests/application/agent-output-receipt.test.ts",
+  // Written in place (#304) over the injected fake Harness and fake Process; no child spawns.
+  "tests/application/continuation-preparation-failure.test.ts",
+  // Born process-free (#393): public Projection Port over real temporary directories and Catalog,
+  // with the throwing Process stub or openLiveRun's injected fake Process and execution. No child
+  // spawns.
+  "tests/application/operation-receipt.test.ts",
+  // Born process-free: an ordinary Interactive Bundle runs over the fake Process with counting
+  // Step-driver and owner doubles.
+  "tests/application/retained-step-shutdown.test.ts",
+  // Born process-free: ordinary Bundles run over the fake Bundle Process and fake Harness Adapter.
+  "tests/application/run-progress.test.ts",
+  // Written in place (#213) over the injected fake Harness and fake Process; no child spawns.
+  "tests/application/suggested-gate.test.ts",
+  // Written in place (#390) through runHeadless with scripted Projection Port streams and the
+  // process-free headless harness; no child spawns.
+  "tests/headless/readiness.test.ts",
+  // Written over the fake Git Run group (#214).
+  "tests/run/store/working-area.test.ts",
+  // Born process-free: fake view/Renderer Port controls, in-process Catalog, and an Application
+  // whose injected helper Process throws on every launch route.
+  "tests/tui/home-preferences.test.tsx",
+  // Born process-free: the Application runs over the fake Bundle Process; every other case reads
+  // fake snapshots.
+  "tests/tui/run-workbench-interaction.test.tsx",
+  // Born process-free: a command Bundle runs over the fake Process; every other case reads fake
+  // snapshots.
+  "tests/tui/screens.test.tsx",
+  // Written in place (#319) over the injected fake Process and fake Harness Adapters; no child
+  // spawns.
+  "tests/composition/application-log.test.ts",
+  // Written over the injected fake Process and fake Git from the start (#321); the fake reports
+  // child facts to composition's observer, and no child spawns.
+  "tests/composition/process-observer.test.ts",
+  // Written over the injected fake Process and fake Harness Adapter from the start (#325); the
+  // bearer comes from the in-process permission bridge, and no child spawns.
+  "tests/composition/detail-log.test.ts",
+  // Real temporary Catalog/SQLite and the Application fixture's refusing Process. No Harness
+  // preparation or child work is consumed.
+  "tests/application/preferences.test.ts",
+  // Born process-free: Projection Port over real temporary trees and Catalog with the throwing
+  // Process stub. No child spawns.
+  "tests/application/workspace-paths.test.ts",
+  // Real temporary Catalog/SQLite and the Application fixture's refusing Process; copied-binary
+  // coverage is m10-settings-consumer.
+  "tests/headless/settings.test.ts",
+  // Preferences Projection with a refusing Process; palette data is read through the TypeScript AST
+  // without rendering or launching children.
+  "tests/architecture/preferences-palettes.test.ts",
+  // Born process-free (#411): copied real SQLite plus injected fake Git through the public Store.
+  // Artifact-byte and relocated-home evidence run in copied-binary acceptance.
+  "tests/run/store/conversation-migration.test.ts",
 ]);
 
 const SUBPROCESS_SOURCE_PATTERNS = [
@@ -160,7 +221,7 @@ function codeOf(path: string, source: string): string {
 }
 
 function discoversSubprocess(path: string, source: string): boolean {
-  if (PROCESS_FREE_MARKER_EXCEPTIONS.has(path)) return false;
+  if (PROCESS_FREE_TEST_FILES.has(path)) return false;
   const code = codeOf(path, source);
   return SUBPROCESS_SOURCE_PATTERNS.some((pattern) => pattern.test(code));
 }
@@ -283,7 +344,7 @@ test("[evidence-ledger] discovery finds direct and indirect children without mat
   );
 });
 
-test("[evidence-ledger] every subprocess-backed test file has a migration row", () => {
+test("m10-audit-guidance-refresh: every subprocess-backed test file has a migration row", () => {
   assert.equal(
     existsSync(ledgerPath),
     true,
@@ -325,5 +386,40 @@ test("[evidence-ledger] every subprocess-backed test file has a migration row", 
       "open",
       `${row.path} has an open ledger row; the subprocess-test migration is closed (#185)`,
     );
+  }
+});
+
+// These suites were introduced over in-process resources and injected Process
+// doubles. They never had a real-child assertion to migrate (#454, audit A33).
+test("m10-audit-guidance-refresh: born process-free suites are classified outside the migration ledger", () => {
+  const rows = ledgerRows(readFileSync(ledgerPath, "utf8"));
+  for (const path of [
+    "tests/tui/home-preferences.test.tsx",
+    "tests/application/preferences.test.ts",
+    "tests/application/workspace-paths.test.ts",
+    "tests/headless/settings.test.ts",
+    "tests/architecture/preferences-palettes.test.ts",
+    "tests/run/store/conversation-migration.test.ts",
+  ]) {
+    assert.equal(
+      discoversSubprocess(path, readFileSync(join(root, path), "utf8")),
+      false,
+      path,
+    );
+    assert.equal(
+      rows.some((row) => row.path === path),
+      false,
+      path,
+    );
+  }
+});
+
+test("m10-audit-guidance-refresh: process-free classifications have live files and no migration rows", () => {
+  const recorded = new Set(
+    ledgerRows(readFileSync(ledgerPath, "utf8")).map((row) => row.path),
+  );
+  for (const path of PROCESS_FREE_TEST_FILES) {
+    assert.equal(existsSync(join(root, path)), true, path);
+    assert.equal(recorded.has(path), false, path);
   }
 });
