@@ -44,18 +44,11 @@ async function rpc(
 for (const outcome of ["accepted", "held-for-review", "refused"] as const) {
   test(`Claude channel attaches only declared calls and answers ${outcome} exactly once`, async (t) => {
     const scripted = scriptedClaude({ answer: "confirm" });
-    let server: z.infer<typeof serverSchema> | undefined;
     const harness = await prepare({
       ...scripted,
       process: {
         ...scripted.process,
         spawnOwnedProcess(options) {
-          const raw = options.args[options.args.indexOf("--mcp-config") + 1];
-          assert.ok(raw);
-          const config = z
-            .object({ mcpServers: z.object({ secant: serverSchema }) })
-            .parse(JSON.parse(raw));
-          server = config.mcpServers.secant;
           assert.deepEqual(
             options.args.slice(options.args.indexOf("--allowedTools")),
             ["--allowedTools", "mcp__secant__step_done"],
@@ -76,6 +69,9 @@ for (const outcome of ["accepted", "held-for-review", "refused"] as const) {
         if (event.kind === "session") resolve();
       }),
     );
+    const server = z
+      .object({ servers: z.object({ secant: serverSchema }) })
+      .parse(scripted.writes[0]?.[0]?.request).servers.secant;
     assert.ok(server);
     const initialized = await rpc(server, "initialize", {
       protocolVersion: "2025-03-26",
@@ -208,17 +204,11 @@ for (const ending of [
 ] as const) {
   test(`Claude expires unanswered calls before ${ending} settlement`, async (t) => {
     const scripted = scriptedClaude({ answer: "confirm" });
-    let server: z.infer<typeof serverSchema> | undefined;
     const harness = await prepare({
       ...scripted,
       process: {
         ...scripted.process,
         spawnOwnedProcess(options) {
-          const raw = options.args[options.args.indexOf("--mcp-config") + 1];
-          assert.ok(raw);
-          server = z
-            .object({ mcpServers: z.object({ secant: serverSchema }) })
-            .parse(JSON.parse(raw)).mcpServers.secant;
           return scripted.process.spawnOwnedProcess(options);
         },
       },
@@ -235,6 +225,9 @@ for (const ending of [
         if (event.kind === "session") resolve();
       }),
     );
+    const server = z
+      .object({ servers: z.object({ secant: serverSchema }) })
+      .parse(scripted.writes[0]?.[0]?.request).servers.secant;
     assert.ok(server);
     const connection = await rpc(server, "initialize", {
       protocolVersion: "2025-03-26",
@@ -459,8 +452,11 @@ test("Claude reattaches the same bearer and declarations after a Windows reap", 
   assert.equal(args.length, 2);
   assert.ok(args[1]?.includes("--resume"));
   assert.ok(!args[1]?.includes("--session-id"));
-  const config = (argv: string[]) => argv[argv.indexOf("--mcp-config") + 1];
-  assert.equal(config(args[0]!), config(args[1]!));
+  assert.deepEqual(
+    scripted.writes[0]?.[0]?.request,
+    scripted.writes[1]?.[0]?.request,
+  );
+  assert.ok(args.every((argv) => !argv.includes("--mcp-config")));
   assert.equal(args[1]?.at(-1), "mcp__secant__step_done");
   await next.interrupt();
   assert.equal((await next.result()).kind, "interrupted");

@@ -20,7 +20,7 @@
 // in the directory named by `--add-dir` — the Run working area (#222).
 
 import { backgroundTree } from "./background-tree.mjs";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -102,8 +102,8 @@ function replayBytes(path) {
 // Select each MCP endpoint by its configured server name. Permission steps retain
 // their original shape; Agent-call steps name a server, tool and arguments.
 const permissionTool = valueAfter("--permission-prompt-tool");
-const mcpServers =
-  JSON.parse(valueAfter("--mcp-config") ?? "{}").mcpServers ?? {};
+let mcpServers = {};
+let attached = false;
 const clients = new Map();
 function connectServer(name) {
   if (!clients.has(name))
@@ -351,6 +351,24 @@ lines.on("line", (line) => {
         JSON.stringify({ type: "control", id: invocationId, line }) + "\n",
       );
     }
+    if (frame.request?.subtype === "mcp_set_servers") {
+      if (attached || userFrames.length > 0) unexpectedControl();
+      mcpServers = frame.request.servers;
+      const responseFile = existsSync(join(caseDirectory, "set-servers.stdout"))
+        ? join(caseDirectory, "set-servers.stdout")
+        : join(
+            recording.settingsDirectory,
+            "mcp-servers",
+            "set-servers.stdout",
+          );
+      const reply = readFileSync(responseFile, "utf8").replace(
+        /"request_id":"[^"]+"/g,
+        `"request_id":${JSON.stringify(frame.request_id)}`,
+      );
+      process.stdout.write(reply);
+      attached = true;
+      return;
+    }
     if (frame.request?.subtype === "get_settings" && settingsSteps > 0) {
       settingsSteps -= 1;
       controlFrames.push(frame);
@@ -386,6 +404,7 @@ lines.on("line", (line) => {
     process.stderr.write("secant replayer: stdin was not a user Turn\n");
     process.exit(2);
   }
+  if (!attached) unexpectedControl();
   userFrames.push(line);
   wake();
 });
@@ -464,7 +483,9 @@ for (;;) {
   // between Turns, such as a Model choice change to a reused child, ahead of
   // that Turn's prompt.
   const upcoming = playback.turns[resumeOffset + turnIndex];
-  const before = Array.isArray(upcoming?.before) ? upcoming.before : [];
+  const before = Array.isArray(upcoming?.before)
+    ? upcoming.before.filter((spec) => spec.subtype !== "mcp_set_servers")
+    : [];
   settingsSteps = countSettings(before);
   for (const spec of before) await controlStep(spec);
   settingsSteps = 0;

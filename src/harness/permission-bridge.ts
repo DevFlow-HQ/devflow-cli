@@ -51,6 +51,8 @@ type AgentCallRouter = (
 
 interface SessionAttachment {
   readonly launchArgs: readonly string[];
+  /** Opaque server attachment, decoded only by the native Adapter and recorder. */
+  readonly configuration: string;
   readonly bearer: string;
   /** The agent-call endpoint; callers attach it only for a nonempty declaration set. */
   readonly url: string;
@@ -217,28 +219,25 @@ export function startPermissionBridge(
           if (existing !== undefined) return existing.attachment;
           const token = randomBytes(32).toString("hex");
           registerSecret(token, "bearer-token");
-          const config = JSON.stringify({
-            mcpServers: {
-              ...(bound.length === 0
-                ? {}
-                : {
-                    secant: {
-                      type: "http",
-                      url: `${baseUrl}/mcp`,
-                      headers: { Authorization: `Bearer ${token}` },
-                    },
-                  }),
-              [SERVER_NAME]: {
-                type: "http",
-                url: `${baseUrl}/permissions`,
-                headers: { Authorization: `Bearer ${token}` },
-              },
+          const servers = {
+            ...(bound.length === 0
+              ? {}
+              : {
+                  secant: {
+                    type: "http" as const,
+                    url: `${baseUrl}/mcp`,
+                    headers: { Authorization: `Bearer ${token}` },
+                  },
+                }),
+            [SERVER_NAME]: {
+              type: "http" as const,
+              url: `${baseUrl}/permissions`,
+              headers: { Authorization: `Bearer ${token}` },
             },
-          });
+          };
           const attachment: SessionAttachment = {
+            configuration: JSON.stringify(servers),
             launchArgs: [
-              "--mcp-config",
-              config,
               "--permission-prompt-tool",
               PERMISSION_TOOL,
               ...(bound.length === 0

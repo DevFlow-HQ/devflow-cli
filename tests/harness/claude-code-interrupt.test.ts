@@ -58,7 +58,14 @@ test("a confirmed native interrupt settles the Turn interrupted active-turn and 
   assert.equal(scripted.writes.length, 1, "no relaunch");
   assert.deepEqual(
     scripted.writes[0]?.map((frame) => frame.type),
-    ["control_request", "user", "control_request", "control_request", "user"],
+    [
+      "control_request",
+      "control_request",
+      "user",
+      "control_request",
+      "control_request",
+      "user",
+    ],
   );
   await harness.close();
 });

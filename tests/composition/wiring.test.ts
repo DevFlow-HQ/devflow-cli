@@ -1298,6 +1298,28 @@ function overlappingProcess() {
                 kind: "launched",
                 stdinReplies: (bytes) => {
                   const frame = JSON.parse(new TextDecoder().decode(bytes));
+                  if (frame.type === "user")
+                    return [{ kind: "stdout", bytes: claudeTurnFrames() }];
+                  if (frame.request?.subtype === "mcp_set_servers")
+                    return [
+                      {
+                        kind: "stdout",
+                        bytes: new TextEncoder().encode(
+                          JSON.stringify({
+                            type: "control_response",
+                            response: {
+                              subtype: "success",
+                              request_id: frame.request_id,
+                              response: {
+                                added: Object.keys(frame.request.servers),
+                                removed: [],
+                                errors: {},
+                              },
+                            },
+                          }) + "\n",
+                        ),
+                      },
+                    ];
                   if (frame.request?.subtype !== "get_settings") return [];
                   return [
                     {
@@ -1318,7 +1340,6 @@ function overlappingProcess() {
                   ];
                 },
                 emissions: [
-                  { kind: "stdout", bytes: claudeTurnFrames() },
                   {
                     kind: "terminal",
                     trigger: "close-stdin",
@@ -1441,8 +1462,8 @@ test("two overlapping Runs sharing one Session attribute every Harness and child
 
   for (const runId of [runA, runB]) {
     const run = ofRun(runId);
-    // The scripted child emits its whole stream at spawn, so its init is read
-    // within the launch and no separate handshake opens.
+    // The scripted child acknowledges attachment, then emits init after the prompt;
+    // both launch and handshake records must belong to this Run.
     assert.deepEqual(
       harness(run).map(({ elapsedMs: _elapsed, ...rest }) => rest),
       [
@@ -1450,6 +1471,13 @@ test("two overlapping Runs sharing one Session attribute every Harness and child
         {
           event: "harness-phase-end",
           phase: "launch",
+          session: "s",
+          status: "ok",
+        },
+        { event: "harness-phase-start", phase: "handshake", session: "s" },
+        {
+          event: "harness-phase-end",
+          phase: "handshake",
           session: "s",
           status: "ok",
         },

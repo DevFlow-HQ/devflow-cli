@@ -139,6 +139,7 @@ interface BridgeCall {
 interface RecorderBridge {
   /** The production bridge's launch flags, spliced into the launch argv. */
   readonly launchArgs: readonly string[];
+  readonly configuration: string;
   /** The bridge's bearer, listed as a known secret so the recording redacts it. */
   readonly token: string;
   readonly calls: BridgeCall[];
@@ -168,6 +169,7 @@ async function startBridge(
   });
   return {
     launchArgs: bridge.session("recording").launchArgs,
+    configuration: bridge.session("recording").configuration,
     token: bridge.session("recording").bearer,
     calls,
     close: () => bridge.close(),
@@ -208,8 +210,9 @@ interface RunControl {
 
 /** Spawn `claude` with the given argv, write one user frame, and capture raw
  *  streams until the process exits (or a control stops it). */
-function runTurn(options: {
+async function runTurn(options: {
   args: string[];
+  configuration: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   input: string;
@@ -229,21 +232,28 @@ function runTurn(options: {
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = Buffer.concat([stderr, chunk]);
   });
+  const captured = new Promise<Capture>((resolve) => {
+    child.on("close", (code, signal) =>
+      resolve({
+        stdout,
+        stderr,
+        exitCode: code ?? (signal ? 128 + signalNumber(signal) : 0),
+      }),
+    );
+  });
+  try {
+    await attachRecorderServers(child, options.configuration);
+  } catch (error) {
+    await captured;
+    throw error;
+  }
   child.stdin.write(options.input);
   // Close stdin after the one frame so `claude -p` finishes the single Turn and
   // exits (it otherwise blocks waiting for more stream-json frames). The current
   // Turn still runs to completion, so interrupt/corruption scenarios kill it
   // mid-flight before it settles.
   child.stdin.end();
-  return new Promise<Capture>((resolve) => {
-    child.on("close", (code, signal) => {
-      resolve({
-        stdout,
-        stderr,
-        exitCode: code ?? (signal ? 128 + signalNumber(signal) : 0),
-      });
-    });
-  });
+  return captured;
 }
 
 function signalNumber(signal: NodeJS.Signals): number {
@@ -475,6 +485,7 @@ async function recordPlain(): Promise<void> {
   );
   try {
     const capture = await runTurn({
+      configuration: bridge.configuration,
       args: launchArgs(["--session-id", SESSION_IDS.plain], bridge),
       cwd: ws,
       env: baseEnv(),
@@ -526,6 +537,7 @@ async function recordTestRepair(): Promise<void> {
   );
   try {
     const capture = await runTurn({
+      configuration: bridge.configuration,
       args: launchArgs(["--session-id", SESSION_IDS["test-repair"]], bridge),
       cwd: ws,
       env: baseEnv(),
@@ -731,6 +743,7 @@ async function recordHeld(options: {
         [...(options.launchFlags ?? []), "--session-id", options.sessionId],
         {
           launchArgs: bridge.session("recording").launchArgs,
+          configuration: bridge.session("recording").configuration,
           token: bridge.session("recording").bearer,
           calls: [],
           close: () => bridge.close(),
@@ -774,6 +787,10 @@ async function recordHeld(options: {
       }
     });
     child.stderr.resume();
+    await attachRecorderServers(
+      child,
+      bridge.session("recording").configuration,
+    );
     child.stdin.write(userFrame(options.prompt, RECORDED_PROMPT_UUIDS[0]));
     const exitCode = await exit;
     return {
@@ -1066,6 +1083,7 @@ async function recordResume(): Promise<void> {
   );
   try {
     const first = await runTurn({
+      configuration: bridge.configuration,
       args: launchArgs(["--session-id", SESSION_IDS.resume], bridge),
       cwd: ws,
       env: baseEnv(),
@@ -1085,6 +1103,7 @@ async function recordResume(): Promise<void> {
       },
     });
     const second = await runTurn({
+      configuration: bridge.configuration,
       args: launchArgs(["--resume", SESSION_IDS.resume], bridge),
       cwd: ws,
       env: baseEnv(),
@@ -1144,6 +1163,7 @@ async function recordAuthentication(): Promise<void> {
   env.CLAUDE_CONFIG_DIR = config;
   try {
     const capture = await runTurn({
+      configuration: bridge.configuration,
       args: launchArgs(["--session-id", SESSION_IDS.authentication], bridge),
       cwd: ws,
       env,
@@ -1180,6 +1200,7 @@ async function recordProtocolCorruption(): Promise<void> {
   );
   try {
     const capture = await runTurn({
+      configuration: bridge.configuration,
       args: launchArgs(
         ["--session-id", SESSION_IDS["protocol-corruption"]],
         bridge,
@@ -1326,6 +1347,7 @@ async function recordMattFront(): Promise<void> {
   const turn = (sessionArgs: string[], text: string, tracked = false) => {
     stdoutLen = 0;
     return runTurn({
+      configuration: bridge.configuration,
       args: launchArgs(sessionArgs, bridge, area),
       cwd: ws,
       env: baseEnv(),
@@ -1684,6 +1706,7 @@ async function recordModelChange(): Promise<void> {
     let resumed: Capture;
     try {
       resumed = await runTurn({
+        configuration: bridge.configuration,
         args: launchArgs(
           [
             "--model",
@@ -2002,21 +2025,24 @@ async function recordChannel(
     ],
     {
       launchArgs: attachment.launchArgs,
+      configuration: attachment.configuration,
       token: attachment.bearer,
       calls: [],
       close: () => bridge.close(),
     },
   );
-  if (name !== "agent-call") {
-    const i = args.indexOf("--mcp-config") + 1;
-    const config = JSON.parse(args[i]!);
-    config.mcpServers.setup = {
-      type: "http",
-      url: `http://127.0.0.1:${address.port}/mcp`,
-    };
-    args[i] = JSON.stringify(config);
-    args.push("--allowedTools", "mcp__setup__setup");
-  }
+  const servers =
+    name === "agent-call"
+      ? JSON.parse(attachment.configuration)
+      : {
+          ...JSON.parse(attachment.configuration),
+          setup: {
+            type: "http",
+            url: `http://127.0.0.1:${address.port}/mcp`,
+            headers: { Authorization: "" },
+          },
+        };
+  if (name !== "agent-call") args.push("--allowedTools", "mcp__setup__setup");
   const input = userFrame(
     name === "agent-call"
       ? "Call mcp__secant__step_done exactly once with reason ready. Do nothing else. After its reply say done."
@@ -2078,7 +2104,10 @@ async function recordChannel(
         clearTimeout(timer);
         resolve({ stdout, stderr, exitCode: code ?? 1 });
       });
-      child.stdin.write(input);
+      void attachRecorderServers(child, JSON.stringify(servers)).then(
+        () => child.stdin.write(input),
+        reject,
+      );
     });
     if (name === "agent-call" && call === undefined)
       throw new Error("Claude never called the attached tool");
@@ -2149,6 +2178,75 @@ async function recordChannel(
 }
 
 // --- MCP attachment over private stdin (#494) ---------------------------------
+
+async function attachRecorderServers(
+  child: ChildProcessWithoutNullStreams,
+  configuration: string,
+): Promise<void> {
+  const servers = z
+    .record(
+      z.string(),
+      z.object({
+        type: z.literal("http"),
+        url: z.string(),
+        headers: z.object({ Authorization: z.string() }),
+      }),
+    )
+    .parse(JSON.parse(configuration));
+  await new Promise<void>((resolve, reject) => {
+    let pending = "";
+    const finish = (ok: boolean) => {
+      clearTimeout(timer);
+      child.stdout.off("data", read);
+      child.off("close", closed);
+      child.off("error", closed);
+      child.stdin.off("error", closed);
+      if (ok) resolve();
+      else {
+        child.kill("SIGKILL");
+        reject(new Error("Claude Code MCP attachment failed"));
+      }
+    };
+    const closed = () => finish(false);
+    const read = (bytes: Buffer) => {
+      pending += bytes.toString("utf8");
+      let newline: number;
+      while ((newline = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        let raw: unknown;
+        try {
+          raw = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const parsed = mcpServersReply.safeParse(raw);
+        if (!parsed.success) continue;
+        const answer = parsed.data.response;
+        finish(
+          answer.subtype === "success" &&
+            Object.keys(answer.response.errors).length === 0 &&
+            Object.keys(servers).every((name) =>
+              answer.response.added.includes(name),
+            ),
+        );
+        return;
+      }
+    };
+    const timer = setTimeout(closed, 15_000);
+    child.stdout.on("data", read);
+    child.once("close", closed);
+    child.once("error", closed);
+    child.stdin.once("error", closed);
+    child.stdin.write(
+      JSON.stringify({
+        type: "control_request",
+        request_id: MCP_SERVERS_REQUEST_ID,
+        request: { subtype: "mcp_set_servers", servers },
+      }) + "\n",
+    );
+  });
+}
 
 const MCP_SERVERS_REQUEST_ID = "recording-mcp-set-servers";
 const mcpServersReply = z.object({
@@ -2236,22 +2334,6 @@ async function recordMcpServers(invalid = false): Promise<void> {
       },
     ]);
     const flags = [...attachment.launchArgs];
-    const configIndex = flags.indexOf("--mcp-config");
-    if (configIndex < 0)
-      throw new Error("Bridge attachment has no MCP configuration");
-    const config = z
-      .object({
-        mcpServers: z.record(
-          z.string(),
-          z.object({
-            type: z.literal("http"),
-            url: z.string(),
-            headers: z.object({ Authorization: z.string() }),
-          }),
-        ),
-      })
-      .parse(JSON.parse(z.string().parse(flags[configIndex + 1])));
-    flags.splice(configIndex, 2);
     const args = launchArgs(
       [
         "--session-id",
@@ -2260,6 +2342,7 @@ async function recordMcpServers(invalid = false): Promise<void> {
       ],
       {
         launchArgs: flags,
+        configuration: attachment.configuration,
         token: attachment.bearer,
         calls: [],
         close: () => bridge.close(),
@@ -2280,7 +2363,9 @@ async function recordMcpServers(invalid = false): Promise<void> {
         request_id: MCP_SERVERS_REQUEST_ID,
         request: {
           subtype: "mcp_set_servers",
-          servers: invalid ? { invalid: null } : config.mcpServers,
+          servers: invalid
+            ? { invalid: null }
+            : JSON.parse(attachment.configuration),
         },
       }) + "\n";
     const prompt = userFrame(

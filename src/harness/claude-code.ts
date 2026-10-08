@@ -28,6 +28,7 @@ import {
   observedToolStart,
   observedToolResult,
   encodeUserMessage,
+  mcpServers,
   encodeElicitationDecline,
   type ElicitationFrame,
   contextObservation,
@@ -110,7 +111,7 @@ const DENY_MESSAGE = "The tool use was denied.";
 
 /** This Adapter's revision, stamped onto every profile it produces so a cached
  *  qualification from an older Adapter is never mistaken for a current one. */
-const ADAPTER_REVISION = "claude-code-6";
+const ADAPTER_REVISION = "claude-code-7";
 
 const HARNESS_NAME = "claude-code";
 
@@ -734,6 +735,7 @@ class ClaudeCodeSession {
   readonly coordinate: RecoveryCoordinate;
   private process: OwnedProcess | undefined;
   private windowsProcess = false;
+  private attaching: OwnedProcess | undefined;
   private readonly retirement: ClaudeRetirement;
   private nativeControl: PhaseSpan | undefined;
   /** The Turn that owns `process`. A later Turn may be admitted before the prior
@@ -1194,14 +1196,24 @@ class ClaudeCodeSession {
     }
 
     if (this.process === undefined) {
-      const launch = this.launch(turn);
+      const span = startPhase(this.phases, "launch", this.name);
+      const launch = this.spawnChild(turn);
       this.launchPromise = launch;
       const launched = await launch;
       if (this.launchPromise === launch) this.launchPromise = undefined;
       if (!launched.ok) {
+        if (launched.category === "closed-before-launch") span.abandoned();
+        else span.failed(notStartedFailure(launched.category, launched.cause));
         turn.settleNotStarted(launched.category, launched.cause);
         return;
       }
+      if (this.process === undefined || this.closed) {
+        const cause = "Claude Code MCP attachment closed.";
+        span.failed(notStartedFailure("mcp-attachment", cause));
+        turn.settleNotStarted("mcp-attachment", cause);
+        return;
+      }
+      span.ok();
     }
     if (turn.settled) return;
     if (this.closed) {
@@ -1224,7 +1236,15 @@ class ClaudeCodeSession {
         ),
       );
     }
-    const acceptingProcess = this.process!;
+    const acceptingProcess = this.process;
+    if (acceptingProcess === undefined) {
+      turn.settleNotStarted(
+        "mcp-attachment",
+        "Claude Code MCP attachment closed.",
+      );
+      return;
+    }
+    this.attaching = undefined;
     const control = this.controls.get(acceptingProcess);
     if (control !== undefined) {
       void control.request({ subtype: "get_settings" }).then((outcome) => {
@@ -1400,15 +1420,6 @@ class ClaudeCodeSession {
     return this.retirement.retire(owned, cleanup, reportPhase);
   }
 
-  private async launch(turn: ClaudeCodeTurn): Promise<LaunchOutcome> {
-    const span = startPhase(this.phases, "launch", this.name);
-    const launched = await this.spawnChild(turn);
-    if (launched.ok) span.ok();
-    else if (launched.category === "closed-before-launch") span.abandoned();
-    else span.failed(notStartedFailure(launched.category, launched.cause));
-    return launched;
-  }
-
   private async spawnChild(turn: ClaudeCodeTurn): Promise<LaunchOutcome> {
     let bridge: PermissionBridge;
     try {
@@ -1449,6 +1460,7 @@ class ClaudeCodeSession {
       this.writableDirectory !== undefined
         ? ["--add-dir", this.writableDirectory]
         : [];
+    const attachment = bridge.session(this.name, turn.request.agentCalls);
     const launched = await this.spawn({
       role: "harness-runtime",
       executable: this.target.executable,
@@ -1465,17 +1477,15 @@ class ClaudeCodeSession {
         ...writableArgs,
         ...sessionArgs,
         // The permission bridge: Claude relays every permission prompt to this
-        // loopback tool and waits on it. The inline config carries the per-Session
-        // bearer token; it is the only place the token appears.
-        ...bridge.session(this.name, turn.request.agentCalls).launchArgs,
+        // loopback tool and waits on it. Authentication is attached over stdin.
+        ...attachment.launchArgs,
       ],
       cwd: this.workspace,
       env: process.env,
       launchTimeoutMs: DEFAULT_LAUNCH_TIMEOUT_MS,
     });
     if (!launched.ok) {
-      // A spawn error carries the launch argv (Node's `spawnargs`), which
-      // includes the bearer token; scrub it before it becomes a failure cause.
+      // Redact any Secant secret echoed by the launch failure.
       return {
         ok: false,
         category: launched.failure.kind,
@@ -1492,10 +1502,15 @@ class ClaudeCodeSession {
     );
     this.controls.set(owned, control);
     this.process = owned;
+    this.attaching = owned;
     this.processTurn = turn;
     this.applied = choice;
     this.relaunchForChoice = false;
     void this.consumeStdout(owned, control).catch((error) => {
+      if (this.attaching === owned) {
+        control.close();
+        return;
+      }
       const redacted = redactSecrets(error);
       this.outputTurn(owned)?.protocolCorruption(
         `stdout read failed: ${describe(redacted)}`,
@@ -1510,6 +1525,34 @@ class ClaudeCodeSession {
       control.close();
       this.onClosed(owned, result);
     });
+    const servers = mcpServers(attachment.configuration);
+    const answer = await control.request({
+      subtype: "mcp_set_servers",
+      servers,
+    });
+    if (
+      this.process !== owned ||
+      answer.kind !== "success" ||
+      answer.attachment === undefined ||
+      answer.attachment.failed ||
+      !Object.keys(servers).every((name) =>
+        answer.attachment?.added.includes(name),
+      )
+    ) {
+      const outcome =
+        this.process !== owned
+          ? "closed"
+          : answer.kind === "success"
+            ? "failed"
+            : answer.kind;
+      await this.retire(owned);
+      this.attaching = undefined;
+      return {
+        ok: false,
+        category: "mcp-attachment",
+        cause: `Claude Code MCP attachment ${outcome}.`,
+      };
+    }
     return { ok: true };
   }
 
@@ -1523,6 +1566,10 @@ class ClaudeCodeSession {
       if (next.kind === "line") {
         this.consumeLine(owned, next.value, control);
         continue;
+      }
+      if (this.attaching === owned) {
+        control.close();
+        return;
       }
       if (next.kind === "truncated" && next.value.trim().startsWith("{")) {
         this.outputTurn(owned)?.protocolCorruption("truncated JSON frame");
@@ -1563,6 +1610,10 @@ class ClaudeCodeSession {
     try {
       frame = JSON.parse(trimmed);
     } catch (error) {
+      if (this.attaching === owned) {
+        control.close();
+        return;
+      }
       this.outputTurn(owned)?.protocolCorruption(
         "malformed JSON frame",
         redactSecrets(error),
@@ -1575,7 +1626,7 @@ class ClaudeCodeSession {
       control.accept(parsed.frame);
       return;
     }
-    this.outputTurn(owned)?.acceptFrame(parsed);
+    if (this.attaching !== owned) this.outputTurn(owned)?.acceptFrame(parsed);
   }
 
   private outputTurn(owned: OwnedProcess): ClaudeCodeTurn | undefined {
@@ -1592,7 +1643,7 @@ class ClaudeCodeSession {
     const turn = this.processTurn;
     void this.retire(owned, () => Promise.resolve(result), false);
     if (this.active === turn) this.active = undefined;
-    this.settleClosedTurn(turn, result);
+    if (this.attaching !== owned) this.settleClosedTurn(turn, result);
   }
 
   private settleClosedTurn(
@@ -2656,7 +2707,9 @@ function notStartedFailure(
 ): HarnessFailure {
   return {
     phase:
-      category === "spawn-error" || category === "launch-timeout"
+      category === "spawn-error" ||
+      category === "launch-timeout" ||
+      category === "mcp-attachment"
         ? "launch"
         : "turn",
     category,
@@ -2863,7 +2916,7 @@ function buildProfile(
     agentCalls: {
       available: CLAUDE_CODE_SERVED_CAPABILITIES.agentCalls === true,
       evidence:
-        "Session-attached loopback MCP calls use --mcp-config and narrowly scoped --allowedTools; user and managed deny rules retain authority.",
+        "Session-attached loopback MCP calls use an acknowledged mcp_set_servers stdin control on every launch and narrowly scoped --allowedTools; user and managed deny rules retain authority.",
     },
     clarifications: {
       available: false,

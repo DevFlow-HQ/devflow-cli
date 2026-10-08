@@ -22,6 +22,8 @@ Read before changing Harness doubles, shared conformance, native replayers, or r
   child's top-level code runs hits the default disposition and kills it (this is a startup race, not a `bun test` limitation; plain `bun` shows the same
   window). So the replayer installs its SIGTERM handler at startup, and interrupt/close cases wait for the `session` event (init observed) before
   interrupting. Never signal a freshly spawned child before it has announced readiness.
+- Claude replay attaches live MCP endpoints from the startup stdin control, answered with the #494 native response before the first Turn.
+  The `mcp-servers` first Turn replays Agent calls and permissions with the live bearer and port, never recorded credentials.
 - The replayer's `case.json` vocabulary (`tests/harness/fixtures/README.md` is the reference): a `control` step (#346: take the next stdin
   `control_request` and emit recorded bytes echoing its `request_id`, or swallow it to model an unconfirmed stop; stdin is read while steps run;
   `cancelQueued` requires `cancel_queued`), a `steer` step and a Turn's `uuid` (#359: echo the message's minted uuid in later bytes),

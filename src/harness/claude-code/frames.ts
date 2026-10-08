@@ -153,14 +153,20 @@ const ControlResponseFrame = z.looseObject({
     subtype: lenientString,
     request_id: z.string(),
     error: lenientString,
-    // Keep only applied values. Effective settings and sources can carry hooks,
+    // Settings retain only applied values. Effective settings and sources can carry hooks,
     // credentials and personal commands, and are never retained by this read.
     response: z
       .object({
-        applied: z.object({
-          model: z.string().min(1),
-          effort: ClaudeEffort.nullable(),
-        }),
+        applied: z
+          .object({
+            model: z.string().min(1),
+            effort: ClaudeEffort.nullable(),
+          })
+          .optional()
+          .catch(undefined),
+        added: z.array(z.string()).optional().catch(undefined),
+        removed: z.array(z.string()).optional().catch(undefined),
+        errors: z.record(z.string(), z.unknown()).optional().catch(undefined),
       })
       .optional()
       .catch(undefined),
@@ -359,11 +365,29 @@ export function encodeUserMessage(uuid: string, text: string): Uint8Array {
 export type ControlRequest =
   | { readonly subtype: "interrupt"; readonly cancel_queued: true }
   | { readonly subtype: "get_settings" }
+  | {
+      readonly subtype: "mcp_set_servers";
+      readonly servers: ReturnType<typeof mcpServers>;
+    }
   | { readonly subtype: "set_model"; readonly model: string }
   | {
       readonly subtype: "apply_flag_settings";
       readonly settings: { readonly effortLevel: string };
     };
+
+/** The bridge's opaque attachment is decoded only inside the native Adapter. */
+export function mcpServers(configuration: string) {
+  return z
+    .record(
+      z.string(),
+      z.object({
+        type: z.literal("http"),
+        url: z.string(),
+        headers: z.object({ Authorization: z.string() }),
+      }),
+    )
+    .parse(JSON.parse(configuration));
+}
 
 export function encodeControlRequest(
   requestId: string,

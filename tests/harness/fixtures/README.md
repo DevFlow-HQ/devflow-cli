@@ -38,7 +38,8 @@ Six keys, all required (the structural step enforces their presence):
   A `control` step's optional `requestId` identifies which recorded id to remap, preserving unrelated elicitation withdrawal ids.
 - `settings` (#347) — a sticky `{ "stdout": "settings.stdout" }` reply to `get_settings`, echoing the request id; `{ "unanswered": true }` models a timeout.
   Settings-only probes use `--no-session-persistence`, carry no Session id or user frame, and never advance `sessions[]`. Ordinary cases use the
-  separately recorded `settings` or `settings-locked` reply, selected by the inherited `xhigh` lock. Other controls still require explicit steps.
+  separately recorded `settings` or `settings-locked` reply, selected by the inherited `xhigh` lock. Startup `mcp_set_servers` uses the
+  recorded attachment answer described below; other controls require explicit steps.
 - `exitCode` — the process exit code the replayer settles with.
 - `turns[]` — one entry per stdin Turn frame the Adapter sends:
   - `stdout` / `stderr` — a byte file emitted for the whole Turn, **or**
@@ -82,9 +83,9 @@ Six keys, all required (the structural step enforces their presence):
 
 Session ids are **not** redacted: Secant mints the session UUID and passes it at
 spawn, so each recording is made with the canonical per-case UUID its tests use,
-and the recorded frames echo it verbatim. Existing cases attach the bridge through `--mcp-config`. The `mcp-servers` case
-instead carries its bearer in `set-servers.stdin`; the recorder redacts it and
-scans every committed file for credentials.
+and the recorded frames echo it verbatim. Every replay launch receives its bridge configuration through `mcp_set_servers` on stdin,
+answered with the `mcp-servers/set-servers.stdout` native response before the prompt. The `mcp-servers` case carries the recorded
+request in `set-servers.stdin`; replay uses the live attachment, while the recorder redacts its bearer and scans every committed file for credentials.
 
 ## Recording (opt-in, local, needs the installed Harness)
 

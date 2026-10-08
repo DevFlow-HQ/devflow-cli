@@ -18,6 +18,10 @@ import {
 export type ControlOutcome =
   | {
       readonly kind: "success";
+      readonly attachment?: {
+        readonly added: readonly string[];
+        readonly failed: boolean;
+      };
       readonly settings?: NonNullable<
         ControlResponseFrame["response"]["response"]
       >["applied"];
@@ -69,7 +73,19 @@ export class ControlChannel {
       subtype === "success"
         ? {
             kind: "success",
-            ...(response === undefined ? {} : { settings: response.applied }),
+            ...(response?.applied === undefined
+              ? {}
+              : { settings: response.applied }),
+            ...(response?.added === undefined ||
+            response.removed === undefined ||
+            response.errors === undefined
+              ? {}
+              : {
+                  attachment: {
+                    added: response.added,
+                    failed: Object.keys(response.errors).length > 0,
+                  },
+                }),
           }
         : {
             kind: "refused",

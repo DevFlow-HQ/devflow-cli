@@ -14,6 +14,9 @@ Read before changing the private Claude Code Adapter.
 - The shared listener mints a 256-bit bearer per Harness Session, reused on relaunch. Both MCP endpoints bind every transport to its Session
   and server, including short extra connections; idle-Session approvals are denied. Each token stays registered for the invocation, and every cause
   below launch crosses `redactSecrets` (close observations, stdin-write and stdout-read errors, captured stderr), so redaction happens at the Seam.
+- Every Session launch attaches its MCP servers with `mcp_set_servers` over stdin before the prompt. Success requires every requested server in
+  `added` and an empty `errors` map; refusal, malformed success, write failure, timeout and closure fail launch with a plain `mcp-attachment` cause.
+  No bearer reaches argv or environment, no argv fallback exists, and `mcp_status` is never sent. Resume and Model-choice/Windows recovery reuse this path.
 - The stream-json protocol model is the private `claude-code/frames.ts`: one `zod` schema per known frame type (`init`, `status`, `assistant`, `user`,
   `stream_event`, `result`, `control_response`, `command_lifecycle`, `telemetry`), parsed per frame by `parseFrame`, with the stdin encoders, the pure readers, and the
   only

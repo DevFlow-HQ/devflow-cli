@@ -990,13 +990,39 @@ for (const containment of ["fallback", "contained", undefined] as const) {
         kind: "launched",
         containment,
         containmentCause: new Error("forced CreateJobObjectW failure"),
+        stdinReplies: (bytes) => {
+          const frame = JSON.parse(new TextDecoder().decode(bytes));
+          if (frame.request?.subtype === "mcp_set_servers")
+            return [
+              {
+                kind: "stdout",
+                bytes: new TextEncoder().encode(
+                  JSON.stringify({
+                    type: "control_response",
+                    response: {
+                      subtype: "success",
+                      request_id: frame.request_id,
+                      response: {
+                        added: Object.keys(frame.request.servers),
+                        removed: [],
+                        errors: {},
+                      },
+                    },
+                  }) + "\n",
+                ),
+              },
+            ];
+          if (frame.type !== "user") return [];
+          return [
+            {
+              kind: "stdout",
+              bytes: new TextEncoder().encode(
+                `${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId, model: "scripted-model" })}\n${JSON.stringify({ type: "result", subtype: "success", result: "done" })}\n`,
+              ),
+            },
+          ];
+        },
         emissions: [
-          {
-            kind: "stdout",
-            bytes: new TextEncoder().encode(
-              `${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId, model: "scripted-model" })}\n${JSON.stringify({ type: "result", subtype: "success", result: "done" })}\n`,
-            ),
-          },
           {
             kind: "terminal",
             trigger: "close-stdin",

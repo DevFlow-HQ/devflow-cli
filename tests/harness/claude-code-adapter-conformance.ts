@@ -75,6 +75,15 @@ const fixtureCase = (name: string) =>
 // thinking/telemetry exclusion, preview coalescing, and unknown-frame tolerance a
 // real plain Turn does not. The real plain recording is exercised separately below.
 const COMPLETED_CASE = fixtureCase("completed");
+function attachmentConfig(invocation: {
+  readonly controlLines: readonly string[];
+}): string {
+  const request = invocation.controlLines
+    .map((line) => JSON.parse(line))
+    .find((frame) => frame.request?.subtype === "mcp_set_servers");
+  assert.ok(request);
+  return JSON.stringify({ mcpServers: request.request.servers });
+}
 const protocolCase = fixtureCase;
 // Flags Secant never passes at qualification (`--version`). `--model` is not
 // here: a launch forwards a caller-requested model as --model, exercised below.
@@ -90,13 +99,12 @@ const FORBIDDEN_FLAGS = [
 
 // The full launch argv the Adapter builds (`claude-code.ts` `launch`), pinned as
 // one golden so adding, dropping or reordering a flag fails a test (A23). The two
-// per-Run dynamic slots — the inline `--mcp-config` path and the bridge tool name
+// dynamic slot, the bridge tool name
 // — are read from the captured invocation and plugged in; every fixed flag and
 // its order, and the session flag/value, are asserted exactly.
 function goldenLaunchArgs(
   sessionFlag: "--session-id" | "--resume",
   sessionValue: string,
-  mcpConfig: string,
   toolName: string,
 ): string[] {
   return [
@@ -109,26 +117,20 @@ function goldenLaunchArgs(
     "--include-partial-messages",
     sessionFlag,
     sessionValue,
-    "--mcp-config",
-    mcpConfig,
     "--permission-prompt-tool",
     toolName,
   ];
 }
 
-/** The full launch argv the golden pins, reading the two dynamic slots from the
+/** The full launch argv the golden pins, reading the dynamic tool name from the
  *  captured invocation itself. */
 function assertGoldenLaunch(
   args: string[],
   sessionFlag: "--session-id" | "--resume",
   sessionValue: string,
 ): void {
-  const mcpConfig = args[args.indexOf("--mcp-config") + 1]!;
   const toolName = args[args.indexOf("--permission-prompt-tool") + 1]!;
-  assert.deepEqual(
-    args,
-    goldenLaunchArgs(sessionFlag, sessionValue, mcpConfig, toolName),
-  );
+  assert.deepEqual(args, goldenLaunchArgs(sessionFlag, sessionValue, toolName));
 }
 
 // The shared prepare/profile, Turn-lifecycle, approval, and interrupt/recovery
@@ -235,7 +237,7 @@ test("a second named Session raises its own approval on the shared bridge", asyn
         .invocations()
         .find((invocation) => invocation.args.includes("-p"));
       assert.ok(first);
-      const raw = first.args[first.args.indexOf("--mcp-config") + 1];
+      const raw = attachmentConfig(first);
       assert.ok(raw);
       const attachment = z
         .object({
@@ -322,7 +324,7 @@ test("a second named Session raises its own approval on the shared bridge", asyn
     .invocations()
     .filter((invocation) => invocation.args.includes("-p"))
     .map((invocation) => {
-      const raw = invocation.args[invocation.args.indexOf("--mcp-config") + 1];
+      const raw = attachmentConfig(invocation);
       assert.ok(raw);
       return z
         .object({
@@ -427,15 +429,13 @@ test("the bearer token never appears in the Turn's events or result", async () =
   const result = await turn.result();
   await prepared.harness.close();
 
-  // The token exists only in the launch argv; recover it there as ground truth,
+  // Recover the token from the private startup control as ground truth,
   // then prove it appears nowhere a caller can observe.
   const invocation = replayer
     .invocations()
-    .find((entry) => entry.args.includes("--mcp-config"));
+    .find((entry) => entry.args.includes("-p"));
   assert.ok(invocation);
-  const config = JSON.parse(
-    invocation.args[invocation.args.indexOf("--mcp-config") + 1],
-  );
+  const config = JSON.parse(attachmentConfig(invocation));
   const token = config.mcpServers[
     "secant-permissions"
   ].headers.Authorization.replace("Bearer ", "");
@@ -578,13 +578,13 @@ test("exit without a result loses the Turn with completion-unknown, the exit cod
 // Adapter's `spawn` seam. It hands the Adapter frames a real child cannot be made
 // to emit on demand (a malformed known frame) and close observations it cannot be
 // made to produce (a cleanup error quoting the launch argv). `token()` recovers
-// the bridge bearer from the launch argv the Adapter passed, so a scripted cause
+// the bridge bearer from the startup stdin the Adapter received, so a scripted cause
 // can quote exactly the secret the Seam must scrub.
 interface ScriptedProcess {
   readonly spawn: ProcessAdapter["spawnOwnedProcess"];
   /** End stdout and settle `closed()` with the scripted close observation. */
   end(): void;
-  /** The bearer recovered from the launch argv the Adapter passed. */
+  /** The bearer recovered from the startup stdin the Adapter received. */
   token(): string;
 }
 
@@ -598,14 +598,17 @@ function scriptedProcess(script: {
   ) => ProcessInterruption | Promise<ProcessInterruption>;
   readonly closeStdin?: (token: string) => OwnedProcessClose;
 }): ScriptedProcess {
-  let launchArgs: readonly string[] = [];
+  let servers: Record<string, { headers: { Authorization: string } }> = {};
+  let acceptAttachment!: () => void;
+  const attachmentReady = new Promise<void>((resolve) => {
+    acceptAttachment = resolve;
+  });
+  let requestId: unknown;
   const token = (): string => {
-    const config = JSON.parse(
-      launchArgs[launchArgs.indexOf("--mcp-config") + 1]!,
+    return servers["secant-permissions"]!.headers.Authorization.replace(
+      "Bearer ",
+      "",
     );
-    return config.mcpServers[
-      "secant-permissions"
-    ].headers.Authorization.replace("Bearer ", "");
   };
   let resolveClose!: (close: OwnedProcessClose) => void;
   const closed = new Promise<OwnedProcessClose>((resolve) => {
@@ -616,6 +619,19 @@ function scriptedProcess(script: {
     endStdout = resolve;
   });
   async function* stdout(): AsyncGenerator<Uint8Array> {
+    await attachmentReady;
+    yield new TextEncoder().encode(
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: requestId,
+          response: { added: Object.keys(servers), removed: [], errors: {} },
+        },
+      }) + "\n",
+    );
+    // Frames in this synthetic case follow the user message, as native print mode does.
+    await promptReady;
     for (const frame of script.frames) {
       const bytes = new TextEncoder().encode(
         `${JSON.stringify(frame)}${script.lineEnding ?? "\n"}`,
@@ -639,11 +655,24 @@ function scriptedProcess(script: {
     resolveClose(close);
     return close;
   };
+  let acceptPrompt!: () => void;
+  const promptReady = new Promise<void>((resolve) => {
+    acceptPrompt = resolve;
+  });
   const exit0: OwnedProcessClose = { kind: "exited", status: 0 };
   const owned: OwnedProcess = {
     stdout: stdout(),
     stderr: stderr(),
-    writeStdin: () => Promise.resolve(),
+    writeStdin: (bytes) => {
+      const frame = JSON.parse(new TextDecoder().decode(bytes));
+      if (frame.request?.subtype === "mcp_set_servers") {
+        servers = frame.request.servers;
+        requestId = frame.request_id;
+        acceptAttachment();
+      }
+      if (frame.type === "user") acceptPrompt();
+      return Promise.resolve();
+    },
     closeStdin: () =>
       Promise.resolve(settle(script.closeStdin?.(token()) ?? exit0)),
     interrupt: async () => {
@@ -658,7 +687,7 @@ function scriptedProcess(script: {
   };
   return {
     spawn: (options) => {
-      launchArgs = options.args;
+      assert.equal(options.args.includes("--mcp-config"), false);
       return Promise.resolve({ ok: true, process: owned });
     },
     end: () => {
@@ -903,7 +932,7 @@ test("a cleanup failure carries its cause with the bearer redacted", async () =>
   assertScrubbed(result, result.detail.failure?.cause, token);
 });
 
-/** The bearer the scripted process saw on its launch argv. */
+/** The bearer the scripted process received over stdin. */
 function tokenOf(scripted: ScriptedProcess): string {
   return scripted.token();
 }
@@ -1074,11 +1103,19 @@ test("a confirmed native interrupt recovers the exact Session after Windows reap
   const launches = [invocation, ...relaunches];
   assert.deepEqual(
     launches.map((launch) => launch.controlLines.length),
-    process.platform === "win32" ? [2, 1] : [3],
+    process.platform === "win32" ? [3, 2] : [4],
+  );
+  assert.ok(
+    launches.every(
+      (launch) =>
+        JSON.parse(launch.controlLines[0]!).request.subtype ===
+        "mcp_set_servers",
+    ),
   );
   const controls = launches
     .flatMap((launch) => launch.controlLines)
-    .map((line) => JSON.parse(line));
+    .map((line) => JSON.parse(line))
+    .filter((frame) => frame.request.subtype !== "mcp_set_servers");
   assert.equal(controls.length, 3);
   assert.equal(controls[0].request.subtype, "get_settings");
   assert.equal(controls[2].request.subtype, "get_settings");
@@ -1838,8 +1875,8 @@ test("the profile carries every M3 fact with its evidence and a user-compatible 
 
   assert.equal(profile.harness, "claude-code");
   assert.equal(profile.executableVersion, VERSION);
-  // Revision 5 adds the Session Agent-call channel (#371).
-  assert.equal(profile.adapterRevision, "claude-code-6");
+  // Revision 7 moves the Session Agent-call attachment to private stdin (#500).
+  assert.equal(profile.adapterRevision, "claude-code-7");
   assert.equal(
     profile.platform,
     process.platform === "win32"
@@ -2001,6 +2038,19 @@ test("native launch uses the Session declaration snapshot when the caller mutate
       },
     ],
   });
+  let endMutation!: () => void;
+  let endMutationStderr!: () => void;
+  let settleMutation!: (close: OwnedProcessClose) => void;
+  const mutationClosed = new Promise<OwnedProcessClose>((resolve) => {
+    settleMutation = resolve;
+  });
+  const finishMutation = (): OwnedProcessClose => {
+    const close = { kind: "exited", status: 0 } as const;
+    endMutation();
+    endMutationStderr();
+    settleMutation(close);
+    return close;
+  };
   let agentEndpointStatus: number | undefined;
   const prepared = await createClaudeCodeAdapter({ env: {} }).prepare({
     workspace: makeTempDir("secant-declarations-"),
@@ -2009,47 +2059,65 @@ test("native launch uses the Session declaration snapshot when the caller mutate
         scripted.resolveExecutable(name, options),
       spawnCommand: (options) => scripted.spawnCommand(options),
       spawnCommandSync: (options) => scripted.spawnCommandSync(options),
-      async spawnOwnedProcess(options) {
-        const raw = options.args[options.args.indexOf("--mcp-config") + 1];
-        assert.ok(raw);
-        const attachment = z
-          .object({
-            mcpServers: z.object({
-              "secant-permissions": z.object({
-                url: z.string(),
-                headers: z.object({ Authorization: z.string() }),
-              }),
-            }),
-          })
-          .parse(JSON.parse(raw)).mcpServers["secant-permissions"];
-        const response = await fetch(
-          attachment.url.replace("/permissions", "/mcp"),
-          {
-            method: "POST",
-            headers: {
-              ...attachment.headers,
-              "Content-Type": "application/json",
-              Accept: "application/json, text/event-stream",
-            },
-            body: JSON.stringify({
-              jsonrpc: "2.0",
-              id: 1,
-              method: "initialize",
-              params: {
-                protocolVersion: "2025-03-26",
-                capabilities: {},
-                clientInfo: { name: "mutation-probe", version: "1" },
-              },
-            }),
-          },
-        );
-        agentEndpointStatus = response.status;
-        await response.text();
+      async spawnOwnedProcess() {
         return {
-          ok: false,
-          failure: {
-            kind: "spawn-error",
-            cause: new Error("scripted launch end"),
+          ok: true,
+          process: {
+            // eslint-disable-next-line require-yield
+            stdout: (async function* () {
+              await new Promise<void>((resolve) => {
+                endMutation = resolve;
+              });
+            })(),
+            // eslint-disable-next-line require-yield
+            stderr: (async function* () {
+              await new Promise<void>((resolve) => {
+                endMutationStderr = resolve;
+              });
+            })(),
+            closed: () => mutationClosed,
+            closeStdin: async () => finishMutation(),
+            interrupt: async () => ({
+              close: finishMutation(),
+              escalated: false,
+            }),
+            async writeStdin(bytes) {
+              const frame = JSON.parse(new TextDecoder().decode(bytes));
+              const attachment = z
+                .object({
+                  servers: z.object({
+                    "secant-permissions": z.object({
+                      url: z.string(),
+                      headers: z.object({ Authorization: z.string() }),
+                    }),
+                  }),
+                })
+                .parse(frame.request).servers["secant-permissions"];
+              const response = await fetch(
+                attachment.url.replace("/permissions", "/mcp"),
+                {
+                  method: "POST",
+                  headers: {
+                    ...attachment.headers,
+                    "Content-Type": "application/json",
+                    Accept: "application/json, text/event-stream",
+                  },
+                  body: JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: 1,
+                    method: "initialize",
+                    params: {
+                      protocolVersion: "2025-03-26",
+                      capabilities: {},
+                      clientInfo: { name: "mutation-probe", version: "1" },
+                    },
+                  }),
+                },
+              );
+              agentEndpointStatus = response.status;
+              await response.text();
+              finishMutation();
+            },
           },
         };
       },
@@ -2275,7 +2343,11 @@ test("a recorded live change applies inside the Turn and a refused next choice k
     (line) => JSON.parse(line).request,
   );
   assert.deepEqual(
-    requests.filter((request) => request.subtype !== "get_settings"),
+    requests.filter(
+      (request) =>
+        request.subtype !== "get_settings" &&
+        request.subtype !== "mcp_set_servers",
+    ),
     [
       { subtype: "set_model", model: "sonnet" },
       {

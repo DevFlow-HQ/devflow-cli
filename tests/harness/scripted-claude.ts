@@ -61,6 +61,7 @@ export interface ScriptedClaude {
  *  each stdin `user` frame on its process (a Turn or a Steer) by index. */
 export function scriptedClaude(options: {
   readonly answer: ControlAnswer;
+  readonly attachmentAnswer?: ControlAnswer;
   readonly closeStdin?: () => Promise<OwnedProcessClose>;
   readonly settingsAnswer?: ControlAnswer;
   readonly containment?: ProcessLaunchContainment;
@@ -167,6 +168,33 @@ export function scriptedClaude(options: {
             )
               interruptIds.add(frame.request_id);
             if (
+              typeof request === "object" &&
+              request !== null &&
+              "subtype" in request &&
+              request.subtype === "mcp_set_servers"
+            ) {
+              if (options.attachmentAnswer !== undefined)
+                answerControl(
+                  options.attachmentAnswer,
+                  frame,
+                  emit,
+                  () => settle({ kind: "exited", status: 1 }),
+                  false,
+                );
+              else
+                emit({
+                  type: "control_response",
+                  response: {
+                    subtype: "success",
+                    request_id: frame.request_id,
+                    response: {
+                      added: ["secant", "secant-permissions"],
+                      removed: [],
+                      errors: {},
+                    },
+                  },
+                });
+            } else if (
               typeof request === "object" &&
               request !== null &&
               "subtype" in request &&

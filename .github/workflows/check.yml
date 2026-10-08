@@ -233,6 +233,11 @@ jobs:
           -t '^m10-audit-claude-fact-translation(:|$)'
           tests/harness/observed-facts.test.ts
           tests/headless/claude-fact-translation.test.ts
+      - name: m10-audit-claude-token-stdin
+        run: >-
+          bun run test --
+          -t '^m10-audit-claude-token-stdin(:|$)'
+          tests/harness/claude-code-mcp-stdin.test.ts
       - name: m10-audit-store-permissions
         run: >-
           bun run test --

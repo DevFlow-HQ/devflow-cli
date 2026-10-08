@@ -227,12 +227,14 @@ export function registerHarnessPhaseConformance(
         .find((invocation) => invocation.args.includes("-p"));
       assert.ok(launch);
       assert.ok(launch.args.includes(id));
-      // The permission bridge's bearer, recovered from the launch's inline MCP
-      // config, is its own needle: it must not appear even inside other text.
+      // The permission bridge's bearer, recovered from the startup stdin
+      // control, is its own needle: it must not appear even inside other text.
       const config = JSON.parse(
-        launch.args[launch.args.indexOf("--mcp-config") + 1]!,
+        launch.controlLines.find(
+          (line) => JSON.parse(line).request?.subtype === "mcp_set_servers",
+        )!,
       );
-      const bearer: string = config.mcpServers[
+      const bearer: string = config.request.servers[
         "secant-permissions"
       ].headers.Authorization.replace("Bearer ", "");
       assert.ok(bearer.length >= 32);

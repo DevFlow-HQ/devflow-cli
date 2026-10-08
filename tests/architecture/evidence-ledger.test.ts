@@ -56,6 +56,9 @@ const PROCESS_FREE_TEST_FILES = new Set([
   // Written against the scripted Claude Process; no child spawns. Native channel fixtures replay
   // separately in standalone runtime conformance (#371).
   "tests/harness/claude-code-channel.test.ts",
+  // Born process-free (#500): recorded MCP attachment and Turn bodies through the production
+  // Harness with a scripted Process and in-process loopback servers, never real children.
+  "tests/harness/claude-code-mcp-stdin.test.ts",
   // Written against the scripted Claude Process; no child spawns. The recorded model-change
   // fixtures replay separately in standalone runtime conformance (#348).
   "tests/harness/claude-code-model-change.test.ts",

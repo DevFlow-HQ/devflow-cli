@@ -365,7 +365,7 @@ test("a Steer sent before the prompt is written follows the prompt on stdin", as
     scripted.writes[0]?.map(
       (frame) => (frame.message as { content?: unknown } | undefined)?.content,
     ),
-    [undefined, "the prompt", "steer"],
+    [undefined, undefined, "the prompt", "steer"],
   );
   await turn.interrupt();
   await turn.result();
