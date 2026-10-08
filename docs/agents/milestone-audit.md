@@ -68,8 +68,8 @@ The local OpenCode checkout is the comparison. knip's test-only list is a human-
 - A resolved hand-over records its decision in its resolution comment, its ADR, and the map; never in the audited milestone's built spec.
 - The milestone issue carries one `## Hand-over ledger` comment, edited at each resolution: Hand-over | Row | Decision | ADR commit | Lands in
   (tickets, a spec, waiting, or no code).
-- Once every hand-over is resolved, one `/to-spec` session specs the waiting rows from the milestone issue, and `/to-tickets` publishes them as
-  sub-issues of the milestone titled `M<n> audit:` that do not block it.
+- Once every hand-over is resolved, one `/to-spec` session specs the waiting rows, reading each row's linked resolution and ADR as its full input;
+  `/to-tickets` publishes them as sub-issues of the milestone titled `M<n> audit:` that do not block it.
 
 ## Follow-up audit
 
