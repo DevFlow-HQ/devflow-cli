@@ -47,8 +47,9 @@ cross the Interface, and native-id reuse in later Turns or Sessions mints differ
 `test-repair/case.json`, codex-cli 0.160.0 and codex-probe-3, qualifies correlated `item/started` and `item/completed`
 `commandExecution` items with `id`, `command`, and `status`, including `inProgress`, `completed`, and `failed`.
 It also qualifies `fileChange.id`, `changes[].path`, `changes[].kind.type: "update"`, null `move_path`, and `status`.
-#416 qualifies `changes[].diff` as a supplied unified patch on the completed call. The started item describes the
-requested action and carries no observed file facts. `turn/diff/updated` supplies `threadId`, `turnId`, and `diff`:
+#416 qualifies `changes[].diff` as a supplied unified patch on the completed call. #502 exposes the started item's
+`changes[].path` as ordered structured targets only, with no observed change kind or patch before completion.
+Running targets do not prove an edit completed. `turn/diff/updated` supplies `threadId`, `turnId`, and `diff`:
 four repeated cumulative snapshots without a call association. Only their supplied unquoted `+++ b/<path>` headers
 outside hunks establish collapsed file paths; unfamiliar header forms stay absent while all diff bytes remain.
 No addition/removal totals are supplied. The production Adapter assertions check complete per-call content,

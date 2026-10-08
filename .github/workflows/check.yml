@@ -254,6 +254,13 @@ jobs:
           -t '^m10-audit-row-layout-once(:|$)'
           tests/tui/run-workbench-layout.test.tsx
           tests/tui/wrap.test.ts
+      - name: m10-audit-changed-file-cap
+        run: >-
+          bun run test --
+          -t '^m10-audit-changed-file-cap(:|$)'
+          tests/tui/run-workbench-file-cap.test.tsx
+          tests/harness/observed-facts.test.ts
+          tests/headless/run.test.ts
       - name: m10-audit-windows-release-check
         run: >-
           bun run test --

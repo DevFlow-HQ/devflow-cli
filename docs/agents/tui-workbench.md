@@ -87,6 +87,9 @@ Before changing completion, Slash discovery, drafts, prompt captures, or restora
 - Ctrl+O/click opens a history detail: output and Thoughts toggle by row id; call patches and Turn diffs open complete supplied content (#415–#417).
   Output collapses before wrapping at ten logical lines or `10 * Math.max(20, width - 6)` code points, whichever comes first; the omission count names
   lines or characters truthfully. It never auto-expands; diff inspection stays uncapped. Thought ticks change headings; modal/input key ownership stays unchanged.
+- Turn-diff and file-change rows show the first ten structured file names in reported order, wrapped without shortening (#502). Append `N more files`
+  after the title's status when names remain; live updates never expand the list. A file-change row with structured files omits its repeated input.
+  Only names are capped; Ctrl+O/click still opens the complete supplied diff or call patches. Presentation never parses input text for names.
 - The retained transcript reader anchors Resource entry ids, independently of live history row ids. Its reserved notice line never moves content.
 - Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
   `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.

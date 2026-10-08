@@ -1190,7 +1190,7 @@ test("m10-observed-harness-facts: authentic Codex per-call patches and cumulativ
   );
   assert.equal(calls.length, 2);
   assert.ok(calls[0]?.kind === "tool-call" && calls[1]?.kind === "tool-call");
-  assert.equal(calls[0].call.files, undefined);
+  assert.deepEqual(calls[0].call.files, [{ path: join(workspace, "sum.mjs") }]);
   assert.deepEqual(calls[1].call.files, [
     {
       path: join(workspace, "sum.mjs"),
@@ -1848,3 +1848,58 @@ for (const [provider, model, reroute, qualified] of [
     );
   });
 }
+
+test("m10-audit-changed-file-cap: Codex running calls supply ordered targets without patches and completed calls retain every patch", async (t) => {
+  const changes = Array.from({ length: 300 }, (_, index) => ({
+    path: `reported/${300 - index}/file.ts`,
+    kind: { type: "update", move_path: null },
+    diff: `@@ -1 +1 @@\n-old\n+PATCH_${index}\n`,
+  }));
+  const events = await codexFacts(t, [
+    {
+      method: "item/started",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "fileChange",
+          id: "large-call",
+          status: "inProgress",
+          changes,
+        },
+      },
+    },
+    {
+      method: "item/completed",
+      params: {
+        ...recordedTarget,
+        item: {
+          type: "fileChange",
+          id: "large-call",
+          status: "completed",
+          changes,
+        },
+      },
+    },
+  ]);
+  const calls = events.flatMap((event) =>
+    event.kind === "tool-call" && event.call.input.includes("reported/300/")
+      ? [event.call]
+      : [],
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.outcome.kind, "running");
+  assert.deepEqual(
+    calls[0]?.files,
+    changes.map(({ path }) => ({ path })),
+  );
+  assert.equal(calls[1]?.callId, calls[0]?.callId);
+  assert.equal(calls[1]?.outcome.kind, "completed");
+  assert.deepEqual(
+    calls[1]?.files,
+    changes.map(({ path, diff }) => ({
+      path,
+      kind: "update",
+      patch: { kind: "unified", content: diff },
+    })),
+  );
+});

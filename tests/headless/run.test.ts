@@ -1754,3 +1754,101 @@ test("m10-audit-headless-output-parity: text transcript annotates Entry prompts,
   );
   assert.equal(h.stderr(), "");
 });
+
+test("m10-audit-changed-file-cap: headless transcript and export keep complete message text beside 300-file tool and Turn diffs", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install();
+  h.approve();
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
+  assert.ok(h.runGroup);
+  const owner = h.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  const at = new Date("2026-10-08T00:00:00Z");
+  const files = Array.from({ length: 300 }, (_, index) => ({
+    path: `file-${index}.ts`,
+    patch: { kind: "unified", content: `+patch-${index}` },
+  }));
+  const content = files.map((file) => file.path).join("\n");
+  owner.admitTurn({
+    turnId: "large-turn",
+    attemptId: "0.0:agent",
+    session: "s",
+    origin: "human",
+    kind: "interactive-agent",
+    input: "Review these changes",
+    recoveryCoordinate: "native",
+    harness: "codex",
+    at,
+  });
+  owner.appendTurnEvent({
+    turnId: "large-turn",
+    kind: "tool-call",
+    at,
+    payload: JSON.stringify({
+      callId: "large-call",
+      tool: "file-change",
+      input: content,
+      files,
+      outcome: { kind: "completed" },
+    }),
+  });
+  owner.appendTurnEvent({
+    turnId: "large-turn",
+    kind: "turn-diff",
+    at,
+    payload: JSON.stringify({ files, content }),
+  });
+  owner.appendTurnEvent({
+    turnId: "large-turn",
+    kind: "assistant-content",
+    at,
+    payload: JSON.stringify({
+      messageId: "large-message",
+      content,
+    }),
+  });
+  owner.settleTurn({
+    turnId: "large-turn",
+    session: "s",
+    resultKind: "completed",
+    resultDetail: "{}",
+    availability: "open",
+    at,
+  });
+  owner.close();
+  h.reset();
+  assert.equal(
+    await h.run(["run", "read", runId, "--transcript", "--json"]),
+    0,
+  );
+  const entries = [
+    {
+      session: "s",
+      role: "user",
+      content: "Review these changes",
+      step: "agent",
+      kind: "message",
+      turn: "large-turn",
+    },
+    {
+      session: "s",
+      role: "assistant",
+      content,
+      step: "agent",
+      kind: "message",
+      turn: "large-turn",
+    },
+  ];
+  assert.deepEqual(JSON.parse(h.stdout()), {
+    page: { found: true, type: "transcript-page", entries },
+    export: { found: true, type: "transcript-export", entries },
+  });
+  assert.doesNotMatch(h.stdout(), /more files|large-call|patch-299/);
+  h.reset();
+  assert.equal(await h.run(["run", "read", runId, "--transcript"]), 0);
+  assert.equal(h.stdout().split(content).length - 1, 2);
+});

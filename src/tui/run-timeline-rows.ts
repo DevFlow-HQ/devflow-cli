@@ -302,7 +302,7 @@ function attachDividers(rows: readonly TimelineRow[]): TimelineRow[] {
 function historyLabel(value: SessionHistoryValue, preview: boolean): string {
   switch (value.kind) {
     case "turn-diff":
-      return `Turn diff${preview ? " · updating" : ""}\n${fileLabels(value.files)}`;
+      return `Turn diff${preview ? " · updating" : ""}${fileRemainder(value.files)}\n${fileLabels(value.files)}`;
     case "thought": {
       const label = screenReason(
         value.content
@@ -328,7 +328,7 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
           : value.outcome.kind === "declined"
             ? value.outcome.reason
             : undefined;
-      return `Tool · ${value.tool.replaceAll("-", " ")} · ${label}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}\n${value.tool === "command" ? "Command · " : ""}${value.input}${value.files === undefined ? "" : `\n${fileLabels(value.files)}`}${value.cwd === undefined ? "" : `\nCwd · ${value.cwd}`}${value.exitCode === undefined ? "" : `\nExit · ${value.exitCode}`}${detail === undefined ? "" : `\n${detail}`}${value.nativeOmission === undefined ? "" : `\nHarness omission · ${value.nativeOmission}`}${value.tool === "command" && value.output === undefined ? "\nOutput unavailable" : ""}`;
+      return `Tool · ${value.tool.replaceAll("-", " ")} · ${label}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}${fileRemainder(value.files)}${value.tool === "file-change" && value.files !== undefined ? "" : `\n${value.tool === "command" ? "Command · " : ""}${value.input}`}${value.files === undefined ? "" : `\n${fileLabels(value.files)}`}${value.cwd === undefined ? "" : `\nCwd · ${value.cwd}`}${value.exitCode === undefined ? "" : `\nExit · ${value.exitCode}`}${detail === undefined ? "" : `\n${detail}`}${value.nativeOmission === undefined ? "" : `\nHarness omission · ${value.nativeOmission}`}${value.tool === "command" && value.output === undefined ? "\nOutput unavailable" : ""}`;
     }
     case "request":
       return `? ${value.description}`;
@@ -339,11 +339,21 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
   }
 }
 
+const FILE_LIST_LIMIT = 10;
+
+function fileRemainder(
+  files: Extract<SessionHistoryValue, { kind: "tool" }>["files"],
+): string {
+  const remaining = (files?.length ?? 0) - FILE_LIST_LIMIT;
+  return remaining > 0 ? ` · ${remaining} more files` : "";
+}
+
 function fileLabels(
   files: NonNullable<Extract<SessionHistoryValue, { kind: "tool" }>["files"]>,
 ): string {
   if (files.length === 0) return "Changed files not reported";
   return files
+    .slice(0, FILE_LIST_LIMIT)
     .map(
       (file) =>
         `${file.kind === undefined ? "" : `${file.kind} `}${file.path}${file.additions === undefined ? "" : ` +${file.additions}`}${file.removals === undefined ? "" : ` -${file.removals}`}`,

@@ -971,7 +971,7 @@ function normalizeItemContent(
                         }),
                   })),
                 }
-              : {}),
+              : { files: fileChange.changes.map(({ path }) => ({ path })) }),
           },
         },
         approvalInput: input,
