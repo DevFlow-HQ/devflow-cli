@@ -223,11 +223,17 @@ export async function verifyPlatformPackage(options: {
         // Apple silicon refuses arm64 code without at least Bun's ad-hoc signature,
         // which has regressed twice (ADR 0030); verify it before running the binary.
         if (process.platform === "darwin" && pkg.os === "darwin") {
+          stage = "native signature";
           const codesign = spawnSync(
             "codesign",
             ["--verify", "--deep", "--strict", executablePath],
             { encoding: "utf8" },
           );
+          children.push({
+            phase: "native signature",
+            pid: codesign.pid,
+            status: codesign.status,
+          });
           if (codesign.error) throw codesign.error;
           if (codesign.status !== 0) {
             throw new Error(
@@ -270,6 +276,15 @@ export async function verifyPlatformPackage(options: {
       try {
         rmSync(installDir, { recursive: true, force: true });
       } catch (error) {
+        let remaining: string[] | string;
+        try {
+          remaining = readdirSync(installDir, {
+            recursive: true,
+            encoding: "utf8",
+          });
+        } catch (readError) {
+          remaining = String(readError);
+        }
         console.error(
           JSON.stringify({
             phase: "cleanup",
@@ -277,12 +292,13 @@ export async function verifyPlatformPackage(options: {
             installDir,
             parentCwd: process.cwd(),
             children,
-            remaining: readdirSync(installDir, { recursive: true }),
+            remaining,
           }),
         );
         throw error;
       }
     },
+    "Platform package consumer",
   );
 }
 

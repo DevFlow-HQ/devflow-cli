@@ -36,6 +36,10 @@ refusals against a hand-staged directory (stale version, lifecycle script, unexp
 `verifyInstalledPackage`) — and spawns no subprocess. Only the `bun pm pack` → `npm install` → run
 round-trip on real binaries (npm's own os/cpu gating, mode preservation, native execution, macOS signature) is left to this CI job.
 
+Platform-package cleanup failures stay blocking and retain any earlier verification error. Their stderr report records the verification phase, child
+PIDs and exit statuses, and remaining install-tree entries; an unreadable tree cannot replace the cleanup error. A Windows `EBUSY` at cleanup alone
+does not establish which process held the lock. Preserve this evidence before changing lifecycle behavior.
+
 ## npm Launcher Consumer
 
 The `npm launcher consumer` step ([check.yml](../../.github/workflows/check.yml)) verifies the thin, script-free npm launcher `@secantdev/secant`

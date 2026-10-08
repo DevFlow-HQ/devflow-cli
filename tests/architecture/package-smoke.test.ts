@@ -75,3 +75,29 @@ test("a failed smoke keeps its own error when cleanup also fails", async () => {
     },
   );
 });
+
+test("consumer cleanup names its caller and retains verification and removal failures", async () => {
+  const verification = new Error("installed package has the wrong version");
+  const cleanup = new Error("EBUSY: install directory is locked");
+  await assert.rejects(
+    withCleanup(
+      async () => {
+        throw verification;
+      },
+      async () => {
+        throw cleanup;
+      },
+      "Platform package consumer",
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(
+        error.message,
+        "Platform package consumer failed, and its temporary directory could not be removed.",
+      );
+      assert.deepEqual(error.errors, [verification, cleanup]);
+      assert.equal(error.cause, cleanup);
+      return true;
+    },
+  );
+});

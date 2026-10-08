@@ -9,24 +9,25 @@ export async function runNamedScenario<Result>(
   }
 }
 
-/** Runs the smoke, then its cleanup. A cleanup failure fails a passing smoke, but it
- *  never replaces a failed smoke's own error: a failed scenario can leave a child
- *  holding a file in the smoke root, which Windows refuses to delete. Both errors
- *  then print, the smoke's first. */
+/** Runs verification, then its cleanup. A cleanup failure fails passing verification, but it
+ *  never replaces the verification error: a failed scenario can leave a child
+ *  holding a file in the temporary directory, which Windows refuses to delete.
+ *  Both errors then print, the verification error first. */
 export async function withCleanup<Result>(
-  smoke: () => Promise<Result>,
+  verify: () => Promise<Result>,
   cleanup: () => Promise<void>,
+  caller = "Package smoke",
 ): Promise<Result> {
   let result: Result;
   try {
-    result = await smoke();
+    result = await verify();
   } catch (failure) {
     try {
       await cleanup();
     } catch (cleanupFailure) {
       throw new AggregateError(
         [failure, cleanupFailure],
-        "Package smoke failed, and its temporary directory could not be removed.",
+        `${caller} failed, and its temporary directory could not be removed.`,
         { cause: cleanupFailure },
       );
     }
