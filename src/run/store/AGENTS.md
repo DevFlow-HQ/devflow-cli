@@ -104,9 +104,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - There are no foreign keys and no `foreign_keys` pragma anywhere in either schema (only `busy_timeout` is set), so referential integrity rests entirely on the write
   transactions that keep related rows consistent; nothing the database enforces stands behind them.
 - Run delete drops the registration and reclaims the directory as one lifecycle unit; with no foreign keys there is nothing to cascade — the directory holds the whole Run.
-- `workingArea()` (#214) lazily creates `working/` inside the published Run directory (so no `.creating` staging and pre-M6 Runs gain one on resume), returns its
-  `realpath` so a sandbox comparing canonical roots matches the prompt, and is deliberately not a fenced write. Never nest private files under it: it is granted whole.
-  Agent-written Output receipts are its one Store-named subdirectory.
+- `workingArea()` (#214, #479) lazily creates `working/` in the published Run directory; pre-M6 Runs gain it on resume. Its canonical `realpath` matches sandbox roots.
+  It is unfenced working state, granted whole, with no private files; Output receipts are its only Store-named child. Refuse a linked leaf before grants or receipts.
+  Parent aliases remain valid. This filesystem check cannot prevent replacement between validation and use.
 - Resume reads registration only to answer `unknown-run`, then claims ownership in `run.db`. Listing and startup reconciliation open each registered Run
   Store to read ownership and close every handle before returning; a damaged store lists unowned, matching its exact-read Problem.
   `countRuns` (#396) opens each store once and reads ownership apart from the record, counting unreadable ownership rather than unowned. A coordinator rebuild

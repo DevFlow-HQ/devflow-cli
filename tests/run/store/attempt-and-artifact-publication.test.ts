@@ -658,7 +658,7 @@ function acquiredOwner(t: TestContext): RunOwner {
   return owner;
 }
 
-test("a file squatting a usable working area's receipt root is a typed Problem, not a throw (#305)", (t) => {
+test("m12-audit-working-area-boundary: a file squatting a usable working area's receipt root is a typed Problem, not a throw (#305)", (t) => {
   const owner = acquiredOwner(t);
   const area = owner.workingArea();
   assert.ok(area.ok);
@@ -678,7 +678,7 @@ test("a file squatting a usable working area's receipt root is a typed Problem, 
   assert.deepEqual(readdirSync(receiptDirOf(owner, "0.0:publish")), []);
 });
 
-test("a receipt root redirected outside the working area is refused without emptying its target (#305)", (t) => {
+test("m12-audit-working-area-boundary: a receipt root redirected outside the working area is refused without emptying its target (#305)", (t) => {
   const owner = acquiredOwner(t);
   const dir = receiptDirOf(owner, "0.0:publish");
   const root = dirname(dir);
@@ -703,7 +703,7 @@ test("a receipt root redirected outside the working area is refused without empt
   );
 });
 
-test("a link planted at an Attempt's own receipt path is replaced, never emptied through (#305)", (t) => {
+test("m12-audit-working-area-boundary: a link planted at an Attempt's own receipt path is replaced, never emptied through (#305)", (t) => {
   const owner = acquiredOwner(t);
   const dir = receiptDirOf(owner, "0.0:publish");
   const elsewhere = makeTempDir("secant-store-elsewhere-");
@@ -720,7 +720,7 @@ test("a link planted at an Attempt's own receipt path is replaced, never emptied
   );
 });
 
-test("keeping an Attempt's receipt directory returns it without emptying it (#354)", (t) => {
+test("m12-audit-working-area-boundary: keeping an Attempt's receipt directory returns it without emptying it (#354)", (t) => {
   const owner = acquiredOwner(t);
   const dir = receiptDirOf(owner, "0.0:publish");
   writeFileSync(join(dir, "summary"), "written in the first Turn");
@@ -741,7 +741,7 @@ test("keeping an Attempt's receipt directory returns it without emptying it (#35
   assert.deepEqual(readdirSync(dir), []);
 });
 
-test("keeping refuses a link or a file at the Attempt's own receipt path (#354)", (t) => {
+test("m12-audit-working-area-boundary: keeping refuses a link or a file at the Attempt's own receipt path (#354)", (t) => {
   const owner = acquiredOwner(t);
   const dir = receiptDirOf(owner, "0.0:publish");
   const elsewhere = makeTempDir("secant-store-elsewhere-");
@@ -773,7 +773,7 @@ test("keeping refuses a link or a file at the Attempt's own receipt path (#354)"
 // deterministic, portable fault can be injected there without a production
 // test-only Seam, so it is not exercised here.
 
-test("an unusable working area fails receipt preparation typed with its cause (#305)", (t) => {
+test("m12-audit-working-area-boundary: an unusable working area fails receipt preparation typed with its cause (#305)", (t) => {
   const owner = acquiredOwner(t);
   const area = owner.workingArea();
   assert.ok(area.ok);
@@ -788,7 +788,7 @@ test("an unusable working area fails receipt preparation typed with its cause (#
   assert.equal(readFileSync(area.path, "utf8"), "squatter");
 });
 
-test("an Attempt's output receipt directory is a fresh, Run-owned directory per Attempt (#215)", async (t) => {
+test("m12-audit-working-area-boundary: an Attempt's output receipt directory is a fresh, Run-owned directory per Attempt (#215)", async (t) => {
   const home = makeTempDir("secant-store-");
   const group = openRunGroup(home, WORKSPACE);
   t.after(() => group.close());

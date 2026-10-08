@@ -246,6 +246,13 @@ jobs:
           tests/application/matt-remote-spec.test.ts
           tests/application/matt-grill-launch.test.ts
           tests/application/matt-local-implement.test.ts
+      - name: m12-audit-working-area-boundary
+        run: >-
+          bun run test --
+          -t '^m12-audit-working-area-boundary(:|$)'
+          tests/run/store/working-area.test.ts
+          tests/run/store/attempt-and-artifact-publication.test.ts
+          tests/application/run-working-area.test.ts
       - name: Test
         run: bun run test
       - name: Build

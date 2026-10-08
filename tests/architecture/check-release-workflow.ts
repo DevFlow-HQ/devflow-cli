@@ -194,6 +194,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m12-candidate-retention",
   "m12-harness-run-test-helpers",
   "m12-wiring-test-helpers",
+  "m12-audit-working-area-boundary",
 ] as const;
 
 function testFilesIn(script: string): string[] {

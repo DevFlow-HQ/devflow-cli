@@ -3,12 +3,15 @@ import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import {
   existsSync,
+  lstatSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
@@ -105,7 +108,7 @@ function planningAgent(kind: "completed" | "failed", file: string) {
   return { adapter, granted, inputs };
 }
 
-function writeBundle(): string {
+function writeBundle(kind: "agent" | "interactive-agent" = "agent"): string {
   const { folder } = authorAgentBundle({
     id: BUNDLE_ID,
     name: "Working Area",
@@ -117,8 +120,8 @@ function writeBundle(): string {
     routing: [
       {
         id: "plan",
-        kind: "agent",
-        retry: 0,
+        kind,
+        ...(kind === "agent" ? { retry: 0 } : {}),
         session: "planning",
         prompt: { asset: "prompts/plan.md" },
       },
@@ -142,6 +145,7 @@ function wire(
     launchCwd: workspace,
     process,
     harnessAdapter: adapter,
+    supportsInteractiveTurns: true,
   });
   t.after(() => {
     wired.runGroup.close();
@@ -153,6 +157,10 @@ function wire(
 async function launch(
   t: TestContext,
   agent: ReturnType<typeof planningAgent>,
+  options: {
+    readonly kind?: "agent" | "interactive-agent";
+    readonly beforeLaunch?: (wired: Wiring, digest: string) => void;
+  } = {},
 ): Promise<{
   wired: Wiring;
   runId: string;
@@ -167,7 +175,9 @@ async function launch(
   });
   const wired = wire(t, agent.adapter, home, workspace, process);
   assert.ok(
-    wired.bundleManagement.build(writeBundle(), { noInstall: false }).ok,
+    wired.bundleManagement.build(writeBundle(options.kind), {
+      noInstall: false,
+    }).ok,
   );
   const entry = wired.catalog.listEntries().find((e) => e.id === BUNDLE_ID);
   assert.ok(entry);
@@ -178,6 +188,7 @@ async function launch(
       input: { path: workspace },
     }).admitted,
   );
+  options.beforeLaunch?.(wired, entry.digest);
   const admission = wired.projectionPort.submit({
     operationId: "op-launch",
     operation: "launch-run",
@@ -292,4 +303,121 @@ test("[run-working-area] an unusable working area halts the Run with a typed Pro
   assert.deepEqual(second.inputs, []);
   assert.equal(readFileSync(area, "utf8"), "squatter");
   void wired;
+});
+
+function assertWorkingAreaRefusal(settled: OperationOutcome) {
+  assert.equal(settled.status, "not-applied", JSON.stringify(settled));
+  if (settled.status !== "not-applied") throw new Error("unreachable");
+  assert.equal(settled.problem.code, "selected-harness-unavailable");
+  assert.equal(settled.problem.details?.category, "working-area-unavailable");
+}
+
+test("m12-audit-working-area-boundary: launch refuses a linked working entry before Harness preparation or a Turn", async (t) => {
+  const agent = planningAgent("completed", "never.md");
+  const target = makeTempDir("secant-launch-working-target-");
+  writeFileSync(join(target, "marker"), "outside");
+  let linkedArea = "";
+  const { wired, runId } = await launch(t, agent, {
+    beforeLaunch(wired, digest) {
+      // Seed the durable create receipt through the Store Interface. Launch's
+      // replay must still validate the working area before preparing a Harness.
+      const created = wired.runGroup.createRun({
+        operationId: "op-launch",
+        bundleSnapshotDigest: digest,
+        launch: {},
+        selectedHarness: "claude-code",
+        modelChoice: { model: "fake-model" },
+        at: new Date("2026-10-08T00:00:00Z"),
+      });
+      assert.equal(created.outcome, "created");
+      if (created.outcome !== "created") throw new Error("unreachable");
+      const owner = wired.runGroup.acquireRun(created.runId);
+      assert.ok(owner);
+      try {
+        const area = owner.workingArea();
+        assert.ok(area.ok);
+        linkedArea = area.path;
+        rmSync(linkedArea, { recursive: true });
+        symlinkSync(target, linkedArea, "junction");
+        owner.release();
+      } finally {
+        owner.close();
+      }
+    },
+  });
+  assertWorkingAreaRefusal(
+    await awaitSettled(wired.projectionPort, "op-launch"),
+  );
+  assert.equal(runState(wired, runId), "halted");
+  assert.deepEqual(agent.granted, []);
+  assert.deepEqual(agent.inputs, []);
+  assert.ok(lstatSync(linkedArea).isSymbolicLink());
+  assert.equal(readFileSync(join(target, "marker"), "utf8"), "outside");
+  assert.deepEqual(readdirSync(target), ["marker"]);
+});
+
+for (const destination of ["private parent", "external directory"]) {
+  test(`m12-audit-working-area-boundary: resume refuses a working link to ${destination} before Harness preparation or a Turn`, async (t) => {
+    const first = planningAgent("failed", "spec.md");
+    const { runId, home, workspace, process } = await launch(t, first);
+    const area = first.granted[0];
+    assert.ok(area !== undefined);
+    const target =
+      destination === "private parent"
+        ? dirname(area)
+        : makeTempDir("secant-resume-working-target-");
+    writeFileSync(join(target, "marker"), "preserved");
+    rmSync(area, { recursive: true });
+    symlinkSync(target, area, "junction");
+    const second = planningAgent("completed", "never.md");
+    const reopened = wire(t, second.adapter, home, workspace, process);
+    const resume = reopened.projectionPort.submit({
+      operationId: "op-resume-linked",
+      operation: "resume-run",
+      input: { runId },
+    });
+    assert.ok(resume.admitted, JSON.stringify(resume));
+    assertWorkingAreaRefusal(
+      await awaitSettled(reopened.projectionPort, resume.operationId),
+    );
+    assert.equal(runState(reopened, runId), "halted");
+    assert.deepEqual(second.granted, []);
+    assert.deepEqual(second.inputs, []);
+    assert.ok(lstatSync(area).isSymbolicLink());
+    assert.equal(realpathSync(area), realpathSync(target));
+    assert.equal(readFileSync(join(target, "marker"), "utf8"), "preserved");
+  });
+}
+
+test("m12-audit-working-area-boundary: an interactive reopen refuses a linked working entry before Harness preparation or a human Turn", async (t) => {
+  const first = planningAgent("completed", "never-on-launch.md");
+  const { wired, runId, home, workspace, process } = await launch(t, first, {
+    kind: "interactive-agent",
+  });
+  assert.equal(runState(wired, runId), "blocked");
+  assert.deepEqual(first.inputs, []);
+  const area = first.granted[0];
+  assert.ok(area !== undefined);
+  await wired.close();
+  const target = makeTempDir("secant-interactive-working-target-");
+  writeFileSync(join(target, "marker"), "preserved");
+  rmSync(area, { recursive: true });
+  symlinkSync(target, area, "junction");
+  const second = planningAgent("completed", "never.md");
+  const reopened = wire(t, second.adapter, home, workspace, process);
+  const send = reopened.projectionPort.submit({
+    operationId: "op-interactive-linked",
+    operation: "send-interactive-turn",
+    input: { runId, stepId: "plan", text: "continue" },
+  });
+  assert.ok(send.admitted, JSON.stringify(send));
+  assertWorkingAreaRefusal(
+    await awaitSettled(reopened.projectionPort, send.operationId),
+  );
+  assert.equal(runState(reopened, runId), "halted");
+  assert.deepEqual(second.granted, []);
+  assert.deepEqual(second.inputs, []);
+  assert.ok(lstatSync(area).isSymbolicLink());
+  assert.equal(readFileSync(join(target, "marker"), "utf8"), "preserved");
+  assert.deepEqual(readdirSync(target), ["marker"]);
 });

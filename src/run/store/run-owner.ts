@@ -781,8 +781,12 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
   function workingArea(): WorkingAreaResult {
     const path = join(params.runDir, "working");
     try {
-      // Throws when anything but a directory occupies the path.
       mkdirSync(path, { recursive: true });
+      // Inspect the entry itself: a link or Windows junction must never grant
+      // its target, which could contain private Run truth or external files.
+      if (!lstatSync(path).isDirectory()) {
+        throw new Error(`'${path}' is not a Run working directory.`);
+      }
       // Canonical, so a Harness sandbox comparing resolved roots (macOS
       // /var → /private/var) sees the same directory the prompt names.
       return { ok: true, path: realpathSync(path) };
