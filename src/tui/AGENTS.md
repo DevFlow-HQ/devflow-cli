@@ -82,10 +82,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Tests
 
-- Workbench resize evidence resizes both `testRender` and the injected Renderer Port: changing only the Port leaves the captured terminal at its original width.
-- Screens are exercised in-memory over fake Projection snapshots with `@opentui/solid` `testRender` (`tests/tui/*.test.tsx`): assert content, key
-  dispatch, and small-width/resize relayout without overflow. A lone Escape is held briefly by OpenTUI key disambiguation — poll in real time, not by
-  frame count.
+- Use `resizeWorkbench` to resize both the captured terminal and injected Renderer Port; other screens resize the captured terminal directly.
+- Exercise screens in-memory over fake Projection snapshots with `mountRenderer` (`tests/tui/renderer-fixture.ts`), backed by `@opentui/solid` `testRender`.
+  Its shared after-test cleanup owns renderer destruction. Assert content, key dispatch, and small-width/resize relayout without overflow.
+  A lone Escape is held briefly by OpenTUI key disambiguation: poll in real time, not by frame count.
 - The working scanner's drawing leaf (`working-scanner.tsx`) is unexported (topology's fenced-package rule, #308); only its plain frame model is.
   Its colours are asserted in `run-workbench-appearance.test.tsx` against the Workbench's own `captureSpans` colours, which couples them to the prompt bar's
   accent and the meta row's muted role.
