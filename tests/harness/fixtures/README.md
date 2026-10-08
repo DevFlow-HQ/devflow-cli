@@ -82,8 +82,9 @@ Six keys, all required (the structural step enforces their presence):
 
 Session ids are **not** redacted: Secant mints the session UUID and passes it at
 spawn, so each recording is made with the canonical per-case UUID its tests use,
-and the recorded frames echo it verbatim. The bridge bearer token never appears
-in stdout (it rides only in `--mcp-config` argv); the recorder still scans for it.
+and the recorded frames echo it verbatim. Existing cases attach the bridge through `--mcp-config`. The `mcp-servers` case
+instead carries its bearer in `set-servers.stdin`; the recorder redacts it and
+scans every committed file for credentials.
 
 ## Recording (opt-in, local, needs the installed Harness)
 
@@ -118,6 +119,37 @@ behaviour. `compaction` sends `/compact` twice as its own Turn: the first is
 interrupted mid-compaction, the second compacts. Automatic compaction is not
 recorded (it needs a near-full context window); the scripted Claude in
 `claude-code-steer.test.ts` covers its frames.
+
+## Claude MCP attachment over stdin
+
+`bun tests/harness/record.ts mcp-servers` launches with the existing recorder
+contract, retaining `--permission-prompt-tool` and the narrow Agent-call allow
+rule, with no `--mcp-config` or `--strict-mcp-config`. It sends one
+`mcp_set_servers` request carrying both bridge servers and their throwaway bearer,
+then waits for the native success answer before sending the user message. The
+Turn calls `step_done` once and requests a Write, which the recording router
+denies. A missing bridge call or permission prompt refuses the recording.
+
+`bun tests/harness/record.ts mcp-servers-invalid` sends a malformed server entry
+and records the native error answer without starting a Turn. Claude Code 2.1.294
+also accepted an HTTP entry with a numeric URL into a success envelope with a
+per-server `errors` entry; that envelope is not a control-level refusal. The null
+entry in the committed case produces the control-level error.
+
+Both cases retain whole native lines, with literal bearer and host-path
+substitutions. The stdout allowlist keeps the control answer, init, assistant
+text and ToolSearch/step_done/Write calls, user tool results, and a successful
+result. It omits stream events, private reasoning, account telemetry, status,
+hooks, and stderr. The six-key `recording.json` retains version, date, refresh
+command, and filtering/redaction provenance. `capture.json` adds platform,
+architecture, exact launch arguments, stdin order, and observed bridge offsets.
+
+The successful case has separate control and Turn stdin files and splits stdout
+around the control answer and both bridge calls. Its `case.json` uses the existing
+`before`, `control`, and `bridge` vocabulary. The refusal case has no Turn; its
+control descriptor is in `capture.json`. These are evidence for #500: the current
+replayer still reads MCP configuration from argv and cannot replay this startup
+exchange. Production launch and existing fixtures remain unchanged in #494.
 
 ## Codex replay
 

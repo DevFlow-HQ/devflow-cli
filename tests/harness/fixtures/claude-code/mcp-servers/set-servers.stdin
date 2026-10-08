@@ -1,0 +1,1 @@
+{"type":"control_request","request_id":"recording-mcp-set-servers","request":{"subtype":"mcp_set_servers","servers":{"secant":{"type":"http","url":"http://127.0.0.1:46373/mcp","headers":{"Authorization":"Bearer «BRIDGE_TOKEN»"}},"secant-permissions":{"type":"http","url":"http://127.0.0.1:46373/permissions","headers":{"Authorization":"Bearer «BRIDGE_TOKEN»"}}}}}

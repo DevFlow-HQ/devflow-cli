@@ -1,0 +1,21 @@
+{
+  "harness": "claude-code",
+  "executableVersion": "2.1.294 (Claude Code)",
+  "protocolVersion": "2.1.294",
+  "recordedAt": "2026-10-08T13:05:00.786Z",
+  "redactions": [
+    {
+      "placeholder": "«OMITTED-FRAMES»",
+      "reason": "Only MCP control answers, init, assistant text and allowlisted tool uses, user tool results, and successful results retained. All stream events, private reasoning, telemetry, status, hooks, and stderr omitted."
+    },
+    {
+      "placeholder": "«BRIDGE_TOKEN»",
+      "reason": "MCP permission bridge bearer token"
+    },
+    {
+      "placeholder": "«WORKSPACE»",
+      "reason": "recording workspace path"
+    }
+  ],
+  "refreshCommand": "bun tests/harness/record.ts mcp-servers"
+}

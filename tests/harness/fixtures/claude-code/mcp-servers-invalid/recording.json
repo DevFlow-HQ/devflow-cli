@@ -1,0 +1,13 @@
+{
+  "harness": "claude-code",
+  "executableVersion": "2.1.294 (Claude Code)",
+  "protocolVersion": "2.1.294",
+  "recordedAt": "2026-10-08T13:06:04.163Z",
+  "redactions": [
+    {
+      "placeholder": "«OMITTED-FRAMES»",
+      "reason": "Only MCP control answers, init, assistant text and allowlisted tool uses, user tool results, and successful results retained. All stream events, private reasoning, telemetry, status, hooks, and stderr omitted."
+    }
+  ],
+  "refreshCommand": "bun tests/harness/record.ts mcp-servers-invalid"
+}

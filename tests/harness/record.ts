@@ -38,6 +38,7 @@ import {
 import { homedir, tmpdir, userInfo } from "node:os";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { join } from "node:path";
@@ -2147,7 +2148,357 @@ async function recordChannel(
   }
 }
 
+// --- MCP attachment over private stdin (#494) ---------------------------------
+
+const MCP_SERVERS_REQUEST_ID = "recording-mcp-set-servers";
+const mcpServersReply = z.object({
+  type: z.literal("control_response"),
+  response: z.discriminatedUnion("subtype", [
+    z.object({
+      subtype: z.literal("success"),
+      request_id: z.literal(MCP_SERVERS_REQUEST_ID),
+      response: z.object({
+        added: z.array(z.string()),
+        removed: z.array(z.string()),
+        errors: z.record(z.string(), z.string()),
+      }),
+    }),
+    z.object({
+      subtype: z.literal("error"),
+      request_id: z.literal(MCP_SERVERS_REQUEST_ID),
+      error: z.string(),
+    }),
+  ]),
+});
+
+/** Keep complete native lines, never reserialize a parsed frame. Private
+ * reasoning, stream deltas, account telemetry and hook payloads are omitted. */
+const mcpRecordingFrame = z.union([
+  mcpServersReply,
+  z.object({ type: z.literal("system"), subtype: z.literal("init") }),
+  z.object({
+    type: z.literal("assistant"),
+    message: z.object({
+      content: z.array(
+        z.union([
+          z.object({ type: z.literal("text"), text: z.string() }),
+          z.object({
+            type: z.literal("tool_use"),
+            name: z.enum(["ToolSearch", "mcp__secant__step_done", "Write"]),
+          }),
+        ]),
+      ),
+    }),
+  }),
+  z.object({
+    type: z.literal("user"),
+    message: z.object({
+      content: z.array(z.object({ type: z.literal("tool_result") })),
+    }),
+  }),
+  z.object({
+    type: z.literal("result"),
+    subtype: z.literal("success"),
+    is_error: z.literal(false),
+  }),
+]);
+
+/** Prove the permission tool resolves to a server added over stdin without
+ * strict MCP configuration. This case deliberately precedes production support
+ * and the replayer changes in #500; no existing recording is refreshed. */
+async function recordMcpServers(invalid = false): Promise<void> {
+  const name = invalid ? "mcp-servers-invalid" : "mcp-servers";
+  const ws = tempWorkspace("secant-mcp-stdin-record-");
+  const chunks: Buffer[] = [];
+  let stdoutLength = 0;
+  const permissions: BridgeCall[] = [];
+  const agentCalls: { reason: string; stdoutOffset: number }[] = [];
+  const bridge = await startPermissionBridge(
+    async (_session, request) => {
+      permissions.push({
+        tool_name: request.tool,
+        input: toolInput(request.input),
+        stdoutOffset: stdoutLength,
+      });
+      return { decision: "deny", message: "Recording probe denied." };
+    },
+    () => async (call) => {
+      agentCalls.push({ reason: call.reason, stdoutOffset: stdoutLength });
+      return { outcome: "accepted" };
+    },
+  );
+  try {
+    const attachment = bridge.session("recording", [
+      {
+        id: "step_done",
+        description: "Report that the step is done",
+        maxReasonLength: 400,
+      },
+    ]);
+    const flags = [...attachment.launchArgs];
+    const configIndex = flags.indexOf("--mcp-config");
+    if (configIndex < 0)
+      throw new Error("Bridge attachment has no MCP configuration");
+    const config = z
+      .object({
+        mcpServers: z.record(
+          z.string(),
+          z.object({
+            type: z.literal("http"),
+            url: z.string(),
+            headers: z.object({ Authorization: z.string() }),
+          }),
+        ),
+      })
+      .parse(JSON.parse(z.string().parse(flags[configIndex + 1])));
+    flags.splice(configIndex, 2);
+    const args = launchArgs(
+      [
+        "--session-id",
+        "49449449-4494-4494-8494-494494494494",
+        "--no-session-persistence",
+      ],
+      {
+        launchArgs: flags,
+        token: attachment.bearer,
+        calls: [],
+        close: () => bridge.close(),
+      },
+    );
+    const env = baseEnv();
+    if (
+      args.some((arg) => arg.includes(attachment.bearer)) ||
+      args.includes("--mcp-config") ||
+      args.includes("--strict-mcp-config") ||
+      Object.values(env).some((value) => value?.includes(attachment.bearer))
+    ) {
+      throw new Error("MCP stdin recording violated the launch contract");
+    }
+    const control =
+      JSON.stringify({
+        type: "control_request",
+        request_id: MCP_SERVERS_REQUEST_ID,
+        request: {
+          subtype: "mcp_set_servers",
+          servers: invalid ? { invalid: null } : config.mcpServers,
+        },
+      }) + "\n";
+    const prompt = userFrame(
+      "First call mcp__secant__step_done exactly once with reason ready. Then use Write exactly once to create probe.txt containing ready. Do not use Bash or any other file tool. If denied do not retry. After these two tools, say done.",
+    );
+    const child = spawn("claude", args, { cwd: ws, env });
+    let failure: Error | undefined;
+    const fail = (message: string) => {
+      failure ??= new Error(message);
+      child.kill("SIGKILL");
+    };
+    const exited = new Promise<number>((resolve) => {
+      child.on("error", () => fail("Claude Code could not launch"));
+      child.on("close", (code) => resolve(code ?? 1));
+    });
+    const timer = setTimeout(
+      () => fail("MCP stdin recording timed out"),
+      120_000,
+    );
+    let pending = Buffer.alloc(0);
+    let reply: z.infer<typeof mcpServersReply> | undefined;
+    let replyEnd = 0;
+    let completed = false;
+    let sentPrompt = false;
+    child.stdin.on("error", () => fail("Claude Code closed its input"));
+    child.stderr.resume(); // stderr is never part of this capture's allowlist.
+    child.stdout.on("data", (bytes: Buffer) => {
+      pending = Buffer.concat([pending, bytes]);
+      let newline: number;
+      while ((newline = pending.indexOf(10)) >= 0) {
+        const line = pending.subarray(0, newline + 1);
+        pending = pending.subarray(newline + 1);
+        try {
+          const raw: unknown = JSON.parse(line.toString("utf8"));
+          if (
+            z.object({ type: z.literal("control_request") }).safeParse(raw)
+              .success
+          ) {
+            fail("Claude initiated an unexpected control request");
+            return;
+          }
+          const allowed = mcpRecordingFrame.safeParse(raw);
+          if (!allowed.success) continue;
+          chunks.push(line);
+          stdoutLength += line.length;
+          const frame = allowed.data;
+          if (frame.type === "control_response") {
+            if (reply !== undefined) {
+              fail("Claude answered the MCP control twice");
+              return;
+            }
+            reply = frame;
+            replyEnd = stdoutLength;
+            if (invalid) {
+              child.stdin.end();
+              continue;
+            }
+            const answer = frame.response;
+            if (
+              answer.subtype !== "success" ||
+              Object.keys(answer.response.errors).length > 0 ||
+              !["secant", "secant-permissions"].every((server) =>
+                answer.response.added.includes(server),
+              )
+            ) {
+              fail("Claude refused the stdin-added MCP servers");
+              return;
+            }
+            sentPrompt = true;
+            child.stdin.write(prompt);
+          } else if (frame.type === "result") {
+            completed = true;
+            child.stdin.end();
+          }
+        } catch {
+          fail("Claude emitted a malformed native frame");
+          return;
+        }
+      }
+    });
+    child.stdin.write(control);
+    const exitCode = await exited;
+    clearTimeout(timer);
+    if (failure !== undefined) throw failure;
+    if (exitCode !== 0 || reply === undefined || pending.length !== 0)
+      throw new Error("Claude did not complete the MCP control exchange");
+    if (invalid && reply.response.subtype !== "error")
+      throw new Error(
+        "No native refusal was obtainable for the invalid server entry",
+      );
+    const call = agentCalls[0];
+    const permission = permissions[0];
+    if (
+      !invalid &&
+      (!sentPrompt ||
+        !completed ||
+        agentCalls.length !== 1 ||
+        permissions.length !== 1 ||
+        call?.reason !== "ready" ||
+        permission?.tool_name !== "Write" ||
+        call.stdoutOffset < replyEnd ||
+        permission.stdoutOffset < call.stdoutOffset)
+    ) {
+      throw new Error(
+        "The stdin-added servers did not receive exactly one Agent call and Write permission prompt",
+      );
+    }
+    const stdout = Buffer.concat(chunks);
+    const before = {
+      subtype: "mcp_set_servers",
+      requestId: MCP_SERVERS_REQUEST_ID,
+      emit: "set-servers.stdout",
+    };
+    writeCase({
+      name,
+      workspace: ws,
+      files: [
+        { name: "set-servers.stdin", bytes: Buffer.from(control) },
+        { name: "set-servers.stdout", bytes: stdout.subarray(0, replyEnd) },
+        {
+          name: "capture.json",
+          bytes: Buffer.from(
+            JSON.stringify(
+              {
+                platform: process.platform,
+                architecture: process.arch,
+                launchArgs: args,
+                environment: {
+                  ENABLE_CLAUDEAI_MCP_SERVERS: env.ENABLE_CLAUDEAI_MCP_SERVERS,
+                },
+                stdinOrder: invalid
+                  ? ["set-servers.stdin"]
+                  : ["set-servers.stdin", "turn.stdin"],
+                control: before,
+                nativeRefusal: invalid,
+                agentCalls,
+                permissions,
+              },
+              null,
+              2,
+            ) + "\n",
+          ),
+        },
+        ...(!invalid && call !== undefined && permission !== undefined
+          ? [
+              { name: "turn.stdin", bytes: Buffer.from(prompt) },
+              {
+                name: "before-agent.stdout",
+                bytes: stdout.subarray(replyEnd, call.stdoutOffset),
+              },
+              {
+                name: "before-permission.stdout",
+                bytes: stdout.subarray(
+                  call.stdoutOffset,
+                  permission.stdoutOffset,
+                ),
+              },
+              {
+                name: "after-permission.stdout",
+                bytes: stdout.subarray(permission.stdoutOffset),
+              },
+            ]
+          : []),
+      ],
+      caseJson: {
+        exitCode,
+        turns: invalid
+          ? []
+          : [
+              {
+                before: [before],
+                steps: [
+                  { emit: "before-agent.stdout" },
+                  {
+                    bridge: {
+                      server: "secant",
+                      tool: "step_done",
+                      arguments: { reason: "ready" },
+                      expect: {
+                        isError: false,
+                        text: "accepted: takes effect when this Turn finishes",
+                      },
+                    },
+                  },
+                  { emit: "before-permission.stdout" },
+                  {
+                    bridge: {
+                      tool_name: permission?.tool_name,
+                      input: permission?.input,
+                    },
+                  },
+                  { emit: "after-permission.stdout" },
+                ],
+              },
+            ],
+      },
+      secrets: hostSecrets(attachment.bearer),
+      executableVersion: claudeVersion(),
+      protocolVersion: invalid
+        ? (claudeVersion().split(" ")[0] ?? "unknown")
+        : protocolVersionOf(stdout),
+      extraRedactions: [
+        {
+          placeholder: "«OMITTED-FRAMES»",
+          reason:
+            "Only MCP control answers, init, assistant text and allowlisted tool uses, user tool results, and successful results retained. All stream events, private reasoning, telemetry, status, hooks, and stderr omitted.",
+        },
+      ],
+    });
+  } finally {
+    await bridge.close();
+    rmSync(ws, { recursive: true, force: true });
+  }
+}
+
 const RECORDERS: Record<string, () => Promise<void>> = {
+  "mcp-servers": () => recordMcpServers(),
+  "mcp-servers-invalid": () => recordMcpServers(true),
   "agent-call": () => recordChannel("agent-call"),
   "elicitation-declined": () => recordChannel("elicitation-declined"),
   "elicitation-withdrawn": () => recordChannel("elicitation-withdrawn"),

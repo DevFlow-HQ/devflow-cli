@@ -1,0 +1,47 @@
+{
+  "platform": "linux",
+  "architecture": "x64",
+  "launchArgs": [
+    "-p",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--restricted",
+    "--session-id",
+    "49449449-4494-4494-8494-494494494494",
+    "--no-session-persistence",
+    "--permission-prompt-tool",
+    "mcp__secant-permissions__approve",
+    "--allowedTools",
+    "mcp__secant__step_done"
+  ],
+  "environment": {
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+  },
+  "stdinOrder": ["set-servers.stdin", "turn.stdin"],
+  "control": {
+    "subtype": "mcp_set_servers",
+    "requestId": "recording-mcp-set-servers",
+    "emit": "set-servers.stdout"
+  },
+  "nativeRefusal": false,
+  "agentCalls": [
+    {
+      "reason": "ready",
+      "stdoutOffset": 5626
+    }
+  ],
+  "permissions": [
+    {
+      "tool_name": "Write",
+      "input": {
+        "file_path": "«WORKSPACE»/probe.txt",
+        "content": "ready"
+      },
+      "stdoutOffset": 7305
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+{"type":"control_request","request_id":"recording-mcp-set-servers","request":{"subtype":"mcp_set_servers","servers":{"invalid":null}}}

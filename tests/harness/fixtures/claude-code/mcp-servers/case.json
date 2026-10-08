@@ -1,0 +1,47 @@
+{
+  "exitCode": 0,
+  "turns": [
+    {
+      "before": [
+        {
+          "subtype": "mcp_set_servers",
+          "requestId": "recording-mcp-set-servers",
+          "emit": "set-servers.stdout"
+        }
+      ],
+      "steps": [
+        {
+          "emit": "before-agent.stdout"
+        },
+        {
+          "bridge": {
+            "server": "secant",
+            "tool": "step_done",
+            "arguments": {
+              "reason": "ready"
+            },
+            "expect": {
+              "isError": false,
+              "text": "accepted: takes effect when this Turn finishes"
+            }
+          }
+        },
+        {
+          "emit": "before-permission.stdout"
+        },
+        {
+          "bridge": {
+            "tool_name": "Write",
+            "input": {
+              "file_path": "«WORKSPACE»/probe.txt",
+              "content": "ready"
+            }
+          }
+        },
+        {
+          "emit": "after-permission.stdout"
+        }
+      ]
+    }
+  ]
+}

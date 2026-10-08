@@ -1,0 +1,1 @@
+{"type":"control_response","response":{"subtype":"error","request_id":"recording-mcp-set-servers","error":"mcp_set_servers: servers must be an object of config objects"}}
