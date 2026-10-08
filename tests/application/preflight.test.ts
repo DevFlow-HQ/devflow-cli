@@ -1137,3 +1137,64 @@ test("Preflight probes the selected Command executable and refuses it before cre
     }
   }
 });
+
+for (const type of ["file", "file-set"] as const) {
+  test(`m10-audit-file-input-resolution: Preflight accepts a Workspace-relative ${type} and pins it unchanged`, async (t) => {
+    const f = fixture(t, workspace());
+    writeFileSync(join(f.workspace, "only in Workspace.txt"), "content");
+    writeFileSync(join(f.workspace, "empty.txt"), "");
+    const external = join(makeTempDir("secant-pf-external-"), "outside.txt");
+    writeFileSync(external, "external");
+    const { id, digest } = install(f, {
+      inputs: { target: { type, description: "target" } },
+    });
+    const value =
+      type === "file"
+        ? "only in Workspace.txt"
+        : ` only in Workspace.txt \r\n\nempty.txt\n${external}\n`;
+    const admission = launch(f, id, {
+      trustDigest: digest,
+      launchInputs: { target: value },
+    });
+    assert.ok(admission.admitted, JSON.stringify(admission));
+    assert.ok(admission.runId);
+    const record = f.runGroup.readRun(admission.runId);
+    assert.ok(record.ok);
+    assert.deepEqual(record.run.launch, { target: value });
+    await settled(f, "op-1");
+  });
+  test(`m10-audit-file-input-resolution: Preflight refuses a ${type} present only in the process directory`, (t) => {
+    const f = fixture(t, workspace());
+    const { id, digest } = install(f, {
+      inputs: { target: { type, description: "target" } },
+    });
+    const admission = launch(f, id, {
+      trustDigest: digest,
+      launchInputs: { target: "package.json" },
+    });
+    assert.equal(admission.admitted, false);
+    if (admission.admitted) throw new Error("unreachable");
+    assert.equal(admission.problem.code, "launch-input-invalid");
+    assert.deepEqual(
+      admission.problem.fieldViolations?.map((v) => v.field),
+      ["target"],
+    );
+    assert.deepEqual(f.runGroup.listRuns(), []);
+  });
+}
+
+test("m10-audit-file-input-resolution: a Workspace file must be non-empty even when the process directory has a valid file", (t) => {
+  const f = fixture(t, workspace());
+  writeFileSync(join(f.workspace, "package.json"), "");
+  const { id, digest } = install(f, {
+    inputs: { target: { type: "file", description: "target" } },
+  });
+  const admission = launch(f, id, {
+    trustDigest: digest,
+    launchInputs: { target: "package.json" },
+  });
+  assert.equal(admission.admitted, false);
+  if (admission.admitted) throw new Error("unreachable");
+  assert.equal(admission.problem.code, "launch-input-invalid");
+  assert.deepEqual(f.runGroup.listRuns(), []);
+});

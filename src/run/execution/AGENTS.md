@@ -4,6 +4,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
+- Launch input types belong to execution even for Command-only Runs. Shared reference resolution makes file paths Workspace-absolute;
+  bound Artifact bytes still take precedence and remain text (#451).
+
 - The cancel Seam's Run-wide sentinel strings are owned here: `RUN_CANCEL_ABORT` ends the Run `cancelled`, while `SIGNAL_ABORT` stops live work and
   leaves it resumable (ADR 0019). Turn interrupt uses `RequestChannel.bindInterrupt`, unbound at Turn end; receipt/result mapping lives in that binding
   ([live Turn control](../../../docs/agents/run-turn-control.md#turn-interrupt-and-steer)), never on the Run's controller or routing promise.

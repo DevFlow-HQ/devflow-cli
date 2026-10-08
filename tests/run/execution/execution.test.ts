@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   MAX_REVIEW_CHECKPOINT_INTERVAL,
+  type ArtifactType,
   type CommandParams,
   type CommandStep,
   type Platform,
@@ -1604,4 +1605,109 @@ test("Command execution applies whole-field overrides before resolving reference
       },
     ]);
   }
+});
+
+for (const type of ["file", "file-set"] as const) {
+  for (const workingDirectory of [undefined, ".", "packages/web"]) {
+    test(`m10-audit-file-input-resolution: ${type} Command arguments and environment use Workspace paths with cwd=${workingDirectory}`, async (t) => {
+      const workspace = makeTempDir("secant-input-workspace-");
+      const absolute = join(
+        makeTempDir("secant-input-external-"),
+        "outside.ts",
+      );
+      const value =
+        type === "file" ? "src/a.ts" : ` src/a.ts \r\n\n${absolute}\n`;
+      const expected =
+        type === "file"
+          ? join(workspace, "src", "a.ts")
+          : `${join(workspace, "src", "a.ts")}\n${absolute}`;
+      const { owner } = ownerForFreshRun(
+        t,
+        { target: value, note: "src/a.ts" },
+        workspace,
+      );
+      const commands: Parameters<SpawnCommand>[0][] = [];
+      const report = await run(
+        [
+          commandStep("read-input", {
+            executable: "reader",
+            arguments: [
+              { artifact: "target" },
+              { artifact: "note" },
+              "src/a.ts",
+            ],
+            env: { TARGET: { artifact: "target" }, NOTE: { artifact: "note" } },
+            ...(workingDirectory === undefined ? {} : { workingDirectory }),
+          }),
+        ],
+        owner,
+        {
+          inputTypes: { target: type, note: "text" } satisfies Record<
+            string,
+            ArtifactType
+          >,
+          spawnCommand: async (request) => {
+            commands.push(request);
+            return { kind: "exited", status: 0, text: new Uint8Array() };
+          },
+        },
+      );
+      assert.deepEqual(report, { outcome: "succeeded" });
+      assert.equal(commands.length, 1);
+      assert.deepEqual(commands[0]?.args, [expected, "src/a.ts", "src/a.ts"]);
+      assert.equal(commands[0]?.env?.TARGET, expected);
+      assert.equal(commands[0]?.env?.NOTE, "src/a.ts");
+      assert.equal(
+        commands[0]?.cwd,
+        workingDirectory === undefined
+          ? undefined
+          : join(workspace, workingDirectory),
+      );
+    });
+  }
+}
+
+test("m10-audit-file-input-resolution: absolute file inputs and bound artifact text pass through unchanged", async (t) => {
+  const absolute = join(makeTempDir("secant-input-external-"), "outside.ts");
+  const { owner } = ownerForFreshRun(t, {
+    target: absolute,
+    note: "src/launch.ts",
+  });
+  assert.ok(
+    owner.publishAttempt({
+      attemptId: "earlier",
+      outcome: "succeeded",
+      at: AT,
+      outputs: [
+        {
+          name: "note",
+          type: "text",
+          content: new TextEncoder().encode("src/bound.ts"),
+        },
+      ],
+      required: [{ name: "note", type: "text" }],
+    }).ok,
+  );
+  const commands: Parameters<SpawnCommand>[0][] = [];
+  assert.deepEqual(
+    await run(
+      [
+        commandStep("read-input", {
+          executable: "reader",
+          arguments: [{ artifact: "target" }, { artifact: "note" }],
+          workingDirectory: "packages/web",
+        }),
+      ],
+      owner,
+      {
+        inputTypes: { target: "file", note: "file" },
+        spawnCommand: async (request) => {
+          commands.push(request);
+          return { kind: "exited", status: 0, text: new Uint8Array() };
+        },
+      },
+    ),
+    { outcome: "succeeded" },
+  );
+  assert.deepEqual(commands[0]?.args, [absolute, "src/bound.ts"]);
 });

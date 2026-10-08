@@ -4,6 +4,7 @@ import {
   resolveCommandInvocation,
   MAX_REVIEW_CHECKPOINT_INTERVAL,
   type AgentStep,
+  type ArtifactType,
   type AttemptOutcome,
   type CommandInvocation,
   type CommandStep,
@@ -28,7 +29,6 @@ import type { HarnessFailure, TurnResult } from "../../harness/harness.js";
 import {
   attemptEvidence,
   interactiveTurnRest,
-  launchInputs,
   RunCancelledError,
   runAgent,
   runInteractiveEntryTurn,
@@ -45,9 +45,13 @@ import {
   verifyMaterializations,
 } from "./materialization.js";
 import { observedWrite } from "./store-write.js";
+import { resolveArtifactReference } from "./reference-resolution.js";
+
 import { attemptSession } from "./sessions.js";
 import { decodeAttemptId, encodeAttemptId, instanceKey } from "./attempt-id.js";
 import { guardedExecutionObserver } from "./observer.js";
+
+export { resolveLaunchInputValue } from "./reference-resolution.js";
 
 export type { InteractiveEndLegality } from "./interactive-completion.js";
 export {
@@ -117,6 +121,8 @@ export type AssetResolver = (assetPath: string) => string | undefined;
 
 /** Everything the scheduler needs to drive one acquired Run to rest. */
 export interface ExecutionDeps {
+  /** Declared Launch input types for every Step kind. Absent when there are no typed inputs. */
+  readonly inputTypes?: Readonly<Record<string, ArtifactType>>;
   /** The acquired Run Store owner every Attempt publishes through. */
   readonly owner: RunOwner;
   /** The host platform, so a Command's platform override resolves deterministically. */
@@ -302,6 +308,7 @@ export interface HumanTurnPause {
 }
 
 interface StepContext {
+  readonly inputTypes: Readonly<Record<string, ArtifactType>>;
   readonly owner: RunOwner;
   readonly platform: Platform;
   readonly resolveAsset: AssetResolver;
@@ -445,6 +452,7 @@ async function walkRouting(
 ): Promise<RunReport> {
   const context: WalkContext = {
     step: {
+      inputTypes: deps.inputTypes ?? {},
       owner: deps.owner,
       platform: deps.platform,
       resolveAsset: deps.resolveAsset,
@@ -1173,24 +1181,7 @@ function resolveToken(token: string | Reference, context: StepContext): string {
     }
     return path;
   }
-  const versionId = context.owner.currentVersion(token.artifact);
-  if (versionId === undefined) {
-    const launch = launchInputs(context.owner)[token.artifact];
-    if (launch !== undefined) return launch;
-    throw new Error(
-      `execution: artifact "${token.artifact}" is neither bound nor a Launch input at this Step.`,
-    );
-  }
-  const bytes = context.owner.readArtifact(versionId, token.artifact);
-  if (bytes === undefined) {
-    throw new Error(
-      `execution: artifact "${token.artifact}" has no bytes at its bound version.`,
-    );
-  }
-  // ponytail: a bound artifact resolves to its decoded text. file/file-set
-  // artifacts (a path, not inline text) need materialization — add it with the
-  // first file-producing Step kind; M2 Commands bind only verdict and text.
-  return new TextDecoder().decode(bytes);
+  return resolveArtifactReference(token.artifact, context);
 }
 
 /** The declared env, resolved over the inherited environment, then hardened for

@@ -293,10 +293,10 @@ for (const [kind, scenario] of Object.entries(RESULT_CASES)) {
         resolveAsset: assets.resolveAsset,
         now: () => AT,
         process: executionProcess,
+        inputTypes: {},
         harness: {
           inputRules: [],
           prepared: counted,
-          inputTypes: {},
           assetKinds: { "prompt.md": "prompt" },
         },
       },
@@ -386,10 +386,10 @@ for (const [name, scenario] of Object.entries(ENTRY_CASES)) {
           resolveAsset: assets.resolveAsset,
           now: () => AT,
           process: executionProcess,
+          inputTypes: {},
           harness: {
             inputRules: [],
             prepared: counted,
-            inputTypes: {},
             assetKinds: { "prompt.md": "prompt" },
           },
           ...(cancelSignal !== undefined ? { cancelSignal } : {}),
@@ -437,10 +437,10 @@ test("a Turn resumed into an open Agent Attempt takes the next id in order, and 
       resolveAsset: assets.resolveAsset,
       now: () => AT,
       process: executionProcess,
+      inputTypes: {},
       harness: {
         prepared,
         inputRules: [],
-        inputTypes: {},
         assetKinds: { "prompt.md": "prompt" },
       },
       observe,
@@ -587,10 +587,10 @@ function walkAgent(
     resolveAsset: assets.resolveAsset,
     now: () => AT,
     process: executionProcess,
+    inputTypes: {},
     harness: {
       prepared,
       inputRules: [],
-      inputTypes: {},
       assetKinds: { "prompt.md": "prompt" },
     },
     ...extra,
@@ -837,10 +837,10 @@ test("a Turn joining an Attempt that holds a pre-change `#turn` row takes the ne
     resolveAsset: assets.resolveAsset,
     now: () => AT,
     process: executionProcess,
+    inputTypes: {},
     harness: {
       prepared,
       inputRules: [],
-      inputTypes: {},
       assetKinds: { "prompt.md": "prompt" },
     },
   });
@@ -910,10 +910,10 @@ for (const delivery of ["skill", "file"] as const) {
         resolveAsset: assets.resolveAsset,
         now: () => AT,
         process: executionProcess,
+        inputTypes,
         harness: {
           inputRules: [],
           prepared: counted,
-          inputTypes,
           assetKinds,
         },
       },
@@ -954,10 +954,10 @@ test("plain-path delivery keeps the rendered prompt byte-identical", async (t) =
       resolveAsset: assets.resolveAsset,
       now: () => AT,
       process: executionProcess,
+      inputTypes: { report: "file" },
       harness: {
         prepared,
         inputRules: [],
-        inputTypes: { report: "file" },
         assetKinds: { "prompt.md": "prompt", skill: "skill" },
       },
     },
@@ -1024,10 +1024,10 @@ function executeWith(
     resolveAsset: assets.resolveAsset,
     now: () => AT,
     process: executionProcess,
+    inputTypes: {},
     harness: {
       inputRules: [],
       prepared: harness,
-      inputTypes: {},
       assetKinds: { "prompt.md": "prompt" },
     },
   });
@@ -1304,10 +1304,10 @@ test("m10-commands-and-input-rules: substituted reserved Agent prompts fail with
       platform: HOST,
       process: executionProcess,
       resolveAsset: assets.resolveAsset,
+      inputTypes: { task: "text" },
       harness: {
         prepared,
         inputRules: [{ kind: "reserved-leading-words", words: ["/model"] }],
-        inputTypes: { task: "text" },
         assetKinds: { "prompt.md": "prompt" },
       },
     },
@@ -1351,10 +1351,10 @@ for (const kind of ["agent", "interactive-agent"] as const) {
           platform: HOST,
           process: executionProcess,
           resolveAsset: assets.resolveAsset,
+          inputTypes: { task: "text" },
           harness: {
             prepared,
             inputRules: [{ kind: "reserved-leading-words", words: ["/model"] }],
-            inputTypes: { task: "text" },
             assetKinds: { "prompt.md": "prompt" },
           },
         },
@@ -1376,12 +1376,12 @@ for (const kind of ["agent", "interactive-agent"] as const) {
             platform: HOST,
             process: executionProcess,
             resolveAsset: assets.resolveAsset,
+            inputTypes: { task: "text" },
             harness: {
               prepared,
               inputRules: [
                 { kind: "reserved-leading-words", words: ["/model"] },
               ],
-              inputTypes: { task: "text" },
               assetKinds: { "prompt.md": "prompt" },
             },
           },
@@ -1406,10 +1406,10 @@ test("m10-commands-and-input-rules: a compatible Harness receives a reserved sub
     platform: HOST,
     process: executionProcess,
     resolveAsset: assets.resolveAsset,
+    inputTypes: { task: "text" },
     harness: {
       prepared,
       inputRules: [],
-      inputTypes: { task: "text" },
       assetKinds: { "prompt.md": "prompt" },
     },
   });
@@ -1440,10 +1440,10 @@ test("m10-interruption-and-transcript: fake identified messages reach stored con
     resolveAsset: assets.resolveAsset,
     now: () => AT,
     process: executionProcess,
+    inputTypes: {},
     harness: {
       inputRules: [],
       prepared,
-      inputTypes: {},
       assetKinds: { "prompt.md": "prompt" },
     },
   });
@@ -1501,10 +1501,10 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const) {
       resolveAsset: assets.resolveAsset,
       now: () => AT,
       process: executionProcess,
+      inputTypes: {},
       harness: {
         inputRules: [],
         prepared,
-        inputTypes: {},
         assetKinds: { "prompt.md": "prompt" },
       },
     });
@@ -1572,10 +1572,10 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const) {
       resolveAsset: assets.resolveAsset,
       now: () => AT,
       process: executionProcess,
+      inputTypes: {},
       harness: {
         inputRules: [],
         prepared,
-        inputTypes: {},
         assetKinds: { "prompt.md": "prompt" },
       },
     });
@@ -1643,10 +1643,10 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const)
       resolveAsset: assets.resolveAsset,
       now: () => AT,
       process: executionProcess,
+      inputTypes: {},
       harness: {
         inputRules: [],
         prepared,
-        inputTypes: {},
         assetKinds: { "prompt.md": "prompt" },
       },
     });
@@ -1675,3 +1675,73 @@ for (const name of ["completed", "failed", "interrupted", "lost"] as const)
     );
     assert.equal(f.owner.turns()[0]?.resultKind, name);
   });
+
+for (const kind of ["agent", "interactive-agent"] as const) {
+  test(`m10-audit-file-input-resolution: ${kind} prompt slots keep Workspace paths, opaque text, and bound-artifact precedence`, async (t) => {
+    const absolute = join(makeTempDir("secant-agent-external-"), "outside.ts");
+    const f = fixture(t, {
+      target: "src/a.ts",
+      docs: ` src/b.ts \r\n\n${absolute}\n`,
+      absolute,
+      note: "src/text.ts",
+      bound: "src/launch.ts",
+    });
+    assert.ok(
+      f.owner.publishAttempt({
+        attemptId: "earlier",
+        outcome: "succeeded",
+        at: AT,
+        outputs: [
+          {
+            name: "bound",
+            type: "text",
+            content: new TextEncoder().encode("src/bound.ts"),
+          },
+        ],
+        required: [{ name: "bound", type: "text" }],
+      }).ok,
+    );
+    const assets = promptAssets(
+      f.workspace,
+      "{{artifact:target}}\n{{artifact:docs}}\n{{artifact:absolute}}\n{{artifact:note}}\n{{artifact:bound}}",
+    );
+    const { prepared, requests } = await recordingHarness(t, [
+      { result: RESULT_CASES.completed.result },
+    ]);
+    const report = await executeRouting(
+      [
+        agentStep({
+          kind,
+          ...(kind === "interactive-agent" ? { entryTurn: true } : {}),
+        }),
+      ],
+      {
+        owner: f.owner,
+        platform: HOST,
+        resolveAsset: assets.resolveAsset,
+        now: () => AT,
+        process: executionProcess,
+        inputTypes: {
+          target: "file",
+          docs: "file-set",
+          absolute: "file",
+          note: "text",
+          bound: "file",
+        },
+        harness: {
+          inputRules: [],
+          prepared,
+          assetKinds: { "prompt.md": "prompt" },
+        },
+      },
+    );
+    assert.deepEqual(report, {
+      outcome: kind === "agent" ? "succeeded" : "blocked",
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(
+      requests[0]?.input.text,
+      `${join(f.workspace, "src", "a.ts")}\n${join(f.workspace, "src", "b.ts")}\n${absolute}\n${absolute}\nsrc/text.ts\nsrc/bound.ts`,
+    );
+  });
+}

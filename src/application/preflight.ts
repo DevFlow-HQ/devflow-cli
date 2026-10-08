@@ -1,3 +1,4 @@
+import { resolveLaunchInputValue } from "../run/execution/execution.js";
 import { realpathSync, statSync } from "node:fs";
 import {
   agentCompletionCalls,
@@ -402,6 +403,7 @@ function checkInputs(request: PreflightRequest): Problem | undefined {
   const violations = inputViolations(
     request.manifest.inputs,
     request.launchInputs,
+    request.workspacePath,
   );
   return violations.length > 0 ? launchInputsInvalid(violations) : undefined;
 }
@@ -485,6 +487,7 @@ function selectHarness(request: PreflightRequest): TSelectedHarness {
 function inputViolations(
   declared: Readonly<Record<string, LaunchInput>>,
   supplied: Readonly<Record<string, string>>,
+  workspacePath: string,
 ): FieldViolation[] {
   const violations: FieldViolation[] = [];
   for (const [name, input] of Object.entries(declared)) {
@@ -496,7 +499,7 @@ function inputViolations(
       });
       continue;
     }
-    const reason = invalidReason(input, value);
+    const reason = invalidReason(input, value, workspacePath);
     if (reason !== undefined)
       violations.push({ field: name, explanation: reason });
   }
@@ -506,12 +509,18 @@ function inputViolations(
 /** Why a supplied value is invalid for its declared Artifact type, or undefined
  *  when it is valid. Text is opaque (non-empty only); file/file-set touch the real
  *  filesystem; choice and verdict are closed sets. */
-function invalidReason(input: LaunchInput, value: string): string | undefined {
+function invalidReason(
+  input: LaunchInput,
+  value: string,
+  workspacePath: string,
+): string | undefined {
   switch (input.type) {
     case "text":
       return value.length === 0 ? "must be non-empty text." : undefined;
     case "file":
-      return isNonEmptyFile(value)
+      return isNonEmptyFile(
+        resolveLaunchInputValue({ type: input.type, value, workspacePath }),
+      )
         ? undefined
         : `"${value}" is not an existing non-empty file.`;
     case "file-set": {
@@ -519,9 +528,12 @@ function invalidReason(input: LaunchInput, value: string): string | undefined {
       // that never collides with a path character. The `--input` CLI passes
       // newlines through unchanged (#287), but the TUI's file-set field is still
       // single-line; firm this up when a structured multi-file input surface lands.
-      const paths = value
+      const paths = resolveLaunchInputValue({
+        type: input.type,
+        value,
+        workspacePath,
+      })
         .split("\n")
-        .map((line) => line.trim())
         .filter(Boolean);
       if (paths.length === 0) return "must name at least one existing file.";
       const missing = paths.find((path) => !isExistingFile(path));

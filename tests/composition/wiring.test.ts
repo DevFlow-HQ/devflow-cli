@@ -42,6 +42,7 @@ import {
   QUALIFICATION_PROFILE,
   qualificationAdapter,
   wiringProcess,
+  storedProcess,
 } from "../helpers/wiringDoubles.js";
 
 import { call, completed } from "../helpers/agentCompletion.js";
@@ -1654,4 +1655,100 @@ test("m10-initial-preparation-ownership: headless completion closes both admissi
     },
   );
   assert.deepEqual(trace, ["command", "admission:claude", "admission:codex"]);
+});
+
+test("m10-audit-file-input-resolution: Command-only wiring supplies input types without preparing a Harness", async (t) => {
+  const workspace = realpathSync.native(
+    makeTempDir("secant-wire-input-workspace-"),
+  );
+  mkdirSync(join(workspace, "packages", "web"), { recursive: true });
+  mkdirSync(join(workspace, "src"));
+  writeFileSync(join(workspace, "src", "a.ts"), "content");
+  writeFileSync(join(workspace, "src", "b.ts"), "content");
+  const commands: Parameters<ProcessAdapter["spawnCommand"]>[0][] = [];
+  const executionProcess = storedProcess({
+    script: {
+      commandHandler: (request) => {
+        commands.push(request);
+        return { kind: "exited", status: 0, text: new Uint8Array() };
+      },
+    },
+  });
+  const wired = wireApplication({
+    secantHome: makeTempDir("secant-wire-input-home-"),
+    launchCwd: workspace,
+    process: executionProcess,
+    harnessAdapter: ownPreparations({
+      async prepare() {
+        throw new Error("Command-only Runs need no Harness");
+      },
+    }),
+    codexHarnessAdapter: ownPreparations({
+      async prepare() {
+        throw new Error("Command-only Runs need no Harness");
+      },
+    }),
+  });
+  t.after(() => wired.close());
+  const folder = makeTempDir("secant-wire-input-bundle-");
+  const id = "dev.secant.workspace-inputs";
+  writeFileSync(
+    join(folder, "manifest.json"),
+    JSON.stringify({
+      formatVersion: 1,
+      bundle: {
+        id,
+        version: "1.0.0",
+        name: "Workspace inputs",
+        description: "Checks Workspace input resolution.",
+      },
+      platforms: ["windows", "macos", "linux"],
+      inputs: {
+        target: { type: "file", description: "target" },
+        docs: { type: "file-set", description: "docs" },
+      },
+      assets: [],
+      routing: [
+        {
+          id: "read",
+          kind: "command",
+          requires: ["target", "docs"],
+          command: {
+            executable: "reader",
+            arguments: [{ artifact: "target" }, { artifact: "docs" }],
+            env: { TARGET: { artifact: "target" }, DOCS: { artifact: "docs" } },
+            workingDirectory: "packages/web",
+          },
+        },
+      ],
+    }),
+  );
+  assert.ok(wired.bundleManagement.build(folder, { noInstall: false }).ok);
+  const entry = wired.catalog.listEntries().find((entry) => entry.id === id);
+  assert.ok(entry);
+  assert.ok(
+    wired.projectionPort.submit({
+      operationId: "approve-input-workspace",
+      operation: "approve-workspace",
+      input: { path: workspace },
+    }).admitted,
+  );
+  const admission = wired.projectionPort.submit({
+    operationId: "launch-inputs",
+    operation: "launch-run",
+    input: {
+      bundle: { id },
+      trustDigest: entry.digest,
+      launchInputs: { target: "src/a.ts", docs: "src/a.ts\nsrc/b.ts" },
+    },
+  });
+  assert.ok(admission.admitted, JSON.stringify(admission));
+  await settled(wired, "launch-inputs");
+  const expectedFile = join(workspace, "src", "a.ts");
+  const expectedSet = `${expectedFile}\n${join(workspace, "src", "b.ts")}`;
+  assert.equal(commands.length, 1);
+  assert.deepEqual(commands[0]?.args, [expectedFile, expectedSet]);
+  assert.equal(commands[0]?.env?.TARGET, expectedFile);
+  assert.equal(commands[0]?.env?.DOCS, expectedSet);
+  assert.equal(commands[0]?.cwd, join(workspace, "packages", "web"));
 });

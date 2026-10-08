@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync } from "node:fs";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { join } from "node:path";
 import {
   agentCompletionCalls,
   matchHarnessInputRule,
@@ -46,6 +46,7 @@ import type {
   TurnFailureFacts,
 } from "./execution.js";
 import { observedWrite } from "./store-write.js";
+import { resolveArtifactReference } from "./reference-resolution.js";
 import { attemptSession, sessionAgentCalls } from "./sessions.js";
 import { interactiveEndLegality } from "./interactive-completion.js";
 import { guardedExecutionObserver } from "./observer.js";
@@ -178,13 +179,11 @@ export interface RequestChannel {
 /** What an Agent Step needs from composition (#116): the prepared Harness the Run
  *  owns (started once, reused across every Agent Step naming the same Session, and
  *  closed by composition when the Run rests), plus the manifest facts prompt
- *  rendering resolves against — the declared type of each Launch input (so a `file`
- *  slot renders as a path and a `file-set` as one path per line) and the kind of
- *  each declared asset (so only a `skill` in `uses` appends a `SKILL.md` line). */
+ *  rendering resolves against: the kind of each declared asset, so only a `skill`
+ *  in `uses` appends a `SKILL.md` line. */
 export interface HarnessExecutionDeps {
   readonly prepared: PreparedHarness;
   readonly inputRules: readonly HarnessInputRule[];
-  readonly inputTypes: Readonly<Record<string, ArtifactType>>;
   readonly assetKinds: Readonly<Record<string, AssetKind>>;
 }
 
@@ -231,6 +230,7 @@ export interface AgentFollowUp {
 }
 
 interface StepContext {
+  readonly inputTypes: Readonly<Record<string, ArtifactType>>;
   readonly routing: readonly RoutingNode[];
   readonly owner: RunOwner;
   readonly resolveAsset: (assetPath: string) => string | undefined;
@@ -1008,7 +1008,7 @@ function renderAgentPrompt(
     base = base.replaceAll(WORKING_AREA_SLOT, area.path);
   }
   const filled = base.replace(promptSlotPattern(), (_match, name: string) =>
-    resolvePromptSlot(name, context, harness),
+    resolveArtifactReference(name, context),
   );
   const reserved = matchHarnessInputRule({
     text: filled,
@@ -1128,75 +1128,6 @@ function readPromptText(prompt: Reference, context: StepContext): string {
     );
   }
   return new TextDecoder().decode(bytes);
-}
-
-/** Resolve one `{{artifact:name}}` slot: a bound store artifact substitutes as its
- *  canonical text; a Launch input substitutes by its declared type — `file` as an
- *  absolute path (Workspace-relative resolved against the Workspace), `file-set` as
- *  one absolute path per line, everything else as its text. */
-function resolvePromptSlot(
-  name: string,
-  context: StepContext,
-  harness: HarnessExecutionDeps,
-): string {
-  const versionId = context.owner.currentVersion(name);
-  if (versionId !== undefined) {
-    const bytes = context.owner.readArtifact(versionId, name);
-    if (bytes === undefined) {
-      throw new Error(
-        `execution: agent prompt slot "${name}" has no bytes at its bound version.`,
-      );
-    }
-    return new TextDecoder().decode(bytes);
-  }
-  const launch = launchInputs(context.owner);
-  const value = launch[name];
-  if (value === undefined) {
-    // The Composition check already proved every slot names a required, bound
-    // artifact; reaching here is a broken invariant.
-    throw new Error(
-      `execution: agent prompt slot "${name}" names an artifact that is neither bound nor a Launch input.`,
-    );
-  }
-  const type = harness.inputTypes[name];
-  const workspacePath = context.owner.record.workspacePath;
-  if (type === "file") {
-    return absoluteWorkspacePath(workspacePath, value);
-  }
-  if (type === "file-set") {
-    return value
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => absoluteWorkspacePath(workspacePath, line))
-      .join("\n");
-  }
-  return value;
-}
-
-/** A file input's absolute path: an absolute value passes through, a
- *  Workspace-relative one resolves against the Workspace root (#116). Host
- *  `node:path.isAbsolute` is correct here (unlike a portable Bundle path, which
- *  needs `bundle/relative-path`): a `file` Launch input is validated to exist on
- *  the executing host at Preflight, so it is always a host-native path. */
-function absoluteWorkspacePath(workspacePath: string, value: string): string {
-  return isAbsolute(value) ? value : resolvePath(workspacePath, value);
-}
-
-/** The Run's Launch inputs, read back from the canonical record as a string map
- *  (validated to that shape at launch and resume). */
-export function launchInputs(
-  owner: RunOwner,
-): Readonly<Record<string, string>> {
-  const launch = owner.record.launch;
-  if (launch === null || typeof launch !== "object") return {};
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(
-    launch as Record<string, unknown>,
-  )) {
-    if (typeof value === "string") result[key] = value;
-  }
-  return result;
 }
 
 /** Drain the meaningful Turn events into the Store as durable timeline entries

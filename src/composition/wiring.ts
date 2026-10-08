@@ -403,7 +403,9 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
   }) => {
     // Command Steps and the Run's Harness share the Run's scope.
     const scope = runScope(owner.record.runId);
+    const facts = executionFacts(catalog, digest);
     const deps = {
+      inputTypes: facts.inputTypes,
       owner,
       platform,
       resolveAsset: treeResolver(catalog, digest),
@@ -435,7 +437,6 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
         "composition: an Agent-bearing Run has no selected Harness.",
       );
     }
-    const facts = harnessFacts(catalog, digest);
     // A Step Harness the Application held across a waiting rest (#354) is this
     // walk's again: reuse its prepared Harness and hand the same handle back on a
     // `blocked` rest, so it closes exactly once. A handle not minted here is closed
@@ -468,7 +469,6 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
     const harness: HarnessExecutionDeps = {
       inputRules: harnessRegistry.inputRules(selectedHarness),
       prepared: preparedHarness,
-      inputTypes: facts.inputTypes,
       assetKinds: facts.assetKinds,
     };
     let transferred = false;
@@ -625,16 +625,16 @@ function interactiveStepDriver(
   return step;
 }
 
-/** The manifest facts Agent-prompt rendering resolves against (#116): each Launch
+/** The manifest facts Step reference resolution uses: each Launch
  *  input's declared type and each declared asset's kind, re-derived from the pinned
  *  Snapshot's stored bytes by digest. A read/inspect failure here is an environment
  *  fault (the bytes Preflight just validated are gone or corrupt) — it throws rather
  *  than return empty maps, which would silently render a `file` slot as plain text.
  *  ponytail: these facts are re-derived here rather than threaded from Preflight's
  *  composition re-check, to keep the Harness plumbing out of the Application/
- *  RunExecution seam; the cost is one extra inspect per Agent-bearing Run. Thread
+ *  RunExecution seam; the cost is one extra inspect per Run. Thread
  *  them through if that inspect ever shows up. */
-function harnessFacts(
+function executionFacts(
   catalog: Catalog,
   digest: string,
 ): {
