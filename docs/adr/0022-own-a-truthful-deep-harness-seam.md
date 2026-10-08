@@ -188,3 +188,29 @@ event stream gains a data-only agent-call event, the Turn handle gains one close
 before the producer closes, and the profile gains an evidence-bearing `agentCalls` capability. The Adapter still learns no Step, Stage, or Run fact:
 it delivers the declarations and reports the call, and the caller judges it. The same decision makes Codex MCP tool approvals ordinary tool-approval
 Harness Requests and declines other MCP elicitations without failing the Turn, instead of treating them as unsupported server requests.
+
+## Amendment (2026-10-08): required and optional native facts
+
+Recorded while deciding [which consumed Codex notifications qualification requires](https://github.com/secantdev/secant/issues/458), hand-over A14
+of the [M10 audit](https://github.com/secantdev/secant/issues/429). Each slice had chosen alone: M10 made the Codex reasoning-summary delta a
+required schema fact, so its rename would make Codex `unavailable` for every model, while the Turn diff and token-usage notifications consumed in the
+same milestone degraded silently, and four notifications nothing reads stayed required.
+
+One rule now governs every Adapter. A consumed native fact is **required** only when a Turn cannot run correctly without it: Turn admission and its
+terminal, the final agent message, tool calls, Harness Requests, Steer, Interrupt, resume, and the effective model, with the native shapes that place
+them in Session history (for Codex, the model-output item kinds that mark Steer delivery). Every other consumed fact is **optional**: Thought
+summaries, the cumulative Turn diff, context and usage, and live previews of agent messages, command output, and summaries, whose finals still replace
+them ([ADR 0024](./0024-use-one-deep-projection-port-for-tui-and-headless-clients.md)). A failed required fact keeps the 2026-09-07 rule: the Harness is
+`unavailable` with a typed reason. A failed optional fact disables only that fact.
+
+Optional facts are never best-effort parsed. Where the Harness publishes its formats (the Codex generated schema), qualification checks optional facts
+against them beside the required ones; a mismatch disables that fact for the qualified install before any Run, and the Adapter never reads it. The
+profile carries each disabled fact as a person-readable limit, and the Qualification state reads `qualified-with-limits`, listing the limit apart from
+the six capabilities. Where the Harness publishes no formats (Claude Code), a fact is read strictly when it arrives and stays absent when unreadable;
+whether that runtime absence is named is [#460](https://github.com/secantdev/secant/issues/460)'s question. An honest absence, such as a model that
+writes no summary or summaries turned off in the user's Harness settings, is not a limit.
+
+A fact nothing consumes is neither required nor optional: it leaves the lists, and the change that first consumes it classifies it. Each Adapter keeps
+its classification private beside its check, and a test holds the Codex lists equal to the facts the Adapter reads. We rejected requiring every
+consumed fact, where any display rename removes the Harness, and T3 Code's posture of checking nothing in the stream, where a renamed terminal would
+leave Turns hanging.
