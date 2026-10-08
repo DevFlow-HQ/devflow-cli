@@ -14,6 +14,12 @@ import {
 } from "./pack-launcher.js";
 import { PACKAGE_MANIFEST_FILE, type PackageManifest } from "./pack.js";
 import { TARGETS, type CompileTarget } from "./targets.js";
+import {
+  ripgrepClosureFor,
+  verifyEmbeddedRipgrep,
+  verifyRipgrepNotices,
+  type RipgrepComponent,
+} from "./embedded-ripgrep.js";
 
 // The M4 release legal-closure gate (spec #137, stories 99/100, #156). It extends
 // the fast declared-dependency notices check (`checkNoticesCoverage`, which stays in
@@ -48,18 +54,28 @@ import { TARGETS, type CompileTarget } from "./targets.js";
 // this need not re-extract them. Build-only: it is re-earned per ADR 0030 and adds no
 // product runtime dependency.
 
-export interface ClosureComponent {
+interface RuntimeComponent {
+  readonly embeddedIn?: never;
   readonly name: string;
   readonly version: string;
   /** The package's declared SPDX licence identifier (or a normalised token). */
   readonly license: string;
 }
 
+export type ClosureComponent = RuntimeComponent | RipgrepComponent;
+
 export interface Inventory {
+  readonly targets: Record<
+    string,
+    {
+      readonly helper: ReturnType<typeof verifyEmbeddedRipgrep>;
+      readonly components: ClosureComponent[];
+    }
+  >;
   readonly version: string;
   /** The pinned Bun toolchain the executable embeds. */
   readonly bun: string;
-  /** The union of every gated target's closure, deduplicated by name + version. */
+  /** The union of every gated target's closure, deduplicated by origin, name, version, and licence. */
   readonly union: ClosureComponent[];
 }
 
@@ -210,18 +226,32 @@ export async function computeInventory(options: {
 
   const union = new Map<string, ClosureComponent>();
   const add = (component: ClosureComponent) =>
-    union.set(`${component.name}@${component.version}`, component);
+    union.set(
+      `${component.embeddedIn ?? "runtime"}:${component.name}@${component.version}:${component.license}`,
+      component,
+    );
   for (const component of [...transitive, ...fixed]) add(component);
-  for (const target of Object.values(TARGETS)) {
-    add({
+  const targets: Inventory["targets"] = {};
+  for (const [key, target] of Object.entries(TARGETS)) {
+    const helper = verifyEmbeddedRipgrep(
+      target,
+      readFileSync(join(projectRoot, "dist", target.outfile)),
+    );
+    const native: ClosureComponent = {
       name: nativePackageFor(target),
       version: coreVersion,
       license: "MIT",
-    });
+    };
+    const helperClosure = ripgrepClosureFor(target);
+    const components = [...transitive, ...fixed, native, ...helperClosure];
+    targets[key] = { helper, components };
+    for (const component of helperClosure) add(component);
+    add(native);
   }
 
   return {
     version,
+    targets,
     bun: fixed.find((c) => c.name === "bun")!.version,
     union: [...union.values()].sort((a, b) => a.name.localeCompare(b.name)),
   };
@@ -258,6 +288,23 @@ export function verifyClosureNotices(
 ): string[] {
   const problems: string[] = [];
   for (const component of union) {
+    if (component.embeddedIn === "ripgrep") {
+      const admitted =
+        LICENSE_TEXT_MARKERS[component.license] !== undefined ||
+        [
+          "Unicode-DFS-2016",
+          "Unicode-3.0",
+          "BSD-3-Clause WITH PCRE2-exception",
+          "Apache-2.0 WITH LLVM-exception",
+          "LicenseRef-MSVC-runtime",
+        ].includes(component.license);
+      if (!admitted)
+        problems.push(
+          `${component.name}: unrecognised ripgrep licence identity ${component.license}`,
+        );
+      problems.push(...verifyRipgrepNotices(component, notices));
+      continue;
+    }
     if (!notices.includes(`\`${component.name}\``)) {
       problems.push(
         `Shipped runtime component ${component.name} has no notices section naming it`,
@@ -270,7 +317,11 @@ export function verifyClosureNotices(
       );
     }
   }
-  const families = [...new Set(union.map((c) => c.license))].sort();
+  const families = [
+    ...new Set(
+      union.filter((c) => c.embeddedIn !== "ripgrep").map((c) => c.license),
+    ),
+  ].sort();
   for (const family of families) {
     const markers = LICENSE_TEXT_MARKERS[family];
     if (markers === undefined) {
@@ -371,6 +422,17 @@ if (import.meta.main) {
   if (problems.length > 0) {
     throw new Error(
       `Release legal-closure verification failed:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+    );
+  }
+  await Bun.write(
+    join(projectRoot, "dist", "legal-inventory.json"),
+    JSON.stringify(inventory, null, 2) + "\n",
+  );
+  for (const [target, { helper, components }] of Object.entries(
+    inventory.targets,
+  )) {
+    console.log(
+      `${target}: embedded ripgrep ${helper.version} (${helper.target}), member ${helper.member}, SHA-256 ${helper.sha256}, ${components.length} component licence entries.`,
     );
   }
   console.log(

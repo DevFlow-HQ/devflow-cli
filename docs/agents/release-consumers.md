@@ -79,7 +79,9 @@ archive's), so this need not re-extract them. Harmless historical or grouped ext
 `bun-ffi-structs`, does not fail). Licence identity is verified at licence-family granularity — an unrecognised SPDX identity fails closed, but a
 per-package prose mislabel within a known family is a named limitation, not caught. `tests/release/legal-closure.test.ts` unit-tests the pure logic
 (`verifyClosureNotices`, `verifyChannelLegalDigests`, `packageDirOfSource`, `nativePackageFor`) and spawns no subprocess; only the closure derivation (a
-real build) runs in the `build` job.
+real build) runs in the `build` job. The embedded ripgrep closure comes from pinned official members and target-specific upstream Cargo trees.
+Build and inventory verify the matching member's complete bytes in each candidate; `dist/legal-inventory.json` records that evidence per target.
+`m10-audit-embedded-ripgrep-release` tests scoped licence admission and complete component notices on all three OSes; runtime extraction lands later.
 
 ## PowerShell Installer Consumer
 

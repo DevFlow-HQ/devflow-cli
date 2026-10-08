@@ -17,3 +17,6 @@ tests/harness/fixtures/codex/codex-qualification/stable-schema.generated.json
 # The Matt Bundle's skill folders are the maintainer's originals, copied unchanged;
 # reformatting them would change their bytes and the Bundle digest.
 bundles/matt-front-spec/skills
+
+# Byte-faithful upstream release build provenance.
+vendor/ripgrep/release.yml

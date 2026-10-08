@@ -9,6 +9,11 @@
 export type ArchiveType = "zip" | "tar.gz";
 
 export interface CompileTarget {
+  /** Official embedded helper target, pinned in vendor/ripgrep/manifest.json. */
+  readonly ripgrep:
+    | "x86_64-pc-windows-msvc"
+    | "aarch64-apple-darwin"
+    | "x86_64-unknown-linux-musl";
   /** The `bun build --compile` target triple. */
   readonly triple: Bun.Build.CompileTarget;
   /** The built binary's basename under dist/. */
@@ -29,6 +34,7 @@ export interface CompileTarget {
 
 export const TARGETS: Record<string, CompileTarget> = {
   "windows-x64": {
+    ripgrep: "x86_64-pc-windows-msvc",
     triple: "bun-windows-x64",
     outfile: "secant-windows-x64.exe",
     os: "windows",
@@ -39,6 +45,7 @@ export const TARGETS: Record<string, CompileTarget> = {
     package: "@secantdev/secant-windows-x64",
   },
   "darwin-arm64": {
+    ripgrep: "aarch64-apple-darwin",
     triple: "bun-darwin-arm64",
     outfile: "secant-darwin-arm64",
     os: "macos",
@@ -49,6 +56,7 @@ export const TARGETS: Record<string, CompileTarget> = {
     package: "@secantdev/secant-darwin-arm64",
   },
   "linux-x64": {
+    ripgrep: "x86_64-unknown-linux-musl",
     triple: "bun-linux-x64",
     outfile: "secant-linux-x64",
     os: "linux",

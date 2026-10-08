@@ -23,7 +23,9 @@ import {
   type LauncherManifest,
 } from "./pack-launcher.js";
 import { hostTargetKey } from "./targets.js";
-import { npmInstall, runGit } from "./release-helpers.js";
+import { LICENSE_FILE, NOTICES_FILE } from "./assemble.js";
+import { verifyChannelLegalDigests } from "./inventory.js";
+import { sha256File, npmInstall, runGit } from "./release-helpers.js";
 
 // The `npm-launcher-consumer` scenario (#152). It proves the thin, script-free npm
 // launcher (@secantdev/secant, spec #137) as a consumer receives it: installed with
@@ -132,7 +134,9 @@ function git(args: readonly string[], cwd: string): string {
   return result.stdout.trim();
 }
 
-export function verifyLauncherConsumer(packagesDir: string): void {
+export async function verifyLauncherConsumer(
+  packagesDir: string,
+): Promise<void> {
   const dir = resolve(packagesDir);
   const packageManifest: PackageManifest = JSON.parse(
     readFileSync(join(dir, PACKAGE_MANIFEST_FILE), "utf8"),
@@ -194,6 +198,17 @@ export function verifyLauncherConsumer(packagesDir: string): void {
         `npm did not install both packages: launcher ${existsSync(launcherDir)}, platform ${existsSync(platformDir)}.`,
       );
     }
+    const legalProblems = verifyChannelLegalDigests(
+      [
+        {
+          label: "Installed npm launcher",
+          licenseSha256: await sha256File(join(launcherDir, LICENSE_FILE)),
+          noticesSha256: await sha256File(join(launcherDir, NOTICES_FILE)),
+        },
+      ],
+      launcherManifest,
+    );
+    if (legalProblems.length) throw new Error(legalProblems.join("\n"));
     const launcherEntry = join(launcherDir, LAUNCHER_FILE);
 
     // Forwarding under the npm-flat layout, then under a pnpm-symlinked layout.
@@ -364,5 +379,5 @@ export function verifyLauncherConsumer(packagesDir: string): void {
 
 if (import.meta.main) {
   const packagesDir = process.argv[2] ?? join(projectRoot, "dist", "packages");
-  verifyLauncherConsumer(packagesDir);
+  await verifyLauncherConsumer(packagesDir);
 }

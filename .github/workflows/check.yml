@@ -254,6 +254,10 @@ jobs:
           bun run test --
           -t '^m10-audit-windows-release-check(:|$)'
           tests/release-checks/windows-terminal.test.ts
+      - name: m10-audit-embedded-ripgrep-release
+        run: >-
+          bun run test tests/release/embedded-ripgrep.test.ts tests/release/legal-closure.test.ts
+          -t '^m10-audit-embedded-ripgrep-release(:|$)'
       - name: m12-focused-check-scenarios
         run: >-
           bun run test --

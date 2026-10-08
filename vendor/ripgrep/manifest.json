@@ -1,0 +1,1150 @@
+{
+  "version": "15.1.0",
+  "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab",
+  "sourceArchiveSha256": "046fa01a216793b8bd2750f9d68d4ad43986eb9c0d6122600f993906012972e8",
+  "targets": {
+    "x86_64-pc-windows-msvc": {
+      "archive": "ripgrep-15.1.0-x86_64-pc-windows-msvc.zip",
+      "archiveSha256": "124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a",
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip",
+      "member": "15.1.0/x86_64-pc-windows-msvc/rg.exe",
+      "memberSha256": "decdd4992f3f1b9a5ef9898f1b40ab16886d579d6516b4efd3d5eaa19364e408"
+    },
+    "aarch64-apple-darwin": {
+      "archive": "ripgrep-15.1.0-aarch64-apple-darwin.tar.gz",
+      "archiveSha256": "378e973289176ca0c6054054ee7f631a065874a352bf43f0fa60ef079b6ba715",
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-aarch64-apple-darwin.tar.gz",
+      "member": "15.1.0/aarch64-apple-darwin/rg",
+      "memberSha256": "4fdf1d8365af224bc70e3c1490d8461d859c37cc70e739a11e987af0215f3e94"
+    },
+    "x86_64-unknown-linux-musl": {
+      "archive": "ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz",
+      "archiveSha256": "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599",
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz",
+      "member": "15.1.0/x86_64-unknown-linux-musl/rg",
+      "memberSha256": "ebeaf56f8a25e102e9419933423738b3a2a613a444fd749d695e15eba53f71f2"
+    }
+  },
+  "components": [
+    {
+      "name": "ripgrep/aho-corasick",
+      "version": "1.1.3",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/aho-corasick/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://static.crates.io/crates/aho-corasick/aho-corasick-1.1.3.crate"
+        },
+        {
+          "path": "legal/aho-corasick/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://static.crates.io/crates/aho-corasick/aho-corasick-1.1.3.crate"
+        }
+      ],
+      "crateSha256": "8e60d3430d3a69478ad0993f19238d2df97c507009a52b3c10addcd7f6bcb916"
+    },
+    {
+      "name": "ripgrep/anyhow",
+      "version": "1.0.100",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/anyhow/LICENSE-MIT.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://static.crates.io/crates/anyhow/anyhow-1.0.100.crate"
+        }
+      ],
+      "crateSha256": "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
+    },
+    {
+      "name": "ripgrep/bstr",
+      "version": "1.12.0",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/bstr/COPYING.txt",
+          "sha256": "68653aaa727a2bfa31b7a751e31701ce33c49d695c12dd291a07d1c54da4c14b",
+          "source": "https://static.crates.io/crates/bstr/bstr-1.12.0.crate"
+        },
+        {
+          "path": "legal/bstr/LICENSE-MIT.txt",
+          "sha256": "6b7374c39a57e57fc2c38eb529c4c88340152b10f51dd5ae2d819dfa67f61715",
+          "source": "https://static.crates.io/crates/bstr/bstr-1.12.0.crate"
+        }
+      ],
+      "crateSha256": "234113d19d0d7d613b40e86fb654acf958910802bcceab913a4f9e7cda03b1a4"
+    },
+    {
+      "name": "ripgrep/cfg-if",
+      "version": "1.0.4",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/cfg-if/LICENSE-MIT.txt",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "source": "https://static.crates.io/crates/cfg-if/cfg-if-1.0.4.crate"
+        }
+      ],
+      "crateSha256": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+    },
+    {
+      "name": "ripgrep/crossbeam-deque",
+      "version": "0.8.6",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/crossbeam-deque/LICENSE-MIT.txt",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+          "source": "https://static.crates.io/crates/crossbeam-deque/crossbeam-deque-0.8.6.crate"
+        }
+      ],
+      "crateSha256": "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
+    },
+    {
+      "name": "ripgrep/crossbeam-epoch",
+      "version": "0.9.18",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/crossbeam-epoch/LICENSE-MIT.txt",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+          "source": "https://static.crates.io/crates/crossbeam-epoch/crossbeam-epoch-0.9.18.crate"
+        }
+      ],
+      "crateSha256": "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+    },
+    {
+      "name": "ripgrep/crossbeam-utils",
+      "version": "0.8.21",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/crossbeam-utils/LICENSE-MIT.txt",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab",
+          "source": "https://static.crates.io/crates/crossbeam-utils/crossbeam-utils-0.8.21.crate"
+        }
+      ],
+      "crateSha256": "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+    },
+    {
+      "name": "ripgrep/encoding_rs",
+      "version": "0.8.35",
+      "licenses": ["MIT", "BSD-3-Clause"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/encoding_rs/COPYRIGHT.txt",
+          "sha256": "11789f45bb180841cd362a5eee6789c68ddb573a11105e30768c308a6add0190",
+          "source": "https://static.crates.io/crates/encoding_rs/encoding_rs-0.8.35.crate"
+        },
+        {
+          "path": "legal/encoding_rs/LICENSE-MIT.txt",
+          "sha256": "3fa4ca83dcc9237839b1bdeb2e6d16bdfb5ec0c5ce42b24694d8bbf0dcbef72c",
+          "source": "https://static.crates.io/crates/encoding_rs/encoding_rs-0.8.35.crate"
+        },
+        {
+          "path": "legal/encoding_rs/LICENSE-WHATWG.txt",
+          "sha256": "838118388fe5c2e7f1dbbaeed13e1c7f3ebf88be91319c7c1d77c18e987d1a50",
+          "source": "https://static.crates.io/crates/encoding_rs/encoding_rs-0.8.35.crate"
+        }
+      ],
+      "crateSha256": "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+    },
+    {
+      "name": "ripgrep/encoding_rs_io",
+      "version": "0.1.7",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/encoding_rs_io/COPYING.txt",
+          "sha256": "13361f93b3db60ddb43f8fdc97ba469461019bbf7589f6bde833eb3d995d2497",
+          "source": "https://static.crates.io/crates/encoding_rs_io/encoding_rs_io-0.1.7.crate"
+        },
+        {
+          "path": "legal/encoding_rs_io/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://static.crates.io/crates/encoding_rs_io/encoding_rs_io-0.1.7.crate"
+        }
+      ],
+      "crateSha256": "1cc3c5651fb62ab8aa3103998dade57efdd028544bd300516baa31840c252a83"
+    },
+    {
+      "name": "ripgrep/globset",
+      "version": "0.4.18",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/globset/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        },
+        {
+          "path": "legal/globset/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/grep",
+      "version": "0.4.1",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/grep/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        },
+        {
+          "path": "legal/grep/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/grep-cli",
+      "version": "0.1.12",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/grep-cli/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/grep-matcher",
+      "version": "0.1.8",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/grep-matcher/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/grep-pcre2",
+      "version": "0.1.9",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/grep-pcre2/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/grep-printer",
+      "version": "0.3.1",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/grep-printer/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/grep-regex",
+      "version": "0.1.14",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/grep-regex/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/grep-searcher",
+      "version": "0.1.16",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/grep-searcher/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/ignore",
+      "version": "0.4.24",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/ignore/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        },
+        {
+          "path": "legal/ignore/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/itoa",
+      "version": "1.0.15",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/itoa/LICENSE-MIT.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://static.crates.io/crates/itoa/itoa-1.0.15.crate"
+        }
+      ],
+      "crateSha256": "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
+    },
+    {
+      "name": "ripgrep/lexopt",
+      "version": "0.3.1",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/lexopt/LICENSE.txt",
+          "sha256": "8d43b7fa3b2f928cd4ea6346853b95f1ca5d883f4eaad3a40f8af202bfb45d6f",
+          "source": "https://static.crates.io/crates/lexopt/lexopt-0.3.1.crate"
+        }
+      ],
+      "crateSha256": "9fa0e2a1fcbe2f6be6c42e342259976206b383122fc152e872795338b5a3f3a7"
+    },
+    {
+      "name": "ripgrep/libc",
+      "version": "0.2.177",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/libc/LICENSE-MIT.txt",
+          "sha256": "a8d47ff51ca256f56a8932dba07660672dbfe3004257ca8de708aac1415937a1",
+          "source": "https://static.crates.io/crates/libc/libc-0.2.177.crate"
+        }
+      ],
+      "crateSha256": "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
+    },
+    {
+      "name": "ripgrep/log",
+      "version": "0.4.28",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/log/LICENSE-MIT.txt",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "source": "https://static.crates.io/crates/log/log-0.4.28.crate"
+        }
+      ],
+      "crateSha256": "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
+    },
+    {
+      "name": "ripgrep/memchr",
+      "version": "2.7.6",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/memchr/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://static.crates.io/crates/memchr/memchr-2.7.6.crate"
+        },
+        {
+          "path": "legal/memchr/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://static.crates.io/crates/memchr/memchr-2.7.6.crate"
+        }
+      ],
+      "crateSha256": "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
+    },
+    {
+      "name": "ripgrep/memmap2",
+      "version": "0.9.9",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/memmap2/LICENSE-MIT.txt",
+          "sha256": "0d25d03b5ab49576178ad0cae7a2648d12c17ad0452fe49c07e55e4b59aa5257",
+          "source": "https://static.crates.io/crates/memmap2/memmap2-0.9.9.crate"
+        }
+      ],
+      "crateSha256": "744133e4a0e0a658e1374cf3bf8e415c4052a15a111acd372764c55b4177d490"
+    },
+    {
+      "name": "ripgrep/pcre2",
+      "version": "0.2.11",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/pcre2/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://static.crates.io/crates/pcre2/pcre2-0.2.11.crate"
+        },
+        {
+          "path": "legal/pcre2/LICENSE-MIT.txt",
+          "sha256": "cb3c929a05e6cbc9de9ab06a4c57eeb60ca8c724bef6c138c87d3a577e27aa14",
+          "source": "https://static.crates.io/crates/pcre2/pcre2-0.2.11.crate"
+        }
+      ],
+      "crateSha256": "9e970b0fcce0c7ee6ef662744ff711f21ccd6f11b7cf03cd187a80e89797fc67"
+    },
+    {
+      "name": "ripgrep/pcre2-sys",
+      "version": "0.2.10",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/pcre2-sys/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://static.crates.io/crates/pcre2-sys/pcre2-sys-0.2.10.crate"
+        },
+        {
+          "path": "legal/pcre2-sys/LICENSE-MIT.txt",
+          "sha256": "cb3c929a05e6cbc9de9ab06a4c57eeb60ca8c724bef6c138c87d3a577e27aa14",
+          "source": "https://static.crates.io/crates/pcre2-sys/pcre2-sys-0.2.10.crate"
+        }
+      ],
+      "crateSha256": "18b9073c1a2549bd409bf4a32c94d903bb1a09bf845bc306ae148897fa0760a4"
+    },
+    {
+      "name": "ripgrep/regex-automata",
+      "version": "0.4.13",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/regex-automata/LICENSE-MIT.txt",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "source": "https://static.crates.io/crates/regex-automata/regex-automata-0.4.13.crate"
+        }
+      ],
+      "crateSha256": "5276caf25ac86c8d810222b3dbb938e512c55c6831a10f3e6ed1c93b84041f1c"
+    },
+    {
+      "name": "ripgrep/regex-syntax",
+      "version": "0.8.8",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/regex-syntax/LICENSE-MIT.txt",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb",
+          "source": "https://static.crates.io/crates/regex-syntax/regex-syntax-0.8.8.crate"
+        }
+      ],
+      "crateSha256": "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
+    },
+    {
+      "name": "ripgrep",
+      "version": "15.1.0",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/ripgrep/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        },
+        {
+          "path": "legal/ripgrep/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://github.com/BurntSushi/ripgrep/tree/af60c2de9d85e7f3d81c78601669468cf02dabab"
+        }
+      ],
+      "sourceCommit": "af60c2de9d85e7f3d81c78601669468cf02dabab"
+    },
+    {
+      "name": "ripgrep/ryu",
+      "version": "1.0.20",
+      "licenses": ["Apache-2.0"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/ryu/LICENSE-APACHE.txt",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "source": "https://static.crates.io/crates/ryu/ryu-1.0.20.crate"
+        }
+      ],
+      "crateSha256": "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
+    },
+    {
+      "name": "ripgrep/same-file",
+      "version": "1.0.6",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/same-file/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://static.crates.io/crates/same-file/same-file-1.0.6.crate"
+        },
+        {
+          "path": "legal/same-file/LICENSE-MIT.txt",
+          "sha256": "cb3c929a05e6cbc9de9ab06a4c57eeb60ca8c724bef6c138c87d3a577e27aa14",
+          "source": "https://static.crates.io/crates/same-file/same-file-1.0.6.crate"
+        }
+      ],
+      "crateSha256": "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
+    },
+    {
+      "name": "ripgrep/serde",
+      "version": "1.0.228",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/serde/LICENSE-MIT.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://static.crates.io/crates/serde/serde-1.0.228.crate"
+        }
+      ],
+      "crateSha256": "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
+    },
+    {
+      "name": "ripgrep/serde_core",
+      "version": "1.0.228",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/serde_core/LICENSE-MIT.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://static.crates.io/crates/serde_core/serde_core-1.0.228.crate"
+        }
+      ],
+      "crateSha256": "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+    },
+    {
+      "name": "ripgrep/serde_json",
+      "version": "1.0.145",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/serde_json/LICENSE-MIT.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://static.crates.io/crates/serde_json/serde_json-1.0.145.crate"
+        }
+      ],
+      "crateSha256": "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
+    },
+    {
+      "name": "ripgrep/termcolor",
+      "version": "1.4.1",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/termcolor/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://static.crates.io/crates/termcolor/termcolor-1.4.1.crate"
+        },
+        {
+          "path": "legal/termcolor/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://static.crates.io/crates/termcolor/termcolor-1.4.1.crate"
+        }
+      ],
+      "crateSha256": "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
+    },
+    {
+      "name": "ripgrep/textwrap",
+      "version": "0.16.2",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/textwrap/LICENSE.txt",
+          "sha256": "ce93600c49fbb3e14df32efe752264644f6a2f8e08a735ba981725799e5309ef",
+          "source": "https://static.crates.io/crates/textwrap/textwrap-0.16.2.crate"
+        }
+      ],
+      "crateSha256": "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
+    },
+    {
+      "name": "ripgrep/tikv-jemalloc-sys",
+      "version": "0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7",
+      "licenses": ["MIT"],
+      "targets": ["x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/tikv-jemalloc-sys/LICENSE-MIT.txt",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "source": "https://static.crates.io/crates/tikv-jemalloc-sys/tikv-jemalloc-sys-0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7.crate"
+        }
+      ],
+      "crateSha256": "cd8aa5b2ab86a2cefa406d889139c162cbb230092f7d1d7cbc1716405d852a3b"
+    },
+    {
+      "name": "ripgrep/tikv-jemallocator",
+      "version": "0.6.1",
+      "licenses": ["MIT"],
+      "targets": ["x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/tikv-jemallocator/LICENSE-MIT.txt",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "source": "https://static.crates.io/crates/tikv-jemallocator/tikv-jemallocator-0.6.1.crate"
+        }
+      ],
+      "crateSha256": "0359b4327f954e0567e69fb191cf1436617748813819c94b8cd4a431422d053a"
+    },
+    {
+      "name": "ripgrep/walkdir",
+      "version": "2.5.0",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/walkdir/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://static.crates.io/crates/walkdir/walkdir-2.5.0.crate"
+        },
+        {
+          "path": "legal/walkdir/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://static.crates.io/crates/walkdir/walkdir-2.5.0.crate"
+        }
+      ],
+      "crateSha256": "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
+    },
+    {
+      "name": "ripgrep/winapi-util",
+      "version": "0.1.11",
+      "licenses": ["MIT"],
+      "targets": ["x86_64-pc-windows-msvc"],
+      "notices": [
+        {
+          "path": "legal/winapi-util/COPYING.txt",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f",
+          "source": "https://static.crates.io/crates/winapi-util/winapi-util-0.1.11.crate"
+        },
+        {
+          "path": "legal/winapi-util/LICENSE-MIT.txt",
+          "sha256": "cb3c929a05e6cbc9de9ab06a4c57eeb60ca8c724bef6c138c87d3a577e27aa14",
+          "source": "https://static.crates.io/crates/winapi-util/winapi-util-0.1.11.crate"
+        }
+      ],
+      "crateSha256": "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+    },
+    {
+      "name": "ripgrep/windows-link",
+      "version": "0.2.1",
+      "licenses": ["MIT"],
+      "targets": ["x86_64-pc-windows-msvc"],
+      "notices": [
+        {
+          "path": "legal/windows-link/license-mit.txt",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+          "source": "https://static.crates.io/crates/windows-link/windows-link-0.2.1.crate"
+        }
+      ],
+      "crateSha256": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+    },
+    {
+      "name": "ripgrep/windows-sys",
+      "version": "0.61.2",
+      "licenses": ["MIT"],
+      "targets": ["x86_64-pc-windows-msvc"],
+      "notices": [
+        {
+          "path": "legal/windows-sys/license-mit.txt",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+          "source": "https://static.crates.io/crates/windows-sys/windows-sys-0.61.2.crate"
+        }
+      ],
+      "crateSha256": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+    },
+    {
+      "name": "ripgrep/Unicode-data",
+      "version": "16.0.0",
+      "licenses": ["Unicode-DFS-2016"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/Unicode-data/LICENSE-UNICODE.txt",
+          "sha256": "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3",
+          "source": "https://static.crates.io/crates/regex-syntax/regex-syntax-0.8.8.crate"
+        }
+      ]
+    },
+    {
+      "name": "ripgrep/PCRE2",
+      "version": "10.45",
+      "licenses": ["BSD-3-Clause WITH PCRE2-exception"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/PCRE2/LICENCE.txt",
+          "sha256": "9cf7ac6976099a1d856826d3ef1b093bd6b84489dc6100628ac79e740cf9885a",
+          "source": "https://raw.githubusercontent.com/PCRE2Project/pcre2/pcre2-10.45/LICENCE.md"
+        }
+      ]
+    },
+    {
+      "name": "ripgrep/SLJIT",
+      "version": "0.95",
+      "licenses": ["BSD-2-Clause"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/SLJIT/COPYRIGHT.txt",
+          "sha256": "5f216505c0f6ea3273caec89e766eef93cdeb7bbb0c429f9360116d7c938feeb",
+          "source": "https://static.crates.io/crates/pcre2-sys/pcre2-sys-0.2.10.crate"
+        }
+      ]
+    },
+    {
+      "name": "ripgrep/Rust-standard-library",
+      "version": "695857bc3f72ec4f59c79f323460fe488c38a53f",
+      "licenses": ["MIT", "Unicode-3.0"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/Rust-standard-library/LICENSE-MIT.txt",
+          "sha256": "b71bd43a069ca0641a9ecfe585ca7b3c53b5cc1608f8b68321168698e28b5ea1",
+          "source": "https://raw.githubusercontent.com/rust-lang/rust/695857bc3f72ec4f59c79f323460fe488c38a53f/LICENSE-MIT"
+        },
+        {
+          "path": "legal/Rust-standard-library/LICENSE-UNICODE.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+          "source": "https://raw.githubusercontent.com/rust-lang/rust/695857bc3f72ec4f59c79f323460fe488c38a53f/LICENSES/Unicode-3.0.txt"
+        },
+        {
+          "path": "legal/Rust-standard-library/IN-TREE-COPYRIGHT.txt",
+          "sha256": "53bb0afe69cee0c510fadb1b44fe793f14b7f06fa0412354e97349a339510b06",
+          "source": "https://static.rust-lang.org/dist/2025-10-22/rustc-nightly-x86_64-unknown-linux-gnu.tar.xz"
+        }
+      ]
+    },
+    {
+      "name": "ripgrep/compiler-rt",
+      "version": "4f74b76fb69688474e073fb26b316d9ea571388f",
+      "licenses": ["Apache-2.0 WITH LLVM-exception"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/compiler-rt/LICENSE.txt",
+          "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+          "source": "https://raw.githubusercontent.com/rust-lang/llvm-project/4f74b76fb69688474e073fb26b316d9ea571388f/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "name": "ripgrep/jemalloc",
+      "version": "5.3.0-e13ca993e8ccb9ba9847cc330696e02839f328f7",
+      "licenses": ["BSD-2-Clause"],
+      "targets": ["x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/jemalloc/COPYING.txt",
+          "sha256": "94aa2caa98c25d942f58b956c71dba6a99ff98fc3a31cbc669fe2a4cd0268b53",
+          "source": "https://static.crates.io/crates/tikv-jemalloc-sys/tikv-jemalloc-sys-0.6.1+5.3.0-1-ge13ca993e8ccb9ba9847cc330696e02839f328f7.crate"
+        }
+      ]
+    },
+    {
+      "name": "ripgrep/musl",
+      "version": "1.2.3",
+      "licenses": ["MIT", "BSD-2-Clause"],
+      "targets": ["x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/musl/COPYRIGHT.txt",
+          "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+          "source": "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.3"
+        }
+      ],
+      "versionEvidence": "https://raw.githubusercontent.com/rust-lang/rust/695857bc3f72ec4f59c79f323460fe488c38a53f/src/ci/docker/scripts/musl-toolchain.sh; Rust self-contained x86_64-unknown-linux-musl static linkage."
+    },
+    {
+      "name": "ripgrep/libunwind",
+      "version": "4f74b76fb69688474e073fb26b316d9ea571388f",
+      "licenses": ["Apache-2.0 WITH LLVM-exception"],
+      "targets": ["x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/libunwind/LICENSE.txt",
+          "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+          "source": "https://raw.githubusercontent.com/rust-lang/llvm-project/4f74b76fb69688474e073fb26b316d9ea571388f/libunwind/LICENSE.TXT"
+        }
+      ]
+    },
+    {
+      "name": "ripgrep/MSVC-runtime",
+      "version": "2015-2022",
+      "licenses": ["LicenseRef-MSVC-runtime"],
+      "targets": ["x86_64-pc-windows-msvc"],
+      "notices": [
+        {
+          "path": "legal/MSVC-runtime/LICENSE.txt",
+          "sha256": "ed875263593823eb4b685cd543eda0ab075a6f57a76f7718908f2237466c442f",
+          "source": "https://visualstudio.microsoft.com/wp-content/uploads/2021/09/Visual-C-Runtime-2015-2022-License-1.docx"
+        }
+      ]
+    },
+    {
+      "name": "ripgrep/Rust-std/cfg-if",
+      "version": "1.0.1",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/Rust-std/cfg-if/LICENSE-MIT.txt",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "source": "https://static.crates.io/crates/cfg-if/cfg-if-1.0.1.crate"
+        }
+      ],
+      "crateSha256": "9555578bc9e57714c812a1f84e4fc5b4d21fcb063490c624de019f7464c91268"
+    },
+    {
+      "name": "ripgrep/Rust-std/hashbrown",
+      "version": "0.15.5",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/Rust-std/hashbrown/LICENSE-MIT.txt",
+          "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+          "source": "https://static.crates.io/crates/hashbrown/hashbrown-0.15.5.crate"
+        }
+      ],
+      "crateSha256": "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
+    },
+    {
+      "name": "ripgrep/Rust-std/rustc-demangle",
+      "version": "0.1.26",
+      "licenses": ["MIT"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/Rust-std/rustc-demangle/LICENSE-MIT.txt",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
+          "source": "https://static.crates.io/crates/rustc-demangle/rustc-demangle-0.1.26.crate"
+        }
+      ],
+      "crateSha256": "56f7d92ca342cea22a06f2121d944b4fd82af56988c270852495420f961d4ace"
+    },
+    {
+      "name": "ripgrep/Rust-std/addr2line",
+      "version": "0.25.0",
+      "licenses": ["MIT"],
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/Rust-std/addr2line/LICENSE-MIT.txt",
+          "sha256": "e99d88d232bf57d70f0fb87f6b496d44b6653f99f8a63d250a54c61ea4bcde40",
+          "source": "https://static.crates.io/crates/addr2line/addr2line-0.25.0.crate"
+        }
+      ],
+      "crateSha256": "9acbfca36652500c911ddb767ed433e3ed99b032b5d935be73c6923662db1d43"
+    },
+    {
+      "name": "ripgrep/Rust-std/gimli",
+      "version": "0.32.0",
+      "licenses": ["MIT"],
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/Rust-std/gimli/LICENSE-MIT.txt",
+          "sha256": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0",
+          "source": "https://static.crates.io/crates/gimli/gimli-0.32.0.crate"
+        }
+      ],
+      "crateSha256": "93563d740bc9ef04104f9ed6f86f1e3275c2cdafb95664e26584b9ca807a8ffe"
+    },
+    {
+      "name": "ripgrep/Rust-std/miniz_oxide",
+      "version": "0.8.9",
+      "licenses": ["MIT"],
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/Rust-std/miniz_oxide/LICENSE-MIT.txt",
+          "sha256": "799e9ca9d179295ef372f25d3769cdda7d25bb2668add6a6a1e22d1e4c678b8d",
+          "source": "https://static.crates.io/crates/miniz_oxide/miniz_oxide-0.8.9.crate"
+        }
+      ],
+      "crateSha256": "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+    },
+    {
+      "name": "ripgrep/Rust-std/adler2",
+      "version": "2.0.1",
+      "licenses": ["MIT"],
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/Rust-std/adler2/LICENSE-MIT.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://static.crates.io/crates/adler2/adler2-2.0.1.crate"
+        }
+      ],
+      "crateSha256": "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+    },
+    {
+      "name": "ripgrep/Rust-std/object",
+      "version": "0.37.3",
+      "licenses": ["MIT"],
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/Rust-std/object/LICENSE-MIT.txt",
+          "sha256": "0b74dfa0bcee5c420c6b7f67b4b2658f9ab8388c97b8e733975f2cecbdd668a6",
+          "source": "https://static.crates.io/crates/object/object-0.37.3.crate"
+        }
+      ],
+      "crateSha256": "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
+    },
+    {
+      "name": "ripgrep/Rust-std/memchr",
+      "version": "2.7.5",
+      "licenses": ["MIT"],
+      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-musl"],
+      "notices": [
+        {
+          "path": "legal/Rust-std/memchr/LICENSE-MIT.txt",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+          "source": "https://static.crates.io/crates/memchr/memchr-2.7.5.crate"
+        }
+      ],
+      "crateSha256": "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
+    },
+    {
+      "name": "ripgrep/compiler_builtins",
+      "version": "0.1.160",
+      "licenses": ["MIT", "Apache-2.0 WITH LLVM-exception"],
+      "targets": [
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-musl"
+      ],
+      "notices": [
+        {
+          "path": "legal/compiler_builtins/LICENSE.txt",
+          "sha256": "ab6eec6caf0fa5775e411c7a8bc6a45c4ef2956b0980b157ab74fc5cd62a928b",
+          "source": "https://raw.githubusercontent.com/rust-lang/rust/695857bc3f72ec4f59c79f323460fe488c38a53f/library/compiler-builtins/LICENSE.txt"
+        }
+      ],
+      "sourceCommit": "695857bc3f72ec4f59c79f323460fe488c38a53f"
+    }
+  ]
+}

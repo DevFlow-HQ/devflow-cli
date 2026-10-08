@@ -3,7 +3,9 @@ import { supportedBundleInputRules } from "../src/composition/main.js";
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin";
 import pkg from "../package.json" with { type: "json" };
 import { buildShippedBundles } from "./shipped-bundles.js";
-import { TARGETS, hostTargetKey } from "./targets.js";
+import { TARGETS, hostTargetKey, type CompileTarget } from "./targets.js";
+import { readFileSync } from "node:fs";
+import { ripgrepInput, verifyEmbeddedRipgrep } from "./embedded-ripgrep.js";
 
 // Compiles the shell to a Bun single-file executable, one per gated target
 // (ADR 0030): Windows x64, macOS arm64, Linux x64. `--all` cross-compiles the
@@ -35,23 +37,25 @@ export function sharedBuildInput(): Bun.BuildConfig {
   };
 }
 
-async function compile(
-  triple: Bun.Build.CompileTarget,
-  outfile: string,
-): Promise<void> {
+async function compile(target: CompileTarget): Promise<void> {
+  const helper = ripgrepInput(target);
+  const outfile = `dist/${target.outfile}`;
   const result = await Bun.build({
     ...sharedBuildInput(),
     compile: {
-      target: triple,
-      outfile: `dist/${outfile}`,
-      assets: [SHIPPED_BUNDLE_DIR],
+      target: target.triple,
+      outfile,
+      assets: [SHIPPED_BUNDLE_DIR, helper.path],
     },
   });
   if (!result.success) {
     for (const log of result.logs) console.error(log);
-    throw new Error(`bun build --compile failed for ${triple}.`);
+    throw new Error(`bun build --compile failed for ${target.triple}.`);
   }
-  console.log(`Built dist/${outfile} (${triple}).`);
+  verifyEmbeddedRipgrep(target, readFileSync(outfile));
+  console.log(
+    `Built ${outfile} (${target.triple}), with pinned ripgrep ${helper.version}.`,
+  );
 }
 
 if (import.meta.main) {
@@ -71,6 +75,6 @@ if (import.meta.main) {
         `No gated target for ${process.platform}-${process.arch}; the three targets are ${Object.keys(TARGETS).join(", ")}.`,
       );
     }
-    await compile(TARGETS[key].triple, TARGETS[key].outfile);
+    await compile(TARGETS[key]);
   }
 }

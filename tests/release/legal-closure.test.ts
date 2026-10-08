@@ -138,3 +138,19 @@ test("nativePackageFor maps each target to its embedded @opentui native", () => 
     "@opentui/core-linux-x64",
   );
 });
+
+test("m10-audit-embedded-ripgrep-release: exceptions cannot admit unrelated runtime components", () => {
+  for (const license of [
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "BSD-3-Clause WITH PCRE2-exception",
+    "Apache-2.0 WITH LLVM-exception",
+    "LicenseRef-MSVC-runtime",
+  ]) {
+    const problems = verifyClosureNotices(
+      [{ name: "unrelated", version: "1.0.0", license }],
+      `${COVERING_NOTICES}\n\`unrelated\` \`1.0.0\`\n${license}`,
+    );
+    assert.ok(problems.some((p) => /not a recognised licence family/.test(p)));
+  }
+});
