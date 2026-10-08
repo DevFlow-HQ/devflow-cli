@@ -1,3 +1,4 @@
+import { PALETTES } from "./palette-expectations.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSignal } from "solid-js";
@@ -13,6 +14,7 @@ import type {
 import {
   resizeWorkbench,
   previewPreferences,
+  hexRgb,
   runOf,
   events,
   wrappingEvents,
@@ -425,7 +427,7 @@ test("timeline rows wrap at the width instead of clipping and rewrap on resize (
   const rowLines = () => {
     const lines = timelineLines(t.captureCharFrame());
     return lines.slice(
-      0,
+      lines.findIndex((line) => line.includes("T000")),
       lines.findIndex((line) => line.trim() === ""),
     );
   };
@@ -611,6 +613,7 @@ test("[step-session-dividers] the timeline marks each Step and Harness Session w
   // when both begin at once; a Step divider on every change of Step, and again
   // after an Iteration completes. A shared Session draws no second Session divider.
   assert.deepEqual(dividers(lines), [
+    "─ Beginning of Run history",
     "═ Conversation · spec",
     "─ Step · grill",
     "─ Step · write-spec",
@@ -707,6 +710,11 @@ test("[step-session-dividers] dividers scroll with their rows: the anchor holds 
   await press(t, renderer, "home", { alt: true });
   const top = timelineLines(t.captureCharFrame());
   assert.deepEqual(dividers(top.slice(0, 1)), ["─ Step · s0"]);
+  await press(t, renderer, "down", { alt: true });
+  assert.match(
+    timelineLines(t.captureCharFrame())[0]!,
+    /Beginning of Run history/,
+  );
   await press(t, renderer, "down", { alt: true });
   assert.match(timelineLines(t.captureCharFrame())[0]!, /Step Attempt e0/);
   await press(t, renderer, "end", { alt: true });
@@ -1300,7 +1308,12 @@ for (const width of [40, 100]) {
           fallback === "tie-later" ? "↳ OLD_3" : "↳ NEW_1",
         );
       } else {
-        assert.equal(historyBadge(wb.t.captureCharFrame()), 7);
+        assert.equal(historyBadge(wb.t.captureCharFrame()), 8); // Session + beginning marker + seven visible events
+        await press(wb.t, wb.renderer, "down", { alt: true });
+        assert.match(
+          firstHistoryLine(wb.t.captureCharFrame()),
+          /Beginning of Run history/,
+        );
         await press(wb.t, wb.renderer, "down", { alt: true });
         assert.match(firstHistoryLine(wb.t.captureCharFrame()), /NEW_0/);
       }
@@ -1379,7 +1392,7 @@ for (const width of [40, 100]) {
     assert.equal(firstHistoryLine(wb.t.captureCharFrame()), returned);
     // Returning content never silently attaches; the resized 19-line viewport (100
     // or 40 columns, height 24) shows rows up to the badge.
-    assert.equal(historyBadge(wb.t.captureCharFrame()), width === 40 ? 12 : 13);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 13); // two marker lines leave seventeen visible events
   });
 }
 
@@ -1403,7 +1416,12 @@ for (const width of [40, 100]) {
     await press(wb.t, wb.renderer, "home", { alt: true });
     await press(wb.t, wb.renderer, "down", { alt: true });
     await press(wb.t, wb.renderer, "down", { alt: true });
-    assert.match(firstHistoryLine(wb.t.captureCharFrame()), /ROW_1/); // offset 2, below attached rules
+    assert.match(
+      firstHistoryLine(wb.t.captureCharFrame()),
+      /Beginning of Run history/,
+    );
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.match(firstHistoryLine(wb.t.captureCharFrame()), /ROW_1/); // below all three attached rules
     wb.control.setHistory(
       historyPage(
         [...retained.slice(1), activityRow("row-201", "ROW_201")],
@@ -1415,9 +1433,14 @@ for (const width of [40, 100]) {
       firstHistoryLine(wb.t.captureCharFrame()),
       /Earlier conversation is not shown/,
     ); // fallback row-2, offset zero
-    assert.equal(historyBadge(wb.t.captureCharFrame()), 196); // nine-line viewport
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 197); // separate beginning marker leaves one fewer visible event
     await press(wb.t, wb.renderer, "down", { alt: true });
     assert.match(firstHistoryLine(wb.t.captureCharFrame()), /Conversation/);
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.match(
+      firstHistoryLine(wb.t.captureCharFrame()),
+      /Beginning of Run history/,
+    );
     await press(wb.t, wb.renderer, "down", { alt: true });
     assert.match(firstHistoryLine(wb.t.captureCharFrame()), /ROW_2/);
   });
@@ -1569,7 +1592,7 @@ for (const width of [40, 100]) {
         owner === "checkpoint"
           ? firstHistoryLine(wb.t.captureCharFrame())
           : "ROW_5";
-      const expectedBadge = owner === "checkpoint" ? 14 : badge;
+      const expectedBadge = owner === "checkpoint" ? 15 : badge;
       if (owner === "checkpoint") assert.notEqual(expectedAnchor, "ROW_5");
       if (owner === "dialog") {
         // The Port-driven palette takes Escape from the Renderer Port.
@@ -1586,6 +1609,12 @@ for (const width of [40, 100]) {
       }
       assert.equal(firstHistoryLine(wb.t.captureCharFrame()), expectedAnchor);
       assert.equal(historyBadge(wb.t.captureCharFrame()), expectedBadge);
+      if (owner === "checkpoint") {
+        // The separate beginning marker shifts the page navigation by one line.
+        // ROW_14 is the last complete row; the fifteen later activities stay below.
+        assert.match(wb.t.captureCharFrame(), /ROW_14\b/);
+        assert.doesNotMatch(wb.t.captureCharFrame(), /ROW_15\b/);
+      }
       if (owner === "confirmation")
         assert.doesNotMatch(
           wb.t.captureCharFrame(),
@@ -1655,12 +1684,210 @@ test("m10-audit-truthful-keys: Review checkpoint preserves history navigation an
   assert.match(wb.t.captureCharFrame(), /Jump to latest/);
   await press(wb.t, wb.renderer, "home", { alt: true });
   assert.match(wb.t.captureCharFrame(), /e0\b/);
+  assert.match(
+    firstHistoryLine(wb.t.captureCharFrame()),
+    /Beginning of Run history/,
+  );
   await wb.t.mockMouse.scroll(5, 4, "down");
   await wb.t.renderOnce();
-  assert.doesNotMatch(timelineLines(wb.t.captureCharFrame())[0] ?? "", /e0\b/);
+  assert.equal(
+    firstHistoryLine(wb.t.captureCharFrame()),
+    "T000 ▸ Step Attempt e0",
+  );
+  await wb.t.mockMouse.scroll(5, 4, "down");
+  await wb.t.renderOnce();
+  assert.equal(
+    firstHistoryLine(wb.t.captureCharFrame()),
+    "T001 ▸ Step Attempt e1",
+  );
   await press(wb.t, wb.renderer, "end", { alt: true });
   assert.deepEqual(timelineLines(wb.t.captureCharFrame()), latest);
   await press(wb.t, wb.renderer, "right");
   await press(wb.t, wb.renderer, "return");
   assert.equal(wb.control.answers[0]?.answer, "stop");
 });
+for (const width of [40, 100, 120, 121]) {
+  test(`m10-audit-anchor-content-offset: eviction attaches and insertion moves dividers without moving wrapped content or its badge at ${width}`, async () => {
+    const wb = await mountHistory(width, 14, true);
+    const columns = width - 2 - (width > 120 ? 43 : 0);
+    const heldLine = "CONTENT_ANCHOR".padEnd(columns - 4, "A");
+    const nextLine = "CONTENT_NEXT".padEnd(columns - 4, "B");
+    const anchor = {
+      ...historyRow(
+        "content-anchor",
+        `${"P".repeat(columns)} ${heldLine} ${nextLine}\n` +
+          "LARGE_BODY\n".repeat(600),
+      ),
+      step: "repair",
+    };
+    const before = { ...activityRow("before", "BEFORE"), step: "repair" };
+    const tail = Array.from({ length: 25 }, (_, i) => ({
+      ...activityRow(`tail-${i}`),
+      step: "repair",
+    }));
+    const first = () =>
+      timelineLines(wb.t.captureCharFrame())[0]!
+        .slice(0, width > 120 ? width - 43 : width)
+        .trim();
+    wb.control.setHistory(historyPage([before, anchor, ...tail]));
+    await wb.t.renderOnce();
+    await press(wb.t, wb.renderer, "home", { alt: true });
+    for (let i = 0; i < 20 && first() !== heldLine; i++)
+      await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.equal(first(), heldLine);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 26); // anchor continues below the viewport, then 25 events
+
+    wb.control.setHistory(historyPage([anchor, ...tail], true));
+    await wb.t.renderOnce();
+    assert.equal(
+      first(),
+      heldLine,
+      "new leading dividers must not consume the content offset",
+    );
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 26);
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /Earlier conversation|Conversation ·/,
+    );
+
+    wb.control.setHistory(historyPage([before, anchor, ...tail], true));
+    await wb.t.renderOnce();
+    assert.equal(
+      first(),
+      heldLine,
+      "moving the Session divider to the inserted row must not move content",
+    );
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 26);
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.equal(first(), nextLine);
+    await press(wb.t, wb.renderer, "up", { alt: true });
+    assert.equal(first(), heldLine);
+    resizeWorkbench(wb.t, wb.renderer, width, 18);
+    await wb.t.renderOnce();
+    assert.equal(first(), heldLine);
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 26);
+    noOverflow(wb.t.captureCharFrame(), width);
+    await type(wb.t, "draft");
+    await press(wb.t, wb.renderer, "home"); // native editing keeps the paused content
+    assert.equal(first(), heldLine);
+    assert.match(wb.t.captureCharFrame(), /draft/);
+    await press(wb.t, wb.renderer, "end", { alt: true });
+    assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
+    assert.match(wb.t.captureCharFrame(), /tail-24/);
+  });
+}
+
+for (const appearance of ["dark", "light"] as const) {
+  for (const width of [40, 100, 120, 121]) {
+    test(`m10-audit-anchor-content-offset: ${appearance} divider changes preserve a short anchor and exact event count at ${width}`, async () => {
+      const base = previewPreferences();
+      const wb = await mountWorkbench(
+        runOf({
+          sessions: [
+            {
+              session: "conversation",
+              name: "Conversation",
+              availability: "open",
+            },
+          ],
+        }),
+        width,
+        14,
+        undefined,
+        true,
+        undefined,
+        {
+          ...base,
+          snapshot: () => ({
+            ...base.snapshot(),
+            preferences: { theme: "everforest", appearance },
+          }),
+        },
+      );
+      const first = () =>
+        timelineLines(wb.t.captureCharFrame())[0]!
+          .slice(0, width > 120 ? width - 43 : width)
+          .trim();
+      const before = activityRow("before", "BEFORE");
+      const anchor = historyRow(
+        "anchor",
+        "FIRST_CONTENT\nHELD_CONTENT\nLAST_CONTENT",
+      );
+      const tail = Array.from({ length: 25 }, (_, i) =>
+        activityRow(`tail-${i}`),
+      );
+      const initial = [before, anchor, ...tail];
+      wb.control.setHistory(historyPage(initial));
+      await wb.t.renderOnce();
+      await press(wb.t, wb.renderer, "home", { alt: true });
+      for (let i = 0; i < 20 && first() !== "HELD_CONTENT"; i++)
+        await press(wb.t, wb.renderer, "down", { alt: true });
+      assert.equal(first(), "HELD_CONTENT");
+      // This Command Run has no metadata slots: nine conversation lines show the last two anchor lines and seven events.
+      assert.equal(historyBadge(wb.t.captureCharFrame()), 18);
+      for (const rows of [[anchor, ...tail], initial]) {
+        wb.control.setHistory(historyPage(rows, true));
+        await wb.t.renderOnce();
+        assert.equal(first(), "HELD_CONTENT");
+        assert.equal(historyBadge(wb.t.captureCharFrame()), 18);
+      }
+      const span = wb.t
+        .captureSpans()
+        .lines[1]!.spans.find((span) => span.text.includes("HELD_CONTENT"));
+      assert.ok(span);
+      assert.deepEqual(
+        [span.fg.r, span.fg.g, span.fg.b].map((v) => Math.round(v * 255)),
+        hexRgb(PALETTES.find((p) => p.name === "everforest")![appearance]),
+      );
+      // Resize both the drawing renderer and the injected Port, crossing the sidebar boundary.
+      const resizedWidth = width === 121 ? 120 : 121;
+      resizeWorkbench(wb.t, wb.renderer, resizedWidth, 14);
+      await wb.t.renderOnce();
+      assert.equal(
+        timelineLines(wb.t.captureCharFrame())[0]!
+          .slice(0, resizedWidth > 120 ? resizedWidth - 43 : resizedWidth)
+          .trim(),
+        "HELD_CONTENT",
+      );
+      assert.equal(historyBadge(wb.t.captureCharFrame()), 18);
+      noOverflow(wb.t.captureCharFrame(), resizedWidth);
+      await press(wb.t, wb.renderer, "down", { alt: true });
+      assert.match(timelineLines(wb.t.captureCharFrame())[0]!, /LAST_CONTENT/);
+    });
+  }
+}
+
+for (const width of [40, 100, 120, 121]) {
+  test(`m10-audit-anchor-content-offset: a streaming header remains complete when beginning and Session dividers attach or move at ${width}`, async () => {
+    const wb = await mountHistory(width);
+    const before = activityRow("before", "BEFORE");
+    const anchor = historyRow(
+      "header-anchor",
+      "BODY_FIRST\nBODY_LAST",
+      "preview",
+    );
+    const tail = Array.from({ length: 30 }, (_, i) => activityRow(`tail-${i}`));
+    const first = () =>
+      timelineLines(wb.t.captureCharFrame())[0]!
+        .slice(0, width > 120 ? width - 43 : width)
+        .trim();
+    wb.control.setHistory(historyPage([before, anchor, ...tail]));
+    await wb.t.renderOnce();
+    await press(wb.t, wb.renderer, "home", { alt: true });
+    for (let i = 0; i < 10 && first() !== "Assistant · streaming"; i++)
+      await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.equal(first(), "Assistant · streaming");
+    for (const rows of [
+      [anchor, ...tail],
+      [before, anchor, ...tail],
+    ]) {
+      wb.control.setHistory(historyPage(rows, true));
+      await wb.t.renderOnce();
+      assert.equal(first(), "Assistant · streaming");
+      assert.equal(historyBadge(wb.t.captureCharFrame()), 24); // three anchor lines plus six of thirty events
+      noOverflow(wb.t.captureCharFrame(), width);
+    }
+    await press(wb.t, wb.renderer, "down", { alt: true });
+    assert.equal(first(), "BODY_FIRST");
+  });
+}

@@ -1219,8 +1219,22 @@ test("a signal-halted Agent Step parks no compose for Steers its Turn dropped (#
   await wb.t.renderOnce();
   const frame = wb.t.captureCharFrame();
   assert.doesNotMatch(frame, /draft restored/);
-  assert.doesNotMatch(frame, /guidance that cannot be sent/);
+  // The drop stays readable in history; it is never restored into a compose.
+  assert.match(
+    frame,
+    /Steer · dropped by interrupt · guidance that cannot be sent/,
+  );
+  assert.doesNotMatch(frame, /^\s*>.*guidance that cannot be sent/m);
   assert.match(frame, /Run run-1 halted/);
+  await type(wb.t, "FRESH_DRAFT");
+  await press(wb.t, wb.renderer, "return");
+  assert.match(wb.t.captureCharFrame(), /^\s*> FRESH_DRAFT/m);
+  assert.doesNotMatch(
+    wb.t.captureCharFrame(),
+    /^\s*>.*guidance that cannot be sent/m,
+  );
+  assert.deepEqual(wb.control.sends, []);
+  assert.deepEqual(wb.control.followUps, []);
 });
 
 test("settlement observed before its receipt restores once after admission, with Enter already clearing the draft (#356, #420)", async () => {

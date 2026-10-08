@@ -283,6 +283,12 @@ jobs:
           tests/tui/run-workbench-file-cap.test.tsx
           tests/harness/observed-facts.test.ts
           tests/headless/run.test.ts
+      - name: m10-audit-anchor-content-offset
+        run: >-
+          bun run test --
+          -t '^m10-audit-anchor-content-offset(:|$)'
+          tests/tui/run-workbench-history-scroll.test.tsx
+          tests/tui/run-workbench-full-transcript.test.tsx
       - name: m10-audit-windows-release-check
         run: >-
           bun run test --

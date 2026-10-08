@@ -1,3 +1,8 @@
+import {
+  contentAnchorAt,
+  resolveContentAnchor,
+  type ContentAnchor,
+} from "./run-content-anchor.js";
 import { useLayoutObserver, type LayoutObserver } from "./layout-observer.js";
 import { TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
@@ -52,12 +57,7 @@ function entryAnnotation(entry: RunTranscriptEntryView): string {
 }
 
 type Anchor =
-  | { readonly mode: "latest" }
-  | {
-      readonly mode: "paused";
-      readonly id: string | undefined;
-      readonly offset: number;
-    };
+  { readonly mode: "latest" } | ({ readonly mode: "paused" } & ContentAnchor);
 
 /** Retained entries own their wrapped content and attached dividers. Offset zero
  * names the role header; negative offsets name its leading divider lines. Adding
@@ -120,7 +120,8 @@ function createEntryLayout(observe: LayoutObserver) {
         cached.widths.set(width, layout);
       }
       const result = {
-        id: entry.id,
+        key: entry.id,
+        height: layout.lines.length,
         start,
         prefix: layout.prefix,
         lines: layout.lines,
@@ -155,18 +156,10 @@ export function createTranscriptReader(deps: {
         (deps.interiorH() >= 4 ? 1 : 0) -
         (deps.interiorH() >= 5 ? 1 : 0),
     );
-  const anchorAt = (top: number): Anchor => {
-    const entries = layout();
-    const entry = entries
-      .slice()
-      .reverse()
-      .find((entry) => entry.start <= top);
-    return {
-      mode: "paused",
-      id: entry?.id,
-      offset: entry === undefined ? 0 : top - entry.start - entry.prefix,
-    };
-  };
+  const anchorAt = (top: number): Anchor => ({
+    mode: "paused",
+    ...contentAnchorAt(top, layout()),
+  });
   const position = createMemo(() => {
     const entries = layout();
     const held = anchor();
@@ -175,18 +168,11 @@ export function createTranscriptReader(deps: {
       const top = Math.max(0, total - height());
       return { top, total, anchor: anchorAt(top) };
     }
-    const entry = entries.find((entry) => entry.id === held.id) ?? entries[0];
-    const offset =
-      entry === undefined
-        ? 0
-        : Math.max(
-            -entry.prefix,
-            Math.min(held.offset, entry.lines.length - entry.prefix - 1),
-          );
+    const resolved = resolveContentAnchor(held, entries);
     return {
-      top: entry === undefined ? 0 : entry.start + entry.prefix + offset,
+      top: resolved.top,
       total,
-      anchor: { mode: "paused", id: entry?.id, offset } satisfies Anchor,
+      anchor: { mode: "paused", ...resolved.anchor } satisfies Anchor,
     };
   });
   // Commit a resize clamp within the surviving entry, so widening later cannot
@@ -327,7 +313,7 @@ export function createTranscriptReader(deps: {
     const held = position().anchor;
     const index =
       held.mode === "paused"
-        ? layout().findIndex((entry) => entry.id === held.id)
+        ? layout().findIndex((entry) => entry.key === held.id)
         : -1;
     return index < 0
       ? "Empty conversation"

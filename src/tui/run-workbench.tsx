@@ -1871,26 +1871,12 @@ export function RunWorkbench(props: {
   );
   createEffect(
     on(
-      () =>
-        [
-          timelineRows().map((row) => row.key),
-          timelineWrapped().heights,
-        ] as const,
-      ([keys, heights]) =>
-        setScroll((current) =>
-          reconcileHistoryScroll(current, { keys, heights }),
-        ),
+      () => timelineWrapped().rows,
+      (rows) => setScroll((current) => reconcileHistoryScroll(current, rows)),
     ),
   );
   const win = () =>
-    historyWindow(
-      scroll(),
-      {
-        keys: timelineRows().map((row) => row.key),
-        heights: timelineWrapped().heights,
-      },
-      viewportH(),
-    );
+    historyWindow(scroll(), timelineWrapped().rows, viewportH());
   const beginningVisible = () => win().top === 0;
   const visibleLines = createMemo(() => {
     const w = win();
@@ -1965,15 +1951,7 @@ export function RunWorkbench(props: {
   };
   const scrollBy = (action: TimelineAction) =>
     setScroll((prev) =>
-      scrollHistory(
-        prev,
-        action,
-        {
-          keys: timelineRows().map((row) => row.key),
-          heights: timelineWrapped().heights,
-        },
-        viewportH(),
-      ),
+      scrollHistory(prev, action, timelineWrapped().rows, viewportH()),
     );
 
   const moveSelection = (delta: number) => {

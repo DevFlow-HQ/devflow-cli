@@ -2,9 +2,10 @@ import stripAnsi from "strip-ansi";
 import { clip } from "./clip.js";
 import type { LayoutObserver } from "./layout-observer.js";
 import type { TimelineRow } from "./run-timeline-rows.js";
-import { wrapRows, type Rule } from "./wrap.js";
+import { wrapRows, wrapRules, type Rule } from "./wrap.js";
 
 const HANG = 4;
+const BEGINNING = { glyph: "─", title: "Beginning of Run history" };
 
 function sameRules(a: readonly Rule[], b: readonly Rule[]): boolean {
   return (
@@ -53,12 +54,11 @@ function collapsedOutput(output: string, width: number) {
 
 function rowText(
   row: TimelineRow,
-  first: boolean,
   expanded: boolean,
   width: number,
   reducedMotion: boolean,
 ): string {
-  const prefix = `  ${first ? "Beginning of Run history · " : ""}`;
+  const prefix = "  ";
   if (row.inspection !== undefined) return `  ▸ ${row.text}`;
   if (row.output !== undefined) {
     const output = stripAnsi(row.output.text)
@@ -98,11 +98,12 @@ export function createHistoryLayout(
   type Layout = {
     readonly key: string;
     readonly lines: readonly string[];
+    readonly height: number;
+    readonly prefix: number;
     readonly thoughtHeader: number;
   };
   type Cached = {
     row: TimelineRow;
-    readonly first: boolean;
     readonly rules: readonly Rule[];
     readonly widths: Map<number, Map<boolean, Layout>>;
   };
@@ -116,21 +117,16 @@ export function createHistoryLayout(
     for (const key of cache.keys()) if (!retained.has(key)) cache.delete(key);
     const layouts = rows.map((row, index) => {
       const first = index === 0;
-      const rules =
-        first && (row.thought !== undefined || row.inspection !== undefined)
-          ? [
-              ...(row.dividers ?? []),
-              { glyph: "─", title: "Beginning of Run history" },
-            ]
-          : (row.dividers ?? []);
+      const rules = first
+        ? [...(row.dividers ?? []), BEGINNING]
+        : (row.dividers ?? []);
       let cached = cache.get(row.key);
       if (
         cached === undefined ||
-        cached.first !== first ||
         !sameRules(cached.rules, rules) ||
         !sameContent(cached.row, row)
       ) {
-        cached = { row, first, rules, widths: new Map() };
+        cached = { row, rules, widths: new Map() };
         cache.set(row.key, cached);
       }
       // Inspection bodies may change without changing their collapsed label.
@@ -145,12 +141,18 @@ export function createHistoryLayout(
       let layout = variants.get(isExpanded);
       if (layout === undefined) {
         observe({ kind: "history", id: row.key, width });
-        const text = rowText(row, first, isExpanded, width, reducedMotion);
-        const lines = wrapRows([{ rules, text }], width, HANG).lines;
-        const thoughtHeader = row.thought?.live
-          ? lines.indexOf(text.split("\n")[0]!)
-          : -1;
-        layout = { key: row.key, lines, thoughtHeader };
+        const text = rowText(row, isExpanded, width, reducedMotion);
+        const leading = wrapRules(rules, width);
+        const lines = [...leading, ...wrapRows([text], width, HANG).lines];
+        const prefix = leading.length;
+        const thoughtHeader = row.thought?.live ? leading.length : -1;
+        layout = {
+          key: row.key,
+          lines,
+          height: lines.length,
+          prefix,
+          thoughtHeader,
+        };
         variants.set(isExpanded, layout);
       }
       return layout;

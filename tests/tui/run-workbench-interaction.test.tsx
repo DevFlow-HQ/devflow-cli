@@ -108,7 +108,7 @@ test("m10-workbench-interaction: the headerless conversation, sidebar, and meta 
   assert.match(frame, /· ship/);
   assert.match(frame, /○ Run created/); // timeline events in plain words
   assert.match(frame, /▸ Step Attempt passed/);
-  assert.equal(timelineLines(frame)[0]!.trim().startsWith("Beginning"), true);
+  assert.match(timelineLines(frame)[0]!, /^\s*─+ Beginning of Run history ─+/);
 
   // At 120 columns or less the current Step moves into the prompt's meta row.
   const narrow = await mountWorkbench(facts, 100, 30);

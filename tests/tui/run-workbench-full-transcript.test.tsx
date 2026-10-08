@@ -764,3 +764,108 @@ test("m10-workbench-interaction: a five-row transcript keeps content and a visib
   await press(wb.t, wb.renderer, "return");
   assert.match(wb.t.captureCharFrame(), /Session transcript/);
 });
+
+for (const appearance of ["dark", "light"] as const) {
+  for (const width of [40, 100, 120, 121]) {
+    test(`m10-audit-anchor-content-offset: ${appearance} retained transcript keeps wrapped content when a prepend attaches its Step divider at ${width}`, async () => {
+      const base = previewPreferences();
+      const wb = await mountWorkbench(
+        transcriptRun(),
+        width,
+        14,
+        undefined,
+        true,
+        undefined,
+        {
+          ...base,
+          snapshot: () => ({
+            ...base.snapshot(),
+            preferences: { theme: "everforest", appearance },
+          }),
+        },
+      );
+      const columns = width - 2;
+      const heldLine = "TRANSCRIPT_ANCHOR".padEnd(columns - 4, "A");
+      const nextLine = "TRANSCRIPT_NEXT".padEnd(columns - 4, "B");
+      wb.control.setTranscript("", {
+        found: true,
+        type: "transcript-page",
+        older: "c1",
+        entries: [
+          {
+            id: "retained-anchor",
+            session: "s",
+            role: "assistant",
+            step: "repair",
+            content:
+              `${"P".repeat(columns)} ${heldLine} ${nextLine}\n` +
+              "LARGE_TRANSCRIPT\n".repeat(600),
+          },
+        ],
+      });
+      wb.control.setTranscript("c1", {
+        found: true,
+        type: "transcript-page",
+        entries: [
+          {
+            id: "older",
+            session: "s",
+            role: "user",
+            step: "grill",
+            content: "OLDER",
+          },
+        ],
+      });
+      await openTranscriptDetails(wb);
+      await press(wb.t, wb.renderer, "home");
+      await press(wb.t, wb.renderer, "down");
+      await press(wb.t, wb.renderer, "down");
+      const first = () => wb.t.captureCharFrame().split("\n")[2]!.trim();
+      assert.equal(first(), heldLine);
+      await press(wb.t, wb.renderer, "p");
+      assert.equal(first(), heldLine);
+      assert.match(wb.t.captureCharFrame(), /Entry 2 · line 3/);
+      assert.doesNotMatch(
+        wb.t.captureCharFrame(),
+        /OLDER|Step ·|Conversation ·/,
+      );
+      const span = wb.t
+        .captureSpans()
+        .lines[2]!.spans.find((span) =>
+          span.text.includes("TRANSCRIPT_ANCHOR"),
+        );
+      assert.ok(span);
+      assert.deepEqual(
+        [span.fg.r, span.fg.g, span.fg.b].map((v) => Math.round(v * 255)),
+        hexRgb(PALETTES.find((p) => p.name === "everforest")![appearance]),
+      );
+      await press(wb.t, wb.renderer, "down");
+      assert.equal(first(), nextLine);
+      await press(wb.t, wb.renderer, "up");
+      resizeWorkbench(wb.t, wb.renderer, width, 18);
+      await wb.t.renderOnce();
+      assert.equal(first(), heldLine);
+      noOverflow(wb.t.captureCharFrame(), width);
+      await press(wb.t, wb.renderer, "up");
+      assert.equal(first(), "P".repeat(columns));
+      await press(wb.t, wb.renderer, "up");
+      assert.equal(first(), "◆ Assistant"); // content-relative offset zero
+      await press(wb.t, wb.renderer, "up");
+      assert.match(first(), /Step · repair/); // negative offset names the attached divider
+      assert.match(wb.t.captureCharFrame(), /Entry 2 · line divider/);
+      await press(wb.t, wb.renderer, "down");
+      assert.equal(first(), "◆ Assistant");
+      await press(wb.t, wb.renderer, "home");
+      assert.match(first(), /Conversation · s/);
+      await press(wb.t, wb.renderer, "end");
+      assert.match(wb.t.captureCharFrame(), /LARGE_TRANSCRIPT/);
+      await press(wb.t, wb.renderer, "escape");
+      assert.match(
+        wb.t.captureCharFrame(),
+        width === 40 ? /Details · Resources/ : /› Details/,
+      );
+      await press(wb.t, wb.renderer, "return");
+      assert.match(wb.t.captureCharFrame(), /Session transcript/);
+    });
+  }
+}
