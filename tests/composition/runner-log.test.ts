@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { statSync } from "node:fs";
 import test from "node:test";
 import { runRunnerInvocation } from "../../src/composition/main.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -16,20 +17,23 @@ function sink() {
   return {
     folder,
     notices,
-    logSink: {
-      folder,
-      clock: steppingClock(),
-      stderr: (text: string) => notices.push(text),
+    overrides: {
+      secantHome: makeTempDir("secant-runner-home-"),
+      logSink: {
+        folder,
+        clock: steppingClock(),
+        stderr: (text: string) => notices.push(text),
+      },
     },
   };
 }
 
 test("scenario and stage breadcrumbs and child facts become records, and a failure warns", async () => {
-  const { folder, notices, logSink } = sink();
+  const { folder, notices, overrides } = sink();
 
   const status = await runRunnerInvocation(
     "runtime-conformance",
-    logSink,
+    overrides,
     async (log) => {
       log.breadcrumb({ kind: "scenario-start", scenario: "first" });
       log.breadcrumb({
@@ -66,6 +70,9 @@ test("scenario and stage breadcrumbs and child facts become records, and a failu
     },
   );
   assert.equal(status, 3);
+  if (process.platform !== "win32") {
+    assert.equal(statSync(overrides.secantHome).mode & 0o777, 0o700);
+  }
   assert.deepEqual(notices, []);
 
   const { records } = readLog(folder);
@@ -130,11 +137,11 @@ test("scenario and stage breadcrumbs and child facts become records, and a failu
 });
 
 test("a runner program that throws records the failure and rethrows", async () => {
-  const { folder, logSink } = sink();
+  const { folder, overrides } = sink();
   const failure = new Error("runner body exploded");
 
   await assert.rejects(
-    runRunnerInvocation("terminal-lifecycle", logSink, async (log) => {
+    runRunnerInvocation("terminal-lifecycle", overrides, async (log) => {
       log.breadcrumb({ kind: "scenario-start", scenario: "quit" });
       throw failure;
     }),

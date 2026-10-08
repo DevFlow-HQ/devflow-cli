@@ -200,7 +200,7 @@ test("an unserializable record disables logging once without changing the outcom
   // fallback through the same composition entry the standalone runners use.
   const status = await runRunnerInvocation(
     "runtime-conformance",
-    overrides.logSink!,
+    overrides,
     async (log) => {
       log.breadcrumb({
         kind: "scenario-start",
@@ -242,19 +242,15 @@ test("the named-field scrub censors nested records and arrays without changing t
     safe: "Unicode: café 🐈\nsecond line",
   };
   assert.equal(
-    await runRunnerInvocation(
-      "runtime-conformance",
-      overrides.logSink!,
-      async (log) => {
-        // Intentional allowlist breach: the scrub is defence in depth if an
-        // observer ever puts a structured value in a semantic field.
-        log.breadcrumb({
-          kind: "scenario-start",
-          scenario: scenario as unknown as string,
-        });
-        return 0;
-      },
-    ),
+    await runRunnerInvocation("runtime-conformance", overrides, async (log) => {
+      // Intentional allowlist breach: the scrub is defence in depth if an
+      // observer ever puts a structured value in a semantic field.
+      log.breadcrumb({
+        kind: "scenario-start",
+        scenario: scenario as unknown as string,
+      });
+      return 0;
+    }),
     0,
   );
   const log = readLog(folder);

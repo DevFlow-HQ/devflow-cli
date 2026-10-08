@@ -35,6 +35,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   failure record (write-once; the TUI writes a render failure before draining live Runs) before a throw reaches the CLI host, whose catch names
   the file through `describeFatal`. A log failure is one stderr notice (held until the TUI's terminal is restored) that disables logging and
   changes no outcome, exit code, or stdout. Serialization failures use that same fallback; a failed or zero-progress write is never retried.
+- Invocation start restricts the home to `0700` before opening the log (#496). A failed or ineffective restriction is one Application startup notice;
+  Windows skips restriction. Creation modes never chmod existing files; SQLite owners pre-create new databases before opening them.
 - `SECANT_HOME`, `SECANT_LOG_DIR`, and `SECANT_LOG_DETAIL` are read side by side in one function, `resolveHostContext` (`wiring.ts`), which each
   client invocation calls twice (`runSecantInvocation`, then `wireApplication`) against the same environment; nothing below composition reads them.
   Records hold only allowlisted semantic fields and causes from `translateCause`; the recursive named-field scrub is a second layer. Tests reach the
@@ -57,7 +59,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   detail-off records, elapsed times included, are byte-identical to a build without them.
 - `runRunnerInvocation` (`runner-log.ts`, #326) is the standalone runner programs' log: one `runner` Secant invocation whose `RunnerBreadcrumb`s become
   `runner-*` records (a failed scenario or stage warns) and whose Process options record child facts. The runner passes the folder: it reads
-  `SECANT_LOG_DIR` itself, because the folder must outlive the temp root it removes.
+  `SECANT_LOG_DIR` itself, because the folder must outlive the temp root it removes. Runner tests pass a temporary home in the same wiring overrides.
 - Startup prunes only matching regular log files strictly older than 30 days in the resolved folder (#323), before opening the active file:
   its real mtime can be stale against an injected future clock. Prune failures are silent; they never call the log-write failure fallback.
 

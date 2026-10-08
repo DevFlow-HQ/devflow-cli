@@ -1,7 +1,9 @@
 export { openAgentAttemptTurn, waitingAgentTurn } from "./agent-attempt.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   existsSync,
+  openSync,
   mkdirSync,
   readdirSync,
   renameSync,
@@ -756,6 +758,10 @@ function openDatabase(
   migrations: MigrationsJournal,
   busyTimeoutMs = 5000,
 ): StoreDatabase {
+  if (process.platform !== "win32") {
+    // SQLite cannot set a creation mode. Append preserves existing bytes and modes.
+    closeSync(openSync(path, "a", 0o600));
+  }
   const sqlite = new Database(path);
   try {
     sqlite.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
@@ -1008,7 +1014,10 @@ export function openRunGroup(
   const processForRun =
     options.processForRun ?? ((): ProcessAdapter => options.process);
   const groupDir = join(secantHome, "runs", groupDirName(workspacePath));
-  mkdirSync(groupDir, { recursive: true });
+  mkdirSync(groupDir, {
+    recursive: true,
+    mode: process.platform === "win32" ? undefined : 0o700,
+  });
   const { db, sqlite, rebuilt } = openCoordination(
     join(groupDir, "coordination.db"),
     groupDir,

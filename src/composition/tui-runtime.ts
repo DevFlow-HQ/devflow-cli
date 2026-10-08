@@ -1,4 +1,5 @@
 import { appendFileSync } from "node:fs";
+import type { Problem } from "../application/projection-port.js";
 import {
   conhostConsoleProbe,
   createProcessStdinRelease,
@@ -73,14 +74,15 @@ export interface TuiOverrides extends WiringOverrides {
 }
 
 export async function runTuiApp(overrides: TuiOverrides = {}): Promise<number> {
-  return runSecantInvocation("tui", overrides, (log) =>
-    guardedLaunch(overrides, log),
+  return runSecantInvocation("tui", overrides, (log, startupNotices) =>
+    guardedLaunch(overrides, log, startupNotices),
   );
 }
 
 async function guardedLaunch(
   overrides: TuiOverrides,
   log: OperationalLog,
+  startupNotices: readonly Problem[],
 ): Promise<number> {
   const terminal = overrides.terminal ?? {
     interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
@@ -108,13 +110,14 @@ async function guardedLaunch(
       write: (text) => process.stdout.write(text),
       waitForKeypress: createStdinKeypress(process.stdin),
     },
-    () => launchTui(overrides, log),
+    () => launchTui(overrides, log, startupNotices),
   );
 }
 
 async function launchTui(
   overrides: TuiOverrides,
   log: OperationalLog,
+  startupNotices: readonly Problem[],
 ): Promise<number> {
   return withWiredApplication(
     { ...overrides, supportsInteractiveTurns: true },
@@ -214,5 +217,6 @@ async function launchTui(
         await drainLiveRuns();
       }
     },
+    startupNotices,
   );
 }

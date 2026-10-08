@@ -113,6 +113,8 @@ interface LogSinkOverrides {
  *  process. */
 export interface WiringOverrides {
   readonly secantHome?: string;
+  /** Inject a filesystem restriction failure at invocation start. */
+  readonly chmodHome?: (path: string, mode: number) => void;
   readonly launchCwd?: string;
   readonly engineVersion?: string;
   readonly hostPlatform?: Platform;
@@ -198,7 +200,7 @@ export interface Wiring extends Application {
   close(): Promise<void>;
   readonly catalog: Catalog;
   readonly runGroup: RunGroup;
-  /** The startup ensure's notices, one per Shipped Bundle it could not install. */
+  /** Invocation notices, including each Shipped Bundle it could not install. */
   readonly startupNotices: readonly Problem[];
 }
 
@@ -231,6 +233,7 @@ export function wireApplication(
   overrides: WiringOverrides = {},
   log?: Pick<OperationalLog, "record">,
   lifetime = new InvocationLifetime(),
+  startupNotices: readonly Problem[] = [],
 ): Wiring {
   // Native child observations can arrive after the bounded report. Stop before
   // stores/logging close, while keeping their Harness resource owner alive.
@@ -321,6 +324,7 @@ export function wireApplication(
     lifetime.harnessRegistry = harnessRegistry;
     const application = createApplication({
       catalog,
+      startupNotices,
       launchWorkspacePath,
       engineVersion,
       ...(host !== undefined ? { hostPlatform: host } : {}),
@@ -350,7 +354,7 @@ export function wireApplication(
     lifetime.application = application;
     // Every startup, in both roots, before either client reads (ADR 0029). A
     // failure is a notice, never a thrown startup error.
-    const startupNotices = application.ensureShippedBundles(
+    const notices = application.ensureShippedBundles(
       shippedBundleFiles(
         overrides.shippedBundleDir ?? join(import.meta.dirname, "builtin"),
       ),
@@ -358,7 +362,7 @@ export function wireApplication(
     return {
       catalog,
       runGroup,
-      startupNotices,
+      startupNotices: notices,
       ...application,
       shutdown: () => lifetime.shutdown(),
       close: () => lifetime.dispose(),
@@ -684,6 +688,7 @@ export async function withWiredApplication<T>(
   overrides: WiringOverrides,
   log: OperationalLog,
   use: (wiring: Wiring) => Promise<T>,
+  startupNotices: readonly Problem[] = [],
 ): Promise<T> {
   const lifetime = new InvocationLifetime();
   let result:
@@ -692,7 +697,9 @@ export async function withWiredApplication<T>(
   try {
     result = {
       ok: true,
-      value: await use(wireApplication(overrides, log, lifetime)),
+      value: await use(
+        wireApplication(overrides, log, lifetime, startupNotices),
+      ),
     };
   } catch (error) {
     result = { ok: false, error };

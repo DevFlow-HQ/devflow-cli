@@ -11,6 +11,9 @@ const ledgerPath = join(root, "docs", "subprocess-test-migration-ledger.md");
 // A suite born over doubles has no real-child assertion to migrate. Keep its
 // rationale here, not as a second classification in the historical ledger.
 const PROCESS_FREE_TEST_FILES = new Set([
+  // Born process-free (#496): invocation start, real temporary files/SQLite, fake Process
+  // and Harness, and an injected Renderer Port; no child spawns.
+  "tests/composition/store-permissions.test.ts",
   // Production composition is present, but every wiring injects the fake Bundle
   // Process (#314): executable resolution (the default Codex Adapter's discovery
   // included), Commands, and Git stay on the double, and the scripted Turns run on

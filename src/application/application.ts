@@ -357,6 +357,8 @@ interface InteractiveContext extends ClaimedRun {
 // when the launch Workspace becomes approved.
 
 export interface ApplicationDependencies {
+  /** Invocation-start notices supplied by composition to both clients. */
+  readonly startupNotices?: readonly Problem[];
   readonly catalog: Catalog;
   /** Process reaches Preflight through composition. */
   readonly process: ProcessAdapter;
@@ -655,7 +657,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
         : { state: "unapproved" },
       installedBundleCount: catalog.countInstalledBundles(),
       runSummary: summarizeRuns(runGroup),
-      startupNotices: shippedBundles.notices,
+      startupNotices: [
+        ...(deps.startupNotices ?? []),
+        ...shippedBundles.notices,
+      ],
       harnesses: harnessChoices,
       actionOffers: approval
         ? []
@@ -4140,7 +4145,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         files,
         bundleCatalog.engineVersion,
       );
-      return shippedBundles.notices;
+      return [...(deps.startupNotices ?? []), ...shippedBundles.notices];
     },
   };
 }

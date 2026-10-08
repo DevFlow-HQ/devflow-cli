@@ -197,6 +197,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-file-input-resolution",
   "m10-audit-claude-fact-translation",
   "m10-audit-embedded-ripgrep-release",
+  "m10-audit-store-permissions",
   "m12-focused-check-scenarios",
   "m12-test-interface-ownership",
   "m12-renderer-test-lifecycle",

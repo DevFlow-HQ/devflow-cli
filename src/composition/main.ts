@@ -39,38 +39,43 @@ export async function withClients(
   fn: (clients: HeadlessClients) => number | Promise<number>,
   overrides: WiringOverrides = {},
 ): Promise<number> {
-  return runSecantInvocation("headless", overrides, (log) =>
-    withWiredApplication(overrides, log, async (wired) => {
-      const { projectionPort, bundleManagement, startupNotices } = wired;
-      const signals: NodeJS.Signals[] = ["SIGINT", "SIGHUP", "SIGTERM"];
-      let reraise: Promise<void> | undefined;
-      const onSignal = (signal: NodeJS.Signals): void => {
-        if (reraise !== undefined) return;
-        reraise = wired.close().finally(() => {
-          // The conventional exit status, recorded before the re-raise ends the
-          // process: no record after it could be written.
-          log.end(128 + constants.signals[signal], signal);
-          // Restore the default disposition and re-raise, so the process exits with
-          // the conventional 128 + signal code rather than a fabricated one.
-          for (const s of signals) process.off(s, onSignal);
-          process.kill(process.pid, signal);
-        });
-      };
-      for (const signal of signals) process.on(signal, onSignal);
-      try {
-        const status = await fn({
-          projectionPort,
-          bundleManagement,
-          startupNotices,
-        });
-        // A command can settle before the handler's drain does; wait for it, so the
-        // end record carries the signal status, not this one.
-        if (reraise !== undefined) await reraise;
-        return status;
-      } finally {
-        for (const signal of signals) process.off(signal, onSignal);
-      }
-    }),
+  return runSecantInvocation("headless", overrides, (log, startupNotices) =>
+    withWiredApplication(
+      overrides,
+      log,
+      async (wired) => {
+        const { projectionPort, bundleManagement, startupNotices } = wired;
+        const signals: NodeJS.Signals[] = ["SIGINT", "SIGHUP", "SIGTERM"];
+        let reraise: Promise<void> | undefined;
+        const onSignal = (signal: NodeJS.Signals): void => {
+          if (reraise !== undefined) return;
+          reraise = wired.close().finally(() => {
+            // The conventional exit status, recorded before the re-raise ends the
+            // process: no record after it could be written.
+            log.end(128 + constants.signals[signal], signal);
+            // Restore the default disposition and re-raise, so the process exits with
+            // the conventional 128 + signal code rather than a fabricated one.
+            for (const s of signals) process.off(s, onSignal);
+            process.kill(process.pid, signal);
+          });
+        };
+        for (const signal of signals) process.on(signal, onSignal);
+        try {
+          const status = await fn({
+            projectionPort,
+            bundleManagement,
+            startupNotices,
+          });
+          // A command can settle before the handler's drain does; wait for it, so the
+          // end record carries the signal status, not this one.
+          if (reraise !== undefined) await reraise;
+          return status;
+        } finally {
+          for (const signal of signals) process.off(signal, onSignal);
+        }
+      },
+      startupNotices,
+    ),
   );
 }
 

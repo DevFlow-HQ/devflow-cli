@@ -51,7 +51,7 @@ export async function runScenarios(
   write({ type: "program-start", at: Date.now() });
   const status = await runRunnerInvocation(
     program,
-    { folder: logFolder },
+    { logSink: { folder: logFolder } },
     async (log) => {
       let scenario = "";
       installBreadcrumbRecorder({

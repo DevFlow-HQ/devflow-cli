@@ -303,9 +303,18 @@ function readRunRecordRow(db: SQLiteBunDatabase): RunRecord | typeof DAMAGED {
 
 export function stageRunStore(params: TStageRunStoreParams): void {
   const { dir, record, openDatabase } = params;
-  mkdirSync(dir, { recursive: true });
-  mkdirSync(join(dir, "staging"), { recursive: true });
-  mkdirSync(join(dir, "diagnostics"), { recursive: true });
+  mkdirSync(dir, {
+    recursive: true,
+    mode: process.platform === "win32" ? undefined : 0o700,
+  });
+  mkdirSync(join(dir, "staging"), {
+    recursive: true,
+    mode: process.platform === "win32" ? undefined : 0o700,
+  });
+  mkdirSync(join(dir, "diagnostics"), {
+    recursive: true,
+    mode: process.platform === "win32" ? undefined : 0o700,
+  });
   const database = openDatabase(join(dir, "run.db"));
   try {
     database.db.transaction((tx) => {
@@ -789,7 +798,10 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
   function workingArea(): WorkingAreaResult {
     const path = join(params.runDir, "working");
     try {
-      mkdirSync(path, { recursive: true });
+      mkdirSync(path, {
+        recursive: true,
+        mode: process.platform === "win32" ? undefined : 0o700,
+      });
       // Inspect the entry itself: a link or Windows junction must never grant
       // its target, which could contain private Run truth or external files.
       if (!lstatSync(path).isDirectory()) {
@@ -985,8 +997,13 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       const diagnosticId = randomUUID();
       const diagnosticPath = join(diagnosticsDir, diagnosticId);
       const recorded = guardedWrite((tx) => {
-        mkdirSync(diagnosticsDir, { recursive: true });
-        writeFileSync(diagnosticPath, request.diagnostic);
+        mkdirSync(diagnosticsDir, {
+          recursive: true,
+          mode: process.platform === "win32" ? undefined : 0o700,
+        });
+        writeFileSync(diagnosticPath, request.diagnostic, {
+          mode: process.platform === "win32" ? undefined : 0o600,
+        });
         recordConflict({ db: tx, runId: params.runId, request, diagnosticId });
       });
       if (recorded.kind === "fenced") return FENCED_WRITE;
@@ -1039,7 +1056,10 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
         }) as const;
       try {
         // Throws when anything but a directory occupies the root.
-        mkdirSync(root, { recursive: true });
+        mkdirSync(root, {
+          recursive: true,
+          mode: process.platform === "win32" ? undefined : 0o700,
+        });
         // The area is canonical, so a root that resolves anywhere else is a link
         // the agent planted; emptying through it would delete outside the area.
         if (realpathSync(root) !== root) {
@@ -1056,7 +1076,10 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
           // Kept for a follow-up Turn (#354): nothing is emptied, so a link or a
           // file the agent planted at `dir` is refused rather than removed.
           const existing = lstatSync(dir, { throwIfNoEntry: false });
-          if (existing === undefined) mkdirSync(dir);
+          if (existing === undefined)
+            mkdirSync(dir, {
+              mode: process.platform === "win32" ? undefined : 0o700,
+            });
           else if (!existing.isDirectory()) {
             return unavailable(
               dir,
@@ -1067,7 +1090,10 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
         }
         // A link planted at `dir` itself is removed, never followed.
         rmSync(dir, { recursive: true, force: true });
-        mkdirSync(dir, { recursive: true });
+        mkdirSync(dir, {
+          recursive: true,
+          mode: process.platform === "win32" ? undefined : 0o700,
+        });
       } catch (cause) {
         return unavailable(dir, cause);
       }

@@ -46,14 +46,14 @@ interface RunnerLog {
 }
 
 /** Runs `program` as one Secant invocation of the `runner` client, writing to
- *  the sink `logSink` names. The runner chooses the folder: it reads the
+ *  the sink in `overrides`. The runner chooses the folder: it reads the
  *  inherited log folder itself, since its own temp folders are removed. */
 export function runRunnerInvocation(
   program: string,
-  logSink: NonNullable<WiringOverrides["logSink"]>,
+  overrides: Pick<WiringOverrides, "secantHome" | "logSink">,
   body: (log: RunnerLog) => Promise<number>,
 ): Promise<number> {
-  return runSecantInvocation("runner", { logSink }, (log) =>
+  return runSecantInvocation("runner", overrides, (log) =>
     body(runnerLog(log, program)),
   );
 }

@@ -22,7 +22,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   it newly installs.
 - Tree intactness is a size check per declared asset, not a hash (`treeIntact`), so a same-length edit survives until the next reinstall; the managed bytes
   remain the authority either way.
-- Extracted asset files are made read-only on POSIX only (`chmod 0o444`); Windows gets no read-only attribute, and directories stay writable on both, so a
+- Extracted asset files are made read-only on POSIX only (`chmod 0o400`); Windows gets no read-only attribute, and directories stay writable on both, so a
   rewrite can `rmSync` the old tree without a chmod pass first.
 - The installed asset root (`assetRoot`) is the one storage path that deliberately crosses the Interface — a Run reads the extracted layer from it; every
   other store path (the managed bytes, the tree layout) stays private (ADR 0025).

@@ -226,6 +226,11 @@ jobs:
           -t '^m10-audit-claude-fact-translation(:|$)'
           tests/harness/observed-facts.test.ts
           tests/headless/claude-fact-translation.test.ts
+      - name: m10-audit-store-permissions
+        run: >-
+          bun run test --
+          -t '^m10-audit-store-permissions(:|$)'
+          tests/composition/store-permissions.test.ts
       - name: m10-audit-guidance-refresh
         run: >-
           bun run test --

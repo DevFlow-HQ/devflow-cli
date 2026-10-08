@@ -441,8 +441,8 @@ test("an install extracts exactly the declared assets into a digest-named tree b
     `${digestOf(bytes)}.wfb`,
   ]);
   if (process.platform !== "win32") {
-    // POSIX: the tree's files are read-only.
-    assert.equal(statSync(join(root, "prompt.md")).mode & 0o222, 0);
+    // POSIX: extracted files remain read-only and readable only by their owner.
+    assert.equal(statSync(join(root, "prompt.md")).mode & 0o777, 0o400);
   }
 });
 

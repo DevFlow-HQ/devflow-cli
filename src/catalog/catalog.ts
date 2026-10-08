@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  openSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -224,6 +226,10 @@ type TCommitGrantParams = {
 };
 
 function openDatabase(path: string) {
+  if (process.platform !== "win32") {
+    // SQLite cannot set a creation mode. Append preserves existing bytes and modes.
+    closeSync(openSync(path, "a", 0o600));
+  }
   const database = new Database(path);
   try {
     // Serialize concurrent Secant processes at the database rather than corrupt.
@@ -248,7 +254,10 @@ export function openCatalog(
   options: CatalogOptions = {},
 ): Catalog {
   const readAssets: AssetReader = options.readAssets ?? (() => []);
-  mkdirSync(secantHome, { recursive: true });
+  mkdirSync(secantHome, {
+    recursive: true,
+    mode: process.platform === "win32" ? undefined : 0o700,
+  });
   const { database, db } = openDatabase(join(secantHome, "catalog.db"));
   // The digest-named managed store holds each Bundle's exact bytes as
   // `<digest>.wfb`, and beside each one the derived asset tree in `<digest>/`.
@@ -279,17 +288,25 @@ export function openCatalog(
     const staging = `${final}.staging`;
     rmSync(staging, { recursive: true, force: true });
     try {
-      mkdirSync(staging, { recursive: true });
+      mkdirSync(staging, {
+        recursive: true,
+        mode: process.platform === "win32" ? undefined : 0o700,
+      });
       for (const asset of assets) {
         const target = join(staging, asset.path);
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, asset.data);
+        mkdirSync(dirname(target), {
+          recursive: true,
+          mode: process.platform === "win32" ? undefined : 0o700,
+        });
+        writeFileSync(target, asset.data, {
+          mode: process.platform === "win32" ? undefined : 0o600,
+        });
         if (!Buffer.from(readFileSync(target)).equals(asset.data)) {
           throw new Error(
             `Catalog: the extracted asset ${asset.path} of ${digest} did not read back intact.`,
           );
         }
-        if (process.platform !== "win32") chmodSync(target, 0o444);
+        if (process.platform !== "win32") chmodSync(target, 0o400);
       }
       rmSync(final, { recursive: true, force: true });
       renameSync(staging, final);
@@ -450,8 +467,13 @@ export function openCatalog(
         const finalPath = bytesPath(install.digest);
         const stagePath = `${finalPath}.staging`;
         try {
-          mkdirSync(storeDir, { recursive: true });
-          writeFileSync(stagePath, install.bytes);
+          mkdirSync(storeDir, {
+            recursive: true,
+            mode: process.platform === "win32" ? undefined : 0o700,
+          });
+          writeFileSync(stagePath, install.bytes, {
+            mode: process.platform === "win32" ? undefined : 0o600,
+          });
           const storedDigest = createHash("sha256")
             .update(readFileSync(stagePath))
             .digest("hex");

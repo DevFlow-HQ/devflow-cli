@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
+  statSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -9,6 +11,7 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
+import type { Problem } from "../application/projection-port.js";
 import { translateCause, type SafeCause } from "../harness/harness.js";
 import {
   resolveHostContext,
@@ -232,8 +235,11 @@ function startOperationalLog(options: StartOptions): OperationalLog {
   pruneOperationalLogs(folder, clock.now());
   try {
     // Owner-only where the OS supports it; Windows ignores the modes.
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
-    fd = openSync(path, "a", 0o600);
+    mkdirSync(folder, {
+      recursive: true,
+      mode: process.platform === "win32" ? undefined : 0o700,
+    });
+    fd = openSync(path, "a", process.platform === "win32" ? undefined : 0o600);
   } catch (error) {
     disable(error);
   }
@@ -288,9 +294,34 @@ let active: OperationalLog | undefined;
 export async function runSecantInvocation(
   client: ClientKind,
   overrides: WiringOverrides,
-  body: (log: OperationalLog) => Promise<number>,
+  body: (
+    log: OperationalLog,
+    startupNotices: readonly Problem[],
+  ) => Promise<number>,
 ): Promise<number> {
   const context = resolveHostContext(overrides);
+  const startupNotices: Problem[] = [];
+  if (process.platform !== "win32" && context.hostPlatform !== "windows") {
+    try {
+      mkdirSync(context.secantHome, { recursive: true, mode: 0o700 });
+      (overrides.chmodHome ?? chmodSync)(context.secantHome, 0o700);
+      if ((statSync(context.secantHome).mode & 0o777) !== 0o700) {
+        throw new Error(
+          "The filesystem did not apply owner-only home permissions.",
+        );
+      }
+    } catch (cause) {
+      startupNotices.push({
+        code: "secant-home-not-private",
+        explanation:
+          "Secant could not make its home owner-only; other local users may be able to read your Runs.",
+        remediation:
+          "Use a SECANT_HOME you own on a filesystem that supports POSIX permissions.",
+        possibleEffects: "none",
+        cause,
+      });
+    }
+  }
   const stderr =
     overrides.logSink?.stderr ??
     ((text: string) => void process.stderr.write(text));
@@ -313,7 +344,7 @@ export async function runSecantInvocation(
   };
   let status: number;
   try {
-    status = await body(log);
+    status = await body(log, startupNotices);
   } catch (error) {
     release();
     log.fatal(error);
