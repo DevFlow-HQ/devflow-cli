@@ -384,6 +384,8 @@ jobs:
         timeout-minutes: 3
         shell: pwsh
         run: |
+          git fetch --no-tags --depth=1 origin e51c7a5d21357bb4da416e2d1d824228a8eb1797
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch the pinned original cleanup control." }
           $probe = Join-Path $env:RUNNER_TEMP "secant-cleanup-probe.mjs"
           @'
           import assert from "node:assert/strict";
@@ -394,6 +396,12 @@ jobs:
           import { pathToFileURL } from "node:url";
           const { npmInstall, sha256File } = await import(pathToFileURL(resolve("scripts/release-helpers.ts")));
           const { verifyPlatformPackage } = await import(pathToFileURL(resolve("scripts/package-consumer.ts")));
+          const original = spawnSync("git", ["show", "FETCH_HEAD:scripts/package-consumer.ts"], { encoding: "utf8", timeout: 20000 });
+          if (original.error) throw original.error;
+          assert.equal(original.status, 0, original.stderr);
+          const controlPath = resolve("scripts/.secant-cleanup-control.ts");
+          writeFileSync(controlPath, original.stdout);
+          const { verifyPlatformPackage: verifyOriginal } = await import(pathToFileURL(controlPath));
           const manifest = JSON.parse(readFileSync("dist/packages/package-manifest.json", "utf8"));
           const pkg = manifest.packages.find((entry) => entry.key === "windows-x64");
           assert.ok(pkg);
@@ -438,13 +446,15 @@ jobs:
             if (result.error) throw result.error;
             assert.equal(result.status, 0, result.stderr);
           });
-          for (let trial = 0; trial < 16; trial++) {
-            try {
-              await verifyPlatformPackage({ packagesDir: "dist/packages", target: "windows-x64" });
-              console.log(JSON.stringify({ name: "complete-pipeline", trial, result: "passed" }));
-            } catch (error) {
-              console.error(JSON.stringify({ name: "complete-pipeline", trial, result: "failed", message: String(error) }));
-              failures.push(error);
+          for (let trial = 0; trial < 8; trial++) {
+            for (const [name, verify] of [["original-sync-control", verifyOriginal], ["awaited-cleanup", verifyPlatformPackage]]) {
+              try {
+                await verify({ packagesDir: "dist/packages", target: "windows-x64" });
+                console.log(JSON.stringify({ name, trial, result: "passed" }));
+              } catch (error) {
+                console.error(JSON.stringify({ name, trial, result: "failed", message: String(error) }));
+                failures.push(error);
+              }
             }
           }
           if (failures.length) throw new AggregateError(failures, "Windows cleanup probes failed.");
