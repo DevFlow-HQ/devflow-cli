@@ -16,6 +16,7 @@ import {
   withRunnerObserver,
   withTimeout,
 } from "../helpers/standalone.js";
+import { fixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { preparationClock } from "./scripted-preparation.js";
 
 /** Real Process lifetimes are exercised outside the semantic test runner. */
@@ -23,10 +24,18 @@ export function registerPreparationLifetime(
   register: RegisterConformanceCase,
 ): void {
   register(
-    "m10-initial-preparation-ownership: real late acquisition remains owned after its report",
+    "m10-audit-runtime-failure-causes: real late acquisition remains owned after its report",
     async () => {
       const replay = installCodexReplayer("codex-qualification");
-      const real = createProcessAdapter(withRunnerObserver());
+      let pid: number | undefined;
+      const real = createProcessAdapter(
+        withRunnerObserver({
+          observeChild: (fact) => {
+            if (fact.kind === "spawn" && fact.role === "harness-runtime")
+              pid = fact.pid;
+          },
+        }),
+      );
       const acquired = Promise.withResolvers<OwnedProcess>();
       const release = Promise.withResolvers<void>();
       const clock = preparationClock();
@@ -57,28 +66,47 @@ export function registerPreparationLifetime(
         "acquire real app-server before public handoff",
         () => acquired.promise,
       );
-      const closing = adapter.close();
-      clock.advance(5000);
-      const report = await closing;
-      assert.equal(report.status, "unresolved");
-      assert.deepEqual(report.preparations[0]?.unresolved, [
-        { kind: "preparation-pending" },
-      ]);
-      release.resolve();
-      assert.equal(
-        (await stage("settle cancelled late preparation", () => pending)).ok,
-        false,
-      );
-      const exit = await stage("confirm real child lifetime ended", () =>
-        withTimeout(child.closed(), 10000, "late child did not exit"),
-      );
-      assert.ok(exit.kind === "exited" || exit.kind === "signal");
-      assert.strictEqual(await adapter.close(), report);
-      assert.equal(
-        report.status,
-        "unresolved",
-        "final exit cannot rewrite deadline observations",
-      );
+      assert.ok(pid !== undefined);
+      const lifetime = fixtureLifetime(pid);
+      try {
+        const closing = adapter.close();
+        clock.advance(5000);
+        const report = await closing;
+        assert.equal(report.status, "unresolved");
+        assert.deepEqual(report.preparations[0]?.unresolved, [
+          { kind: "preparation-pending" },
+        ]);
+        release.resolve();
+        assert.equal(
+          (await stage("settle cancelled late preparation", () => pending)).ok,
+          false,
+        );
+        const exit = await stage("confirm real child lifetime ended", () =>
+          withTimeout(child.closed(), 10000, "late child did not exit"),
+        );
+        // The exhausted deadline permits a failed drain receipt. Native death is
+        // independently proved; it cannot rewrite the immutable unresolved report.
+        assert.ok(
+          exit.kind === "exited" ||
+            exit.kind === "signal" ||
+            exit.kind === "cleanup-error",
+        );
+        if (exit.kind === "cleanup-error") {
+          assert.ok(exit.cause instanceof Error);
+          assert.match(exit.cause.message, /POSIX stdin cleanup timeout/);
+        }
+        await lifetime.ended();
+        assert.strictEqual(await adapter.close(), report);
+        assert.equal(
+          report.status,
+          "unresolved",
+          "final exit cannot rewrite deadline observations",
+        );
+      } finally {
+        release.resolve();
+        await child.interrupt(100);
+        lifetime.close();
+      }
     },
   );
 

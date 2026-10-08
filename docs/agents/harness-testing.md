@@ -5,6 +5,9 @@ Read before changing Harness doubles, shared conformance, native replayers, or r
 
 ## Tests
 
+- A late acquisition after the preparation deadline has zero cleanup budget. A failed drain receipt cannot prove native death; runtime cases observe it independently.
+- Synthetic background workers observe replayer stdin EOF; POSIX cannot reap a descendant after its root and inherited pipes have already closed.
+
 - `tests/harness` owns the fake, shared conformance and native replayers; fixtures retain `recording.json` provenance and opt-in recorders.
 - Prepare/lifecycle cases run all Adapters; Codex replay covers exact-thread recovery, approvals, native Steer, and leftover re-delivery, and
   Claude replay covers native and pending Steer. Other control groups stay capability-specific.

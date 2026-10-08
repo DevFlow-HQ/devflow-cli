@@ -2099,5 +2099,12 @@ runSupervised({
   program: "runtime-conformance",
   entry: fileURLToPath(import.meta.url),
   boundMs: SCENARIO_TIMEOUT_MS,
-  cases: registeredCases,
+  cases: () => {
+    const cases = registeredCases();
+    return process.argv.includes("--audit-runtime-failure-causes")
+      ? cases.filter((test) =>
+          test.name.startsWith("m10-audit-runtime-failure-causes:"),
+        )
+      : cases;
+  },
 });

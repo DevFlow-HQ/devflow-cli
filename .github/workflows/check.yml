@@ -265,6 +265,13 @@ jobs:
           tests/run/store/working-area.test.ts
           tests/run/store/attempt-and-artifact-publication.test.ts
           tests/application/run-working-area.test.ts
+      - name: m10-audit-runtime-failure-causes
+        run: >-
+          bun run test --
+          -t '^m10-audit-runtime-failure-causes(:|$)'
+          tests/run/store/ownership-and-recovery.test.ts
+      - name: M10 runtime failure regressions
+        run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test
         run: bun run test
       - name: Build

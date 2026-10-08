@@ -89,3 +89,4 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `session-and-transcript-evidence.test.ts`, `conversation-migration.test.ts`, `materialization.test.ts`, `reconcile-turn.test.ts`, and
   `working-area.test.ts`, with the private Artifact
   Module's own `artifacts/artifacts.test.ts` beside them; keep every file independently runnable with explicit fixtures.
+- Contention cases inject `busyTimeoutMs` on the contending group; the production 5 s lock wait exhausts plain `bun test`'s 5 s test bound.

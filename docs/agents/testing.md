@@ -29,6 +29,8 @@ The gate separates three independently attributable, blocking layers (ADR 0027's
     outside scenarios are retained, including settlements of earlier children. A clean finish also kills and reports leftover children, with status 0
     if cleanup succeeds; the scenario process waits for that kill so Windows still has a live parent for tree traversal. Its fixtures
     are runtime cases (`supervisor-conformance.ts`). Terminal lifecycle runs the same scenario side unsupervised.
+  - M10 failure regressions select `--audit-runtime-failure-causes`: readiness under watcher exhaustion, synthetic worker EOF lifetime, and late zero-budget cleanup.
+    Exited-root fixtures use live sockets for readiness/release, preserving inherited pipes without acquiring filesystem watchers.
   - The temp root is the scenario's `TMPDIR` itself, one short name deep: on Windows the deepest Run Store paths sit within 13 characters of git's
     260-character limit, so a deeper root fails `matt-front-replayer-workbench` there.
 - **Compiled-binary acceptance** exercises Command, Harness, interruption, recovery, and Git through the copied binary in the consumer job.

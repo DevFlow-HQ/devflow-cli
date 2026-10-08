@@ -58,6 +58,7 @@ import {
   collectAdapterConformanceCases,
   type RegisterConformanceCase,
 } from "./conformance.js";
+import { fixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { createCodexRecordingCapture } from "./codex-recording.js";
 import { replayRecordedLine } from "./codex-replay-path.js";
 
@@ -5340,13 +5341,14 @@ test("[codex] Turn producer trace parity: seal precedes held native reap and pre
   }
 });
 
-test("Codex descendant startup does not hold Turn acceptance past the effective-model read deadline", async () => {
+test("m10-audit-runtime-failure-causes: Codex descendant startup does not hold Turn acceptance past the effective-model read deadline", async () => {
   const workspace = makeTempDir("codex-gated-tree-");
   const worker = join(workspace, "worker.mjs");
   const report = join(workspace, "tree.json");
   const server = createServer();
   let peer: Socket | undefined;
   let harness: PreparedHarness | undefined;
+  let lifetime: ReturnType<typeof fixtureLifetime> | undefined;
   const connected = new Promise<Socket>((resolve) => {
     server.once("connection", (socket) => {
       peer = socket;
@@ -5364,6 +5366,8 @@ test("Codex descendant startup does not hold Turn acceptance past the effective-
       worker,
       `
       import { connect } from "node:net";
+      process.stdin.resume();
+      process.stdin.once("end", () => process.exit(0));
       const gate = connect({ host: "127.0.0.1", port: ${address.port} });
       await new Promise((resolve, reject) => {
         gate.once("error", reject);
@@ -5405,10 +5409,18 @@ test("Codex descendant startup does not hold Turn acceptance past the effective-
     );
     assert.deepEqual(effectiveModel(result), { known: false });
     assert.equal(existsSync(report), true);
+    const tree = z
+      .object({ harnessPid: z.number().int().positive() })
+      .parse(JSON.parse(readFileSync(report, "utf8")));
+    lifetime = fixtureLifetime(tree.harnessPid);
+    assert.equal(lifetime.alive(), true);
+    await harness.close();
+    await lifetime.ended();
   } finally {
     try {
       await harness?.close();
     } finally {
+      lifetime?.close();
       peer?.destroy();
       if (server.listening)
         await new Promise<void>((resolve, reject) =>

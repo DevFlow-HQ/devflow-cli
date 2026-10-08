@@ -738,10 +738,11 @@ interface StoreDatabase {
 function openDatabase(
   path: string,
   migrations: MigrationsJournal,
+  busyTimeoutMs = 5000,
 ): StoreDatabase {
   const sqlite = new Database(path);
   try {
-    sqlite.exec("PRAGMA busy_timeout = 5000");
+    sqlite.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
     const db = drizzle({ client: sqlite });
     migrate(db, migrations);
     let closed = false;
@@ -980,8 +981,12 @@ export function openRunGroup(
      *  to the real pid; a test overrides it so two `openRunGroup`s on one home stand
      *  in for two processes with distinct pids. */
     readonly selfPid?: number;
+    /** Run-database lock wait; tests shorten it without changing fencing. */
+    readonly busyTimeoutMs?: number;
   },
 ): RunGroup {
+  const openRunDatabase = (path: string): StoreDatabase =>
+    openDatabase(path, runMigrations, options.busyTimeoutMs);
   const selfPid = options.selfPid ?? process.pid;
   const isOwnerAlive = options.isOwnerAlive ?? processIsAlive;
   const processForRun =

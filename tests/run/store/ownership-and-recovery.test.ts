@@ -228,7 +228,7 @@ test("a stale owner cannot write after being fenced", async (t) => {
   assert.equal(read.run.state, "done");
 });
 
-test("a takeover cannot cross an in-flight canonical write transaction", (t) => {
+test("m10-audit-runtime-failure-causes: a takeover cannot cross an in-flight canonical write transaction", (t) => {
   const home = makeTempDir("secant-store-");
   const first = openRunGroup(home, WORKSPACE, { selfPid: 1000 });
   t.after(() => first.close());
@@ -240,6 +240,7 @@ test("a takeover cannot cross an in-flight canonical write transaction", (t) => 
 
   const second = openRunGroup(home, WORKSPACE, {
     selfPid: 2000,
+    busyTimeoutMs: 10,
     isOwnerAlive: (pid) => pid === 1000,
   });
   t.after(() => second.close());
@@ -258,6 +259,10 @@ test("a takeover cannot cross an in-flight canonical write transaction", (t) => 
   }
 
   assert.deepEqual(owner.writeState("running"), { ok: true });
+  const takeover = second.acquireRun(created.runId, { takeover: true });
+  assert.ok(takeover);
+  t.after(() => takeover.close());
+  assert.deepEqual(owner.writeState("done"), { ok: false, reason: "fenced" });
 });
 
 test("a crash after staging leaves only a .creating quarantine the next open removes", async (t) => {

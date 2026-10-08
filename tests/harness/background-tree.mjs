@@ -5,7 +5,7 @@ import { renameSync, writeFileSync } from "node:fs";
 export async function backgroundTree(options) {
   if (options === undefined) return;
   const child = spawn(process.execPath, [options.worker, "bash-tree"], {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
   let output = "";

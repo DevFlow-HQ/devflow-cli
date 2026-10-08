@@ -197,6 +197,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m12-harness-run-test-helpers",
   "m12-wiring-test-helpers",
   "m12-audit-working-area-boundary",
+  "m10-audit-runtime-failure-causes",
 ] as const;
 
 function testFilesIn(script: string): string[] {

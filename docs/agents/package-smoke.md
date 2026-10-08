@@ -66,7 +66,7 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
   Windows SIGINT terminates and leaves the same claim), and a later `resume` completes it.
 - **posix-exited-root-cleanup** (#387, Linux and macOS): an ordinary Command's root exits 17 while a descendant holds inherited output pipes and ignores
   SIGTERM. SIGINT to the copied binary forces descendant cleanup under an independent parent bound; the operational log records one `reap` with status 17,
-  the descendant is dead, and the reopened Run retains its captured output and `fail` Verdict. Fixture failure cleanup uses a release-file handshake.
+  the descendant is dead, and the reopened Run retains its captured output and `fail` Verdict. Fixture failure cleanup uses a live-socket handshake.
 - **owner-death-recovery** (#86): a Run whose owner is killed by SIGKILL, uncatchable, so the claim is left live at a now-dead pid, is reconciled
   `halted` by a later invocation running no Step work, and a plain `resume` (no `--takeover`) recovers it to `succeeded`, re-running no earlier Step.
   This is the one compiled-binary home for owner death; the process-free suite never spawns.

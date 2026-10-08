@@ -16,6 +16,7 @@ import {
 } from "../helpers/standalone.js";
 import type { RunnerCase } from "../helpers/scenario-runner.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import { createLifetimeControl } from "../helpers/lifetime-control.js";
 
 type CleanupPath = "timeout" | "cancellation" | "interrupt" | "shutdown";
 type RootExit = "status" | "signal";
@@ -70,6 +71,20 @@ export function registerPosixExitedRootCases(
       }
     },
   });
+  register({
+    name: "m10-audit-runtime-failure-causes: exited-root readiness without watcher capacity",
+    body: () =>
+      exitedRootCleanup({
+        path: "interrupt",
+        rootExit: "status",
+        ignoresTerm: true,
+        refuseWatch: true,
+      }),
+  });
+  register({
+    name: "m10-audit-runtime-failure-causes: zero cleanup budget cannot confirm unread pipe drain",
+    body: zeroBudgetDrain,
+  });
   // Command escalation retains its existing three-second grace. Each path gets
   // its own scenario so both native outcomes fit the supervisor's 20s bound.
   for (const path of cleanupPaths) {
@@ -87,16 +102,54 @@ export function registerPosixExitedRootCases(
   }
 }
 
+async function zeroBudgetDrain(): Promise<void> {
+  let pid: number | undefined;
+  const adapter = createProcessAdapter(
+    withRunnerObserver({
+      observeChild: (fact) => {
+        if (fact.kind === "spawn") pid = fact.pid;
+      },
+    }),
+  );
+  const launched = await adapter.spawnOwnedProcess({
+    role: "harness-runtime",
+    executable: process.execPath,
+    args: [
+      "-e",
+      "process.stdout.write('x'.repeat(1024*1024));setInterval(()=>{},1000);",
+    ],
+    cwd: process.cwd(),
+    env: process.env,
+    launchTimeoutMs: 5000,
+  });
+  assert.ok(launched.ok);
+  assert.ok(pid !== undefined);
+  const child = launched.process;
+  try {
+    // Readiness consumes one chunk; retained unread bytes prevent a drain claim.
+    const first = await child.stdout[Symbol.asyncIterator]().next();
+    assert.ok(!first.done && first.value.byteLength > 0);
+    assert.deepEqual(await child.closeStdin(0), { kind: "cleanup-timeout" });
+    const close = await child.closed();
+    assert.equal(close.kind, "cleanup-error");
+    if (close.kind !== "cleanup-error")
+      throw new Error("expected failed drain");
+    assert.ok(close.cause instanceof Error);
+    assert.match(close.cause.message, /POSIX stdin cleanup timeout/);
+    await waitForDeath(adapter, pid, "zero-budget child survived cleanup");
+  } finally {
+    await child.interrupt(100);
+  }
+}
+
 async function exitedRootCleanup(options: {
   readonly path: CleanupPath;
   readonly rootExit: RootExit;
   readonly ignoresTerm: boolean;
+  readonly refuseWatch?: boolean;
 }): Promise<void> {
   const { path, rootExit, ignoresTerm } = options;
-  const folder = makeTempDir("secant-exited-root-");
-  const ready = join(folder, "ready");
-  const release = join(folder, "release");
-  const leave = join(folder, "exit");
+  const control = await createLifetimeControl();
   const facts: ChildFact[] = [];
   let rootPid: number | undefined;
   const adapter = createProcessAdapter(
@@ -107,30 +160,22 @@ async function exitedRootCleanup(options: {
       },
     }),
   );
+  const refuseWatch = options.refuseWatch
+    ? "require('node:fs').watch = () => { throw Object.assign(new Error('fixture watcher quota exhausted'), { code: 'EMFILE' }); };"
+    : "";
   const descendant = `
-    const { watch, existsSync, writeFileSync, renameSync } = require('node:fs');
+    ${refuseWatch}
     ${ignoresTerm ? "process.on('SIGTERM', () => {});" : ""}
-    const release = ${JSON.stringify(release)};
-    const finish = () => { if (existsSync(release)) process.exit(0); };
-    watch(${JSON.stringify(folder)}, finish);
-    finish();
     process.stdout.write('out');
     process.stderr.write('err');
-    writeFileSync(${JSON.stringify(ready + ".tmp")}, String(process.pid));
-    renameSync(${JSON.stringify(ready + ".tmp")}, ${JSON.stringify(ready)});
-    setInterval(() => {}, 1000);
+    ${control.source("descendant", "process.exit(0);")}
   `;
   const source = `
+    ${refuseWatch}
     const { spawn } = require('node:child_process');
-    const { watch, existsSync } = require('node:fs');
-    function leave() { ${rootExit === "status" ? "process.exit(17);" : "process.kill(process.pid, 'SIGTERM');"} }
-    const check = () => {
-      if (existsSync(${JSON.stringify(path === "timeout" ? ready : leave)})) leave();
-    };
-    watch(${JSON.stringify(folder)}, check);
     spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}],
       { stdio: ['ignore', 'inherit', 'inherit'] });
-    check();
+    ${control.source("root", rootExit === "status" ? "process.exit(17);" : "process.kill(process.pid, 'SIGTERM');")}
   `;
   const controller = new AbortController();
   let owned: OwnedProcess | undefined;
@@ -165,11 +210,15 @@ async function exitedRootCleanup(options: {
       stdout = collect(owned.stdout);
       stderr = collect(owned.stderr);
     }
-    await waitForFile(folder, ready);
-    const descendantPid = Number(readFileSync(ready, "utf8"));
+    const descendant = await withTimeout(
+      control.ready("descendant"),
+      5000,
+      "descendant did not become ready",
+    );
+    const descendantPid = descendant.pid;
     assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
     assert.ok(rootPid !== undefined);
-    if (path !== "timeout") writeFileSync(leave, "exit");
+    (await control.ready("root")).release();
     await waitForDeath(adapter, rootPid, "root did not exit");
     assert.equal(isDead(adapter, descendantPid), false);
     assert.equal(
@@ -240,8 +289,7 @@ async function exitedRootCleanup(options: {
   } finally {
     // Release through the descendant's own handle, even if it has escaped the
     // group. Never signal remembered numeric identities after native settlement.
-    writeFileSync(release, "release");
-    writeFileSync(leave, "exit");
+    await control.close();
     controller.abort();
     if (owned !== undefined) await owned.interrupt(100);
     if (pending !== undefined)
