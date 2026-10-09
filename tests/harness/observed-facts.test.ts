@@ -4,7 +4,10 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { z } from "zod";
-import type { TurnEvent } from "../../src/harness/harness.js";
+import {
+  startPermissionBridge,
+  type TurnEvent,
+} from "../../src/harness/harness.js";
 import {
   init,
   prepare,
@@ -787,7 +790,7 @@ test("m10-observed-harness-facts: authentic Codex external MCP items preserve in
   assert.doesNotMatch(JSON.stringify(calls), /step_done|call_iN7t/);
 });
 
-test("m10-observed-harness-facts: unqualified Codex command refusal and file-change failure/refusal statuses remain absent", async (t) => {
+test("m10-observed-harness-facts: unqualified Codex MCP failure and file-change failure/refusal statuses remain absent", async (t) => {
   const events = await codexFacts(t, [
     {
       method: "item/started",
@@ -814,30 +817,6 @@ test("m10-observed-harness-facts: unqualified Codex command refusal and file-cha
           tool: "tool",
           arguments: {},
           status: "failed",
-        },
-      },
-    },
-    {
-      method: "item/started",
-      params: {
-        ...recordedTarget,
-        item: {
-          type: "commandExecution",
-          id: "unqualified-command",
-          command: "do work",
-          status: "inProgress",
-        },
-      },
-    },
-    {
-      method: "item/completed",
-      params: {
-        ...recordedTarget,
-        item: {
-          type: "commandExecution",
-          id: "unqualified-command",
-          command: "do work",
-          status: "declined",
         },
       },
     },
@@ -886,9 +865,7 @@ test("m10-observed-harness-facts: unqualified Codex command refusal and file-cha
   ]);
   const calls = events.flatMap((event) =>
     event.kind === "tool-call" &&
-    ["do work", "update file.ts", "external/tool · {}"].includes(
-      event.call.input,
-    )
+    ["update file.ts", "external/tool · {}"].includes(event.call.input)
       ? [event.call]
       : [],
   );
@@ -896,7 +873,6 @@ test("m10-observed-harness-facts: unqualified Codex command refusal and file-cha
     calls.map((call) => [call.tool, call.input, call.outcome.kind]),
     [
       ["mcp", "external/tool · {}", "running"],
-      ["command", "do work", "running"],
       ["file-change", "update file.ts", "running"],
     ],
   );
@@ -1905,3 +1881,300 @@ for (const tokenUsage of [
     });
   });
 }
+
+test("m10-audit-native-command-evidence: unchanged Claude Bash bodies qualify command, output and failed error prose", async (t) => {
+  const calls = (
+    await claudeTools(
+      t,
+      recordedToolFrames("native-command-evidence", [
+        "selected-tool-frames.jsonl",
+      ]),
+    )
+  ).filter((call) => call.tool === "command");
+  assert.deepEqual(
+    calls.map(({ input, outcome, output, cwd, exitCode, count }) => ({
+      input,
+      outcome,
+      output,
+      cwd,
+      exitCode,
+      count,
+    })),
+    [
+      {
+        input: 'printf "native-stdout-ok\\n"',
+        outcome: { kind: "running" },
+        output: undefined,
+        cwd: undefined,
+        exitCode: undefined,
+        count: undefined,
+      },
+      {
+        input: 'printf "native-stdout-ok\\n"',
+        outcome: { kind: "completed" },
+        output: { text: "native-stdout-ok" },
+        cwd: undefined,
+        exitCode: undefined,
+        count: undefined,
+      },
+      {
+        input: 'printf "native-stderr-failure\\n" >&2; exit 7',
+        outcome: { kind: "running" },
+        output: undefined,
+        cwd: undefined,
+        exitCode: undefined,
+        count: undefined,
+      },
+      {
+        input: 'printf "native-stderr-failure\\n" >&2; exit 7',
+        outcome: {
+          kind: "failed",
+          error: "Exit code 7\nnative-stderr-failure",
+        },
+        output: undefined,
+        cwd: undefined,
+        exitCode: undefined,
+        count: undefined,
+      },
+    ],
+  );
+  assert.equal(calls[0]?.callId, calls[1]?.callId);
+  assert.equal(calls[2]?.callId, calls[3]?.callId);
+  assert.notEqual(calls[0]?.callId, calls[2]?.callId);
+  assert.doesNotMatch(JSON.stringify(calls), /toolu_|duration|totalLines/);
+});
+
+for (const approval of [true, false]) {
+  test(`m10-audit-native-command-evidence: unchanged Codex decline settles its call and releases output state, approval present ${approval}`, async (t) => {
+    const capture = z
+      .object({
+        capture: z.array(z.object({ direction: z.string(), line: z.string() })),
+      })
+      .parse(
+        JSON.parse(
+          readFileSync(
+            new URL(
+              "./fixtures/codex/native-command-evidence/decline.json",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        ),
+      );
+    const notices = capture.capture
+      .filter((entry) =>
+        ["stdout", "stdout-projection"].includes(entry.direction),
+      )
+      .map((entry) =>
+        z
+          .looseObject({
+            method: z.string(),
+            params: z.record(z.string(), z.unknown()),
+          })
+          .parse(JSON.parse(entry.line)),
+      )
+      .filter(
+        (entry) =>
+          approval ||
+          ![
+            "item/commandExecution/requestApproval",
+            "serverRequest/resolved",
+          ].includes(entry.method),
+      )
+      .map((entry) => ({
+        ...entry,
+        params: { ...entry.params, ...recordedTarget },
+      }));
+    const terminal = notices.pop();
+    assert.equal(terminal?.method, "turn/completed");
+    assert.ok(terminal);
+    const events = await codexFacts(t, [
+      ...notices,
+      {
+        method: "item/commandExecution/outputDelta",
+        params: {
+          ...recordedTarget,
+          itemId: "exec-892f9a71-0342-4a2e-b56e-39fab5f3b899",
+          delta: "LATE",
+        },
+      },
+      {
+        method: "item/completed",
+        params: {
+          ...recordedTarget,
+          item: {
+            type: "agentMessage",
+            id: "after-decline",
+            text: "AFTER_DECLINE",
+          },
+        },
+      },
+      terminal,
+    ]);
+    const calls = events.flatMap((event) =>
+      event.kind === "tool-call" &&
+      event.call.input.includes("secant-native-evidence-460-declined-marker")
+        ? [event.call]
+        : [],
+    );
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.outcome.kind, "running");
+    assert.deepEqual(calls[1]?.outcome, { kind: "declined" });
+    assert.equal(calls[0]?.callId, calls[1]?.callId);
+    for (const call of calls) {
+      assert.equal(call.output, undefined);
+      assert.equal(call.exitCode, undefined);
+      assert.doesNotMatch(JSON.stringify(call), /duration|reason/);
+    }
+    assert.equal(
+      events.some(
+        (event) =>
+          (event.kind === "tool-preview" || event.kind === "tool-partial") &&
+          event.call.callId === calls[1]?.callId,
+      ),
+      false,
+    );
+    assert.ok(
+      events.some(
+        (event) =>
+          event.kind === "assistant-content" &&
+          event.content === "AFTER_DECLINE",
+      ),
+    );
+    assert.doesNotMatch(JSON.stringify(events), /LATE|exec-892f9a71/);
+    assert.equal(
+      events.filter((event) => event.kind === "request-raised").length,
+      approval ? 1 : 0,
+    );
+  });
+}
+
+test("m10-audit-native-command-evidence: promoted fixtures and provenance retain the research bytes", () => {
+  for (const [source, target, metadata] of [
+    [
+      "claude/selected-tool-frames.jsonl",
+      "claude-code/native-command-evidence/selected-tool-frames.jsonl",
+      "claude/recording.json",
+    ],
+    [
+      "codex/decline.json",
+      "codex/native-command-evidence/decline.json",
+      "codex/recording-decline.json",
+    ],
+  ]) {
+    assert.ok(source && target && metadata);
+    const research = new URL(
+      "../../docs/research/native-observed-facts-captures/",
+      import.meta.url,
+    );
+    const fixtures = new URL("./fixtures/", import.meta.url);
+    assert.deepEqual(
+      readFileSync(new URL(target, fixtures)),
+      readFileSync(new URL(source, research)),
+    );
+    assert.deepEqual(
+      readFileSync(new URL("recording.json", new URL(target, fixtures))),
+      readFileSync(new URL(metadata, research)),
+    );
+  }
+});
+
+for (const [label, reported, output] of [
+  ["empty", { stdout: "", stderr: "" }, { text: "" }],
+  [
+    "stderr",
+    { stdout: "", stderr: "reported stderr" },
+    { text: "reported stderr" },
+  ],
+  [
+    "both",
+    { stdout: "reported stdout", stderr: "reported stderr" },
+    { text: "reported stdout\nreported stderr" },
+  ],
+  [
+    "malformed sibling",
+    { stdout: "reported stdout", stderr: 42 },
+    { text: "reported stdout" },
+  ],
+  ["malformed", { stdout: 42, stderr: null }, undefined],
+  ["missing", {}, undefined],
+  ["opaque string", "not structured output", undefined],
+] as const) {
+  test(`m10-audit-native-command-evidence: Claude completed Bash ${label} output remains reported data`, async (t) => {
+    const calls = await claudeTools(t, [
+      {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "bash",
+              name: "Bash",
+              input: { command: "print" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "bash",
+              content: "result prose",
+            },
+          ],
+        },
+        tool_use_result: reported,
+      },
+    ]);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.callId, calls[1]?.callId);
+    assert.deepEqual(calls[1]?.outcome, { kind: "completed" });
+    assert.deepEqual(calls[1]?.output, output);
+    assert.equal(calls[1]?.exitCode, undefined);
+  });
+}
+
+test("m10-audit-native-command-evidence: completed Claude Bash output redacts before the retained tail", async (t) => {
+  const bridge = await startPermissionBridge(async () => ({
+    decision: "deny",
+    message: "unused",
+  }));
+  t.after(() => bridge.close());
+  const bearer = bridge.session("bash-output").bearer;
+  const calls = await claudeTools(t, [
+    {
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "bash",
+            name: "Bash",
+            input: { command: `print ${bearer}` },
+          },
+        ],
+      },
+    },
+    {
+      type: "user",
+      message: {
+        content: [
+          { type: "tool_result", tool_use_id: "bash", content: "completed" },
+        ],
+      },
+      tool_use_result: {
+        stdout: "head" + bearer + "z".repeat(29_990),
+        stderr: "",
+      },
+    },
+  ]);
+  assert.equal(calls[1]?.input, "print «redacted-bearer-token»");
+  assert.deepEqual(calls[1]?.output, {
+    text: "«redacted-bearer-token»".slice(-10) + "z".repeat(29_990),
+    secantDropped: true,
+  });
+  assert.equal(JSON.stringify(calls).includes(bearer), false);
+});

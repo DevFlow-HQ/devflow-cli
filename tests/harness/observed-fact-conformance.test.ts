@@ -265,8 +265,8 @@ runObservedFactCases(
         incomplete: true,
       },
     ],
-    commandOutput: "unavailable",
-    commandInput: 'Bash · {"command":"printf conformance"}',
+    commandOutput: "retained",
+    commandInput: "printf conformance",
     file: structuredFile,
     thought: false,
     facts: () => () => {

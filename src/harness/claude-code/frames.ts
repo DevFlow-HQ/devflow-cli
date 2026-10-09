@@ -552,6 +552,7 @@ function optionalString(value: unknown): string | undefined {
 
 // Qualified tool fields: tests/harness/tool-facts-provenance.md.
 const toolInput = z.object({
+  command: lenientString,
   file_path: lenientString,
   pattern: lenientString,
 });
@@ -568,6 +569,10 @@ const fileResult = z.object({
   filePath: z.string().min(1),
   type: z.literal("create").optional().catch(undefined),
   structuredPatch: suppliedHunks.optional().catch(undefined),
+});
+const commandResult = z.object({
+  stdout: lenientString,
+  stderr: lenientString,
 });
 const toolResult = z.object({
   file: z
@@ -602,7 +607,9 @@ export function observedToolStart(
       ? fields?.file_path
       : tool === "search"
         ? fields?.pattern
-        : undefined;
+        : tool === "command"
+          ? fields?.command
+          : undefined;
   return {
     callId,
     tool,
@@ -638,6 +645,15 @@ export function observedToolResult(
             ...(content === undefined ? {} : { error: content }),
           }
       : { kind: "completed" };
+  const command =
+    start.tool === "command" && outcome.kind === "completed"
+      ? commandResult.safeParse(frame.tool_use_result)
+      : undefined;
+  const output =
+    command?.success &&
+    (command.data.stdout !== undefined || command.data.stderr !== undefined)
+      ? [command.data.stdout, command.data.stderr].filter(Boolean).join("\n")
+      : undefined;
   const file =
     start.tool === "file-change" && outcome.kind === "completed"
       ? fileResult.safeParse(frame.tool_use_result)
@@ -645,6 +661,7 @@ export function observedToolResult(
   return {
     ...start,
     outcome,
+    ...(output === undefined ? {} : { output: { text: output } }),
     ...(file?.success
       ? {
           files: [

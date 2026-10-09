@@ -211,6 +211,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-claude-token-stdin",
   "m10-audit-turn-event-redaction",
   "m10-audit-store-permissions",
+  "m10-audit-native-command-evidence",
   "m12-focused-check-scenarios",
   "m12-test-interface-ownership",
   "m12-renderer-test-lifecycle",

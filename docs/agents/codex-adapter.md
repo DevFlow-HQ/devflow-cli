@@ -29,6 +29,8 @@ Read before changing the private Codex Adapter.
   Replacement failures (`recovery-identity` or `recovery-app-server`, no possible effects) leave Sessions detached for retry; a refused resume fences only
   that Session. An incompletely reaped generation is retained for cleanup and refuses replacement until it is reaped, preventing duplicate app-servers.
   Sessions resend their thread config on resume. Turns bind after replacement; retired generations cannot dispatch into newer Turns.
+- A native command `declined` terminal settles its exact call independently of approvals (#501), releasing pending output state. Refusal reason,
+  output, exit and command duration stay absent; Turn outcome remains its own native fact.
 - Running file-change items expose structured target paths only (#502). Supplied patches and qualified change kinds remain completion facts.
 - Fresh/resumed Turns keep admission-before-content and terminal authority; finals replace previews. Command/summary assembly follows linked provenance (#415, #417).
 - Effective values (#345): `turn/start` carries the Model choice; first acceptance sends one bounded `thread/read` (a refusal re-sent at the next item)

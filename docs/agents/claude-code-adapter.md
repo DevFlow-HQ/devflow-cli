@@ -39,6 +39,8 @@ Read before changing the private Claude Code Adapter.
   as `subtype:"success"` with `is_error:true` and `result:"Not logged in · Please run /login"`, so the check runs before the success branch, but the guard
   fires only when `isAuthenticationResult(frame)` and (`subtype !== "success"` or `is_error === true`): a real answer whose text merely quotes a login phrase
   settles `is_error:false` and stays a completed Turn. The raw result never crosses the Seam (it may quote a key) — only `AUTHENTICATION_REQUIRED` does.
+- Bash carries qualified `input.command` and completed stdout/stderr through the shared producer (#501). Failed result content is error prose;
+  cwd, numeric exit and command duration stay absent. Never parse `Exit code` text into a numeric fact.
 - Session child reuse: a Turn result may settle before the child emits `close`. The Session tracks which Turn owns the child, lets an already-settled close
   win before the next send, and never attributes an old child's close to the next Turn; a still-live child may accept the next Turn in place.
 - A caller's Interrupt on a live, initialized process running its Turn is native (#346): `claude-code/control.ts`, one channel per process, mints the `request_id`, writes

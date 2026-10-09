@@ -282,6 +282,11 @@ jobs:
           -t '^m10-audit-turn-event-redaction(:|$)'
           tests/harness/turn-event-redaction.test.ts
           tests/application/turn-event-redaction.test.ts
+      - name: m10-audit-native-command-evidence
+        run: >-
+          bun run test --
+          -t '^m10-audit-native-command-evidence(:|$)'
+          tests/harness/observed-facts.test.ts
       - name: m10-audit-store-permissions
         run: >-
           bun run test --

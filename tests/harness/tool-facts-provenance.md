@@ -42,6 +42,14 @@ never an ordinary MCP row. ToolSearch itself remains meaningful `other` work, in
 The Adapter mints call ids in each Secant Turn. Repeated starts/results are ignored by identity. Native ids never
 cross the Interface, and native-id reuse in later Turns or Sessions mints different opaque values.
 
+`native-command-evidence/selected-tool-frames.jsonl`, Claude Code 2.1.294, promotes the PR #491 bodies
+unchanged. The two Bash calls qualify `input.command`, correlated completed stdout/stderr, and failed
+`is_error` string content as error prose. `Exit code 7` never becomes a numeric exit. Failed calls carry
+error text, not manufactured output. Working directory, structured exit and command duration stay absent.
+The named `m10-audit-native-command-evidence` replay checks both call identities, exact output and error,
+unsupported-field absences and byte equality with the research capture. The shared producer redacts and
+bounds completed output; synthetic cases cover empty, malformed and missing fields without qualifying more wire facts.
+
 ## Codex
 
 `test-repair/case.json`, codex-cli 0.160.0 and codex-probe-3, qualifies correlated `item/started` and `item/completed`
@@ -64,12 +72,19 @@ node test commands replace their deltas with exact final output; exit codes 0, 1
 Its unchanged item body is asserted through the production Adapter. Null means unavailable, not explicit empty.
 Copied-recording variants test empty/omitted/malformed finals, repeated deltas, late/foreign ids and orderly
 unmatched tails. Those are semantic boundary cases, not fresh wire qualification. Command actions and native
-omission fields stay unconsumed. Claude Bash command/output/cwd/structured-exit fields remain unqualified.
+omission fields stay unconsumed. Claude Bash cwd and structured exit fields remain unqualified.
 
 `agent-calls/case.json`, codex-cli 0.160.0 and codex-probe-4, qualifies MCP item `id`, `server`, `tool`, opaque
 `arguments`, and `status`. A focused test reuses unchanged item bodies with only envelope correlation remapped.
 It checks external approval/form/URL tools separately and excludes Secant `step_done` from ordinary MCP history.
-Neither an elicitation answer nor result text determines a tool outcome. MCP failed status and non-null error detail are unqualified. Command refusal and file-change failed/refused statuses also stay absent.
+Neither an elicitation answer nor result text determines a tool outcome. MCP failed status and non-null error detail are unqualified. File-change failed/refused statuses also stay absent.
+
+`native-command-evidence/decline.json`, codex-cli 0.161.0 and codex-probe-5, promotes PR #491 unchanged.
+Its correlated `commandExecution` start and terminal qualify native `declined`, independently of any
+approval answer. The named replay keeps item bodies exact while remapping enclosing thread/Turn ids,
+checks a successful containing Turn with and without the approval request, and rejects late output and
+terminal partials on that call. Refusal reason, output, exit code and command duration stay absent.
+Command state is released by the observed terminal through the existing shared producer.
 
 The Adapter's private id map includes native Turn and item ids inside the owning Secant Turn. The shared producer
 keeps the first start and observed terminal fact, replaces bounded previews, and drains incomplete command
@@ -81,6 +96,7 @@ Interrupt conformance retains that observation without a synthetic settlement.
 
 The authentic corpus does not qualify a non-null parent-call relation, native web/subagent item shapes,
 every optional count/error/refusal form in both Adapters, or Claude structured numeric shell exit codes.
+Command durations, native context percentages, Thought duration and Claude summaries remain unqualified for consumption.
 File additions/removals, Codex add/delete kinds and non-null moves, and Claude non-create kinds remain unqualified.
 Structured patch lengths are never converted to totals. Missing patches remain absent, including requested-only edits.
 Those fields stay absent. Codex synthetic collab/web/image/dynamic item schemas previously produced activity,

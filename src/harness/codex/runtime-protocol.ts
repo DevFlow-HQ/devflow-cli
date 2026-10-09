@@ -925,8 +925,7 @@ function normalizeItemContent(
         commandItemSchema,
         "commandExecution item",
       );
-      // A schema enum alone does not qualify an observed refusal (#414).
-      if (command.status === "declined") return { itemId: item.id };
+      // #501 qualifies the native declined terminal independently of approval.
       return {
         itemId: item.id,
         event: toolCallEvent(
@@ -934,13 +933,17 @@ function normalizeItemContent(
           "command",
           command.status,
           command.command,
-          {
-            ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
-            ...(command.aggregatedOutput == null
-              ? {}
-              : { output: { text: command.aggregatedOutput } }),
-            ...(command.exitCode == null ? {} : { exitCode: command.exitCode }),
-          },
+          command.status === "declined"
+            ? {}
+            : {
+                ...(command.cwd === undefined ? {} : { cwd: command.cwd }),
+                ...(command.aggregatedOutput == null
+                  ? {}
+                  : { output: { text: command.aggregatedOutput } }),
+                ...(command.exitCode == null
+                  ? {}
+                  : { exitCode: command.exitCode }),
+              },
         ),
       };
     }
@@ -1029,7 +1032,7 @@ function fileChangeApprovalInput(
 function toolCallEvent(
   callId: string,
   tool: ToolCall["tool"],
-  status: "inProgress" | "completed" | "failed",
+  status: "inProgress" | "completed" | "failed" | "declined",
   input: string,
   facts: Pick<ToolCall, "cwd" | "output" | "exitCode"> = {},
 ): TurnEvent {
