@@ -159,10 +159,17 @@ test("a Harness qualification writes a start and its Qualification state once pe
 });
 
 test("a not-ready Harness's result carries the typed failure and a translated cause, never its diagnostics", async () => {
+  const protocolCause = new Error("invalid native response");
+  // A supplied stack need not repeat the separately recorded Error.message.
+  protocolCause.stack = "Error\n    at prepare (/fixture/harness.ts:1:1)";
+  const exceptionCause = new Error("prepare threw");
+  exceptionCause.stack =
+    "Error: prepare threw\n    at prepare (/fixture/harness.ts:2:1)";
   const cases: readonly {
     readonly adapter: HarnessAdapter;
     readonly failure: Record<string, unknown>;
     readonly message: string;
+    readonly cause: Error;
   }[] = [
     {
       adapter: ownPreparations({
@@ -176,7 +183,7 @@ test("a not-ready Harness's result carries the typed failure and a translated ca
               nativeCode: "E-NATIVE-7",
               diagnostics: "seeded-diagnostics-4be1",
               retryEvidence: "seeded-retry-evidence-9c2d",
-              cause: new Error("invalid native response"),
+              cause: protocolCause,
             },
           };
         },
@@ -188,11 +195,12 @@ test("a not-ready Harness's result carries the typed failure and a translated ca
         nativeCode: "E-NATIVE-7",
       },
       message: "invalid native response",
+      cause: protocolCause,
     },
     {
       adapter: ownPreparations({
         async prepare() {
-          throw new Error("prepare threw");
+          throw exceptionCause;
         },
       }),
       failure: {
@@ -201,6 +209,7 @@ test("a not-ready Harness's result carries the typed failure and a translated ca
         possibleEffects: "none",
       },
       message: "prepare threw",
+      cause: exceptionCause,
     },
   ];
   for (const failureCase of cases) {
@@ -224,7 +233,7 @@ test("a not-ready Harness's result carries the typed failure and a translated ca
     const translated = cause as Record<string, unknown>;
     assert.equal(translated.type, "Error");
     assert.equal(translated.message, failureCase.message);
-    assert.match(String(translated.stack), new RegExp(failureCase.message));
+    assert.equal(translated.stack, failureCase.cause.stack);
     assert.equal(text.includes("seeded-diagnostics-4be1"), false);
     assert.equal(text.includes("seeded-retry-evidence-9c2d"), false);
   }

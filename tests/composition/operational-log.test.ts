@@ -183,7 +183,7 @@ test("a headless fatal error writes and flushes its failure record, and the fata
   const cause = log.records[1]!.cause as Record<string, unknown>;
   assert.equal(cause.type, "Error");
   assert.equal(cause.message, "wiring exploded");
-  assert.match(String(cause.stack), /wiring exploded/);
+  assert.equal(cause.stack, failure.stack);
   assert.equal(log.records[2]!.exitStatus, 1);
 
   assert.equal(

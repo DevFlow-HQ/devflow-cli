@@ -74,6 +74,7 @@ function harnessRecords(records: readonly Record<string, unknown>[]) {
 test("a Harness qualification writes the double's phase facts and its CleanupReport, keeping only typed failure fields and a translated cause", async () => {
   const { folder, overrides } = home();
   // Every field a record must not carry is seeded, so its absence is checked.
+  const cleanupCause = new Error("the child was not reaped");
   const script: FakeScript = {
     profile: FAKE_PROFILE,
     turns: [],
@@ -88,7 +89,7 @@ test("a Harness qualification writes the double's phase facts and its CleanupRep
         partialOutput: "seeded-partial-9a20",
         retryEvidence: "seeded-retry-55e1",
         diagnostics: "seeded-diagnostics-c3d8",
-        cause: new Error("the child was not reaped"),
+        cause: cleanupCause,
       },
       sessions: [
         {
@@ -133,7 +134,7 @@ test("a Harness qualification writes the double's phase facts and its CleanupRep
   for (const record of records.filter((r) => r.cause !== undefined)) {
     assert.equal(cause(record).type, "Error");
     assert.equal(cause(record).message, "the child was not reaped");
-    assert.match(String(cause(record).stack), /the child was not reaped/);
+    assert.equal(cause(record).stack, cleanupCause.stack);
   }
   assert.deepEqual(
     records.map(({ cause: _cause, ...rest }) => rest),
