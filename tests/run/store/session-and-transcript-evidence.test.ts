@@ -547,7 +547,11 @@ test("transcriptPage reads bounded, ordered pages and flags older history (#124)
   });
 
   // The newest page is bounded, oldest-first within the page, and flags older.
-  const newest = owner.transcriptPage({ session: "s", limit: 2 });
+  const newest = owner.transcriptPage({
+    cutoff: owner.transcriptCutoff(),
+    session: "s",
+    limit: 2,
+  });
   assert.deepEqual(
     newest.entries.map((e) => e.content),
     ["input 3", "input 4"],
@@ -556,8 +560,9 @@ test("transcriptPage reads bounded, ordered pages and flags older history (#124)
 
   // Paging upward with the oldest entry's seq walks older entries in order.
   const older = owner.transcriptPage({
+    cutoff: owner.transcriptCutoff(),
     session: "s",
-    before: newest.entries[0]!.seq,
+    before: newest.entries[0]!.order,
     limit: 2,
   });
   assert.deepEqual(
@@ -568,8 +573,9 @@ test("transcriptPage reads bounded, ordered pages and flags older history (#124)
 
   // The final page has no older history and is not padded.
   const final = owner.transcriptPage({
+    cutoff: owner.transcriptCutoff(),
     session: "s",
-    before: older.entries[0]!.seq,
+    before: older.entries[0]!.order,
     limit: 2,
   });
   assert.deepEqual(
@@ -581,7 +587,11 @@ test("transcriptPage reads bounded, ordered pages and flags older history (#124)
   // A non-positive limit is clamped to one entry so the page always carries a
   // cursor, rather than reporting older history over an empty page (A11). At HEAD
   // this returned `{ entries: [], hasOlder: true }`, which a pager cannot advance.
-  const clamped = owner.transcriptPage({ session: "s", limit: 0 });
+  const clamped = owner.transcriptPage({
+    cutoff: owner.transcriptCutoff(),
+    session: "s",
+    limit: 0,
+  });
   assert.deepEqual(
     clamped.entries.map((e) => e.content),
     ["input 4"],
@@ -589,10 +599,17 @@ test("transcriptPage reads bounded, ordered pages and flags older history (#124)
   assert.equal(clamped.hasOlder, true);
 
   // An empty Session pages to nothing without throwing.
-  assert.deepEqual(owner.transcriptPage({ session: "missing", limit: 2 }), {
-    entries: [],
-    hasOlder: false,
-  });
+  assert.deepEqual(
+    owner.transcriptPage({
+      cutoff: owner.transcriptCutoff(),
+      session: "missing",
+      limit: 2,
+    }),
+    {
+      entries: [],
+      hasOlder: false,
+    },
+  );
 });
 
 test("current Turn reads only the first unsettled semantic target", (t) => {
@@ -1333,4 +1350,89 @@ test("m10-audit-steer-stored-when-sent: Store rejects invalid waiting and settle
       ["Work"],
     );
   }
+});
+
+test("m10-audit-conversation-order: bounded Store reads separate eligibility from first appearance and filter the Session", (t) => {
+  const group = openRunGroup(makeTempDir("secant-order-store-"), WORKSPACE);
+  t.after(() => group.close());
+  const owner = group.acquireRun(create(group, "order-store").runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  for (const [turnId, session] of [
+    ["first", "s"],
+    ["other", "other"],
+    ["last", "s"],
+  ] as const) {
+    assert.ok(
+      owner.admitTurn({
+        turnId,
+        session,
+        attemptId: "0.0:write",
+        origin: "human",
+        kind: "agent",
+        input: turnId,
+        recoveryCoordinate: "native",
+        harness: "codex",
+        at: AT,
+      }).ok,
+    );
+  }
+  const append = (turnId: string, messageId: string, historyOrder: number) => {
+    assert.ok(
+      owner.appendTurnEvent({
+        turnId,
+        kind: "assistant-content",
+        payload: JSON.stringify({
+          messageId,
+          content: messageId,
+          historyOrder,
+        }),
+        at: AT,
+      }).ok,
+    );
+  };
+  append("first", "second", 2);
+  append("first", "partial", 0);
+  const cutoff = owner.transcriptCutoff();
+  const newest = owner.transcriptPage({ session: "s", cutoff, limit: 2 });
+  assert.deepEqual(
+    newest.entries.map((e) => e.content),
+    ["second", "last"],
+  );
+  assert.equal(newest.hasOlder, true);
+  append("first", "late", 1);
+  const older = owner.transcriptPage({
+    session: "s",
+    cutoff,
+    before: newest.entries[0]!.order,
+    limit: 2,
+  });
+  assert.deepEqual(
+    older.entries.map((e) => e.content),
+    ["first", "partial"],
+  );
+  assert.equal(older.hasOlder, false);
+  assert.deepEqual(
+    owner.transcriptPage({
+      session: "s",
+      cutoff,
+      before: newest.entries[0]!.order,
+      limit: 2,
+    }),
+    older,
+  );
+  const fresh = owner.transcriptPage({
+    session: "s",
+    cutoff: owner.transcriptCutoff(),
+    limit: 20,
+  });
+  assert.deepEqual(
+    fresh.entries.map((e) => e.content),
+    ["first", "partial", "late", "second", "last"],
+  );
+  assert.deepEqual(
+    fresh.entries.filter((e) => e.content !== "late").map((e) => e.seq),
+    [1, 5, 4, 3],
+    "eligibility positions and retained identity never renumber",
+  );
 });

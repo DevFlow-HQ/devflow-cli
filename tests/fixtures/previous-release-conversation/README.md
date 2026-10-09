@@ -35,3 +35,6 @@ and an unfinished Turn. Set `FIXTURE_TURN_ORDER=1` when running `seed.txt` to cr
 They were captured through the predecessor's public Application and headless Interfaces after copying this home. To recapture, copy `headless-seed.txt`
 into the predecessor checkout as `.capture-headless.ts` and run `FIXTURE_SOURCE=<absolute-fixture-folder> timeout -k 10s 60s bun .capture-headless.ts`.
 The capture script uses the predecessor's real Process for any Artifact reads and cleans its temporary copy after closing Application, Store and Catalog.
+
+#497 rebases only the opaque `older` cursor in `headless-transcript-shared.txt` to carry the fixed cutoff and canonical boundary.
+The predecessor entry fields, envelopes, ordering, other Session and `run show` stdout remain byte-identical.

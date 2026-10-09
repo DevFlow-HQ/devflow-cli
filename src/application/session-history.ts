@@ -1,3 +1,4 @@
+import { compareConversationOrder } from "./conversation-order.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { readTurnFact } from "../run/store/store.js";
@@ -74,7 +75,10 @@ interface Observer {
   last?: SessionHistorySnapshot;
 }
 function compare(a: HistoryFact, b: HistoryFact): number {
-  return a.turn.sequence - b.turn.sequence || a.order - b.order;
+  return compareConversationOrder(
+    { turnSequence: a.turn.sequence, position: a.order },
+    { turnSequence: b.turn.sequence, position: b.order },
+  );
 }
 function lowerBound(facts: readonly HistoryFact[], fact: HistoryFact): number {
   let lo = 0,
@@ -225,7 +229,12 @@ export function createSessionHistory(deps: {
           put(run, {
             key: historyKey(record.turnId, "legacy", entry.seq),
             turn: record,
-            order: entry.role === "user" ? -1 : records.events.length + i,
+            // The first migrated input precedes activity. All following
+            // messages keep authoritative transcript order, including user rows.
+            order:
+              i === 0 && entry.role === "user"
+                ? -1
+                : records.events.length + entry.order.position,
             source: "stored",
             value: {
               kind: "message",

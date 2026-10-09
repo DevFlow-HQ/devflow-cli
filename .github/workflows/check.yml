@@ -190,6 +190,14 @@ jobs:
           tests/application/observer-lag.test.ts
           tests/tui/run-view.test.ts
           tests/tui/run-workbench-history-scroll.test.tsx
+      - name: m10-audit-conversation-order
+        run: >-
+          bun run test
+          -t '^m10-audit-conversation-order(:|$)'
+          tests/application/transcript-resource.test.ts
+          tests/run/store/session-and-transcript-evidence.test.ts
+          tests/headless/run.test.ts
+          tests/tui/run-workbench-full-transcript.test.tsx
       - name: m10-audit-history-index
         run: >-
           bun run test --

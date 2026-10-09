@@ -171,6 +171,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-history-latest-delivery",
   "m10-audit-history-index",
   "m10-audit-application-duplicates",
+  "m10-audit-conversation-order",
   "m10-audit-run-scoped-fanout",
   "operation-receipt-identity-and-lifetime",
   "m10-audit-operation-settlement-owner",

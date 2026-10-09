@@ -2,6 +2,8 @@
 
 ## Invariants
 
+- Transcript cursors bind Run, Session, cutoff and order boundary; entry ids still hash the eligibility position (#497).
+
 - `UpdateStream` appends replacing history previews after pruning them, so the last delivered window cutoff and earlier marker stay current (#488).
 - Before changing Run reads, history, observer delivery, progress, context/usage, or Workspace path search, read
   [Application history](../../docs/agents/application-history.md).

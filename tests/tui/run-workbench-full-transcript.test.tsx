@@ -869,3 +869,145 @@ for (const appearance of ["dark", "light"] as const) {
     });
   }
 }
+
+for (const width of [40, 100, 120, 121]) {
+  for (const appearance of ["dark", "light"] as const) {
+    test(`m10-audit-conversation-order: ${appearance} full reader respects canonical order, retained anchors and fresh demand-only export at ${width}`, async () => {
+      const base = previewPreferences();
+      const wb = await mountWorkbench(
+        transcriptRun(),
+        width,
+        30,
+        undefined,
+        true,
+        undefined,
+        {
+          ...base,
+          snapshot: () => ({
+            ...base.snapshot(),
+            preferences: { theme: "everforest", appearance },
+          }),
+        },
+      );
+      const { t, renderer, control } = wb;
+      const entries = [
+        {
+          id: "retained-1",
+          session: "s",
+          role: "user" as const,
+          content: "Input",
+        },
+        {
+          id: "retained-4",
+          session: "s",
+          role: "assistant" as const,
+          content: "Partial began first",
+          incomplete: true as const,
+        },
+        {
+          id: "retained-5",
+          session: "s",
+          role: "user" as const,
+          content: "Sent early",
+          kind: "steer" as const,
+        },
+        {
+          id: "retained-3",
+          session: "s",
+          role: "assistant" as const,
+          content: "Settled first",
+        },
+      ];
+      control.setTranscript("", {
+        found: true,
+        type: "transcript-page",
+        entries,
+        older: "opaque-snapshot-cursor",
+      });
+      await openTranscriptDetails(wb);
+      await press(t, renderer, "home");
+      const frame = t.captureCharFrame();
+      const positions = [
+        "Input",
+        "Partial began first",
+        "Sent early",
+        "Settled first",
+      ].map((text) => frame.indexOf(text));
+      assert.ok(
+        positions.every((n) => n >= 0),
+        frame,
+      );
+      assert.ok(positions.every((n, i) => i === 0 || n > positions[i - 1]!));
+      assert.match(frame, /incomplete/);
+      noOverflow(frame, width);
+      assert.deepEqual(
+        control.transcriptReads.map((ref) => ref.type),
+        ["transcript-page", "transcript-page"],
+      );
+      // A fresh traversal sees a late settlement. The open reader keeps its page and cursor.
+      control.setTranscript("", {
+        found: true,
+        type: "transcript-page",
+        entries: [
+          ...entries.slice(0, 2),
+          {
+            id: "retained-6",
+            session: "s",
+            role: "assistant",
+            content: "Late settlement",
+          },
+          ...entries.slice(2),
+        ],
+      });
+      control.setTranscript("opaque-snapshot-cursor", {
+        found: true,
+        type: "transcript-page",
+        entries: txEntries("user", "Older input"),
+      });
+      await press(t, renderer, "p");
+      const olderRead = control.transcriptReads.at(-1);
+      assert.ok(olderRead?.type === "transcript-page");
+      assert.equal(olderRead.older, "opaque-snapshot-cursor");
+      assert.doesNotMatch(t.captureCharFrame(), /Late settlement/);
+      assert.match(t.captureCharFrame(), /Input/);
+      resizeWorkbench(t, renderer, width, 32);
+      await t.renderOnce();
+      assert.match(t.captureCharFrame(), /Input/);
+      assert.doesNotMatch(t.captureCharFrame(), /Late settlement/);
+      const copied: string[] = [];
+      const original = t.renderer.copyToClipboardOSC52;
+      t.renderer.copyToClipboardOSC52 = (text) => {
+        copied.push(text);
+        return true;
+      };
+      try {
+        control.setTranscript("export", {
+          found: true,
+          type: "transcript-export",
+          entries: [
+            ...entries.slice(0, 2),
+            {
+              id: "retained-6",
+              session: "s",
+              role: "assistant",
+              content: "Late settlement",
+            },
+            ...entries.slice(2),
+          ],
+        });
+        await press(t, renderer, "e");
+        assert.equal(copied.length, 1);
+        assert.match(
+          copied[0]!,
+          /Partial began first\n\nAssistant\nLate settlement\n\nUser · Steer\nSent early/,
+        );
+        assert.doesNotMatch(t.captureCharFrame(), /Late settlement/);
+      } finally {
+        t.renderer.copyToClipboardOSC52 = original;
+      }
+      await press(t, renderer, "escape");
+      await press(t, renderer, "return");
+      assert.match(t.captureCharFrame(), /Late settlement/);
+    });
+  }
+}

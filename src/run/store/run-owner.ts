@@ -55,6 +55,7 @@ import {
   readCurrentTurn,
   readHarnessSessions,
   readTranscript,
+  readTranscriptCutoff,
   readTranscriptPage,
   readTurnEvents,
   readTurns,
@@ -1254,6 +1255,9 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     },
     transcript() {
       return readTranscript(db);
+    },
+    transcriptCutoff() {
+      return readTranscriptCutoff(db);
     },
     transcriptPage(request) {
       return readTranscriptPage(db, request);

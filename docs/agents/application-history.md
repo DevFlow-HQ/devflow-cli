@@ -48,5 +48,8 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
   Reopening creates new identities and a fresh eviction cutoff. Cutoffs belong to subscriptions, so a settled preview cannot permanently hide stored rows
   from a later open. They are presentation identities, never native call ids, Store keys, or retained transcript entry ids.
 
-- Migrated legacy input precedes event write order; its authoritative assistant copy follows the events, before the Turn result.
-  Legacy per-Turn message positions never compare directly with Run-wide event indexes.
+- `conversation-order.ts` owns the comparator shared by Session history, transcript pages and exports: Turn Run sequence, input first, then first appearance.
+  Retained transcript ids still use eligibility positions, independently of that order. `transcript-resource.ts` captures one cutoff per traversal or export;
+  older cursors carry Run, Session, cutoff and an exclusive order boundary. An export reads bounded Session pages under its fresh cutoff.
+- Migrated legacy input precedes event write order; later conversation rows retain authoritative migrated transcript order before the Turn result.
+  Legacy message positions never compare directly with Run-wide event indexes.

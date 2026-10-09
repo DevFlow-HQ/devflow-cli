@@ -18,7 +18,7 @@ const { runId } = z
   .object({ runId: z.string() })
   .parse(JSON.parse(readFileSync(new URL("expected.json", fixture), "utf8")));
 
-test("m10-audit-legacy-turn-order: migrated transcript and run show JSON remain byte-identical to the predecessor", async () => {
+test("m10-audit-legacy-turn-order: migrated transcript and run show JSON preserve predecessor bytes with the snapshot cursor", async () => {
   const home = makeTempDir("secant-legacy-json-");
   cpSync(fixture, home, { recursive: true });
   for (let pass = 0; pass < 2; pass++) {

@@ -486,9 +486,10 @@ export interface HarnessSessionRecord {
 }
 
 /** One retained conversation row, read from canonical Turn records in order.
- *  Legacy metadata remains absent. The position stays private to the Store. */
+ *  Legacy message metadata remains absent. Eligibility and order stay behind the Projection Port. */
 export interface TranscriptEntryRecord {
   readonly seq: number;
+  readonly order: TranscriptOrder;
   readonly kind?: "message" | "steer" | "entry-prompt";
   readonly turn?: string;
   readonly steer?: {
@@ -503,14 +504,18 @@ export interface TranscriptEntryRecord {
   readonly at: string; // ISO 8601
 }
 
-/** A bounded, ordered request for one Session's transcript, newest-first paging.
- *  `before` is an exclusive upper bound on the store sequence (absent = newest
- *  page); `limit` bounds the page so the whole transcript is never materialized.
- *  A non-positive `limit` is clamped to one entry, so a page always carries a
- *  cursor. */
+/** Canonical order evidence, separate from eligibility and retained identity. */
+export interface TranscriptOrder {
+  readonly turnSequence: number;
+  readonly position: number;
+  readonly seq: number;
+}
+
+/** Bounded Session-filtered facts within an Application-owned snapshot. */
 export interface TranscriptPageRequest {
   readonly session: string;
-  readonly before?: number;
+  readonly cutoff: number;
+  readonly before?: TranscriptOrder;
   readonly limit: number;
 }
 
@@ -633,11 +638,11 @@ export interface RunOwner {
   turnEvents(): readonly TurnEventRecord[];
   /** Every named Session's last observed availability. */
   harnessSessions(): readonly HarnessSessionRecord[];
-  /** Every readable transcript entry, in append order. */
+  /** Canonical conversation facts for history initialization. */
   transcript(): readonly TranscriptEntryRecord[];
-  /** One bounded, ordered page of a Session's transcript (#124). The Store owns
-   *  stable paging: it reads only the requested page, never the whole transcript,
-   *  so inspecting a page never materializes the complete export. */
+  /** Current maximum eligibility position. No conversation content is read. */
+  transcriptCutoff(): number;
+  /** Bounded canonical facts, ordered by the requested exclusive boundary. */
   transcriptPage(request: TranscriptPageRequest): TranscriptPage;
   /** The latest Agent-step Attempt's co-sourced identity and optional model, or
    *  legacy model-only evidence. Undefined when no Attempt ran a Harness Turn. */

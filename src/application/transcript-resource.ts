@@ -1,30 +1,46 @@
-import type { RunOwner } from "../run/store/store.js";
+import { z } from "zod";
+import type {
+  RunOwner,
+  TranscriptOrder,
+  TranscriptEntryRecord,
+} from "../run/store/store.js";
 import { runSessionNotFound, runTranscriptCursorInvalid } from "./problems.js";
 import { transcriptView, turnSteps } from "./run-projection.js";
+import { compareConversationOrder } from "./conversation-order.js";
 import type {
   TranscriptExportReference,
   TranscriptPageReference,
   TranscriptRead,
 } from "./projection-port.js";
 
-// Resolves the transcript `page` and `export` Resource References (#124) against
-// an acquired Run Store owner. The Store owns stable paging (`transcriptPage`
-// reads only the requested page); this seam validates the reference, wraps the
-// store sequence in an opaque cursor, and narrows the store rows to the client
-// view. No store row id or native Session id crosses the Port: the cursor is
-// base64url over the Application's own sequence, decoded only here.
-
-/** Entries per bounded transcript page. A page is a handful of Turns, small
- *  enough that inspecting one never reads the whole transcript. Exported so the
- *  multi-page tests seed just past a page without hard-coding the size. */
+/** Bounded transcript pages contain twenty retained conversation entries. */
 export const TRANSCRIPT_PAGE_SIZE = 20;
+// Exports remain bounded without repeating a full order scan every twenty rows.
+const TRANSCRIPT_EXPORT_BATCH_SIZE = 1_000;
 
+const cursorSchema = z
+  .object({
+    version: z.literal(1),
+    runId: z.string(),
+    session: z.string(),
+    cutoff: z.number().int().nonnegative(),
+    before: z
+      .object({
+        turnSequence: z.number().int().nonnegative(),
+        position: z.number().int().min(-1),
+        seq: z.number().int().positive(),
+      })
+      .strict(),
+  })
+  .strict();
+type Cursor = z.infer<typeof cursorSchema>;
+
+// Application owns snapshot lifetime and cursor scope; Store reads bounded
+// canonical facts without copying conversation or retaining a read transaction.
 export function readTranscriptResource(
   owner: RunOwner,
   reference: TranscriptPageReference | TranscriptExportReference,
 ): TranscriptRead {
-  // A Session with a transcript is always a recorded Harness Session (admitting a
-  // Turn upserts it), so an unknown Session name is a reference to nothing.
   const known = owner
     .harnessSessions()
     .some((s) => s.session === reference.session);
@@ -34,62 +50,84 @@ export function readTranscriptResource(
       problem: runSessionNotFound(reference.runId, reference.session),
     };
   }
-
-  // Each entry names the Step whose Turn wrote it (#289).
-  const steps = turnSteps(owner.turns());
-  if (reference.type === "transcript-export") {
-    const entries = owner
-      .transcript()
-      .filter((entry) => entry.session === reference.session)
-      .map((entry) => transcriptView(entry, steps, reference.runId));
-    return { found: true, type: "transcript-export", entries };
-  }
-
-  let before: number | undefined;
-  if (reference.older !== undefined) {
-    before = decodeCursor(reference.older);
-    if (before === undefined) {
+  let cursor: Cursor | undefined;
+  if (reference.type === "transcript-page" && reference.older !== undefined) {
+    cursor = decodeCursor(reference.older);
+    if (
+      cursor === undefined ||
+      cursor.runId !== reference.runId ||
+      cursor.session !== reference.session
+    ) {
       return {
         found: false,
         problem: runTranscriptCursorInvalid(reference.runId, reference.session),
       };
     }
   }
+  const cutoff = cursor?.cutoff ?? owner.transcriptCutoff();
+  const steps = turnSteps(owner.turns());
+  if (reference.type === "transcript-export") {
+    const entries: TranscriptEntryRecord[] = [];
+    let before: TranscriptOrder | undefined;
+    for (;;) {
+      const page = owner.transcriptPage({
+        session: reference.session,
+        cutoff,
+        before,
+        limit: TRANSCRIPT_EXPORT_BATCH_SIZE,
+      });
+      entries.push(...page.entries);
+      if (!page.hasOlder || page.entries[0] === undefined) break;
+      before = page.entries[0].order;
+    }
+    entries.sort((a, b) => compareConversationOrder(a.order, b.order));
+    return {
+      found: true,
+      type: "transcript-export",
+      entries: entries.map((entry) =>
+        transcriptView(entry, steps, reference.runId),
+      ),
+    };
+  }
   const page = owner.transcriptPage({
     session: reference.session,
+    cutoff,
+    before: cursor?.before,
     limit: TRANSCRIPT_PAGE_SIZE,
-    ...(before !== undefined ? { before } : {}),
   });
+  const entries = [...page.entries].sort((a, b) =>
+    compareConversationOrder(a.order, b.order),
+  );
   return {
     found: true,
     type: "transcript-page",
-    entries: page.entries.map((entry) =>
+    entries: entries.map((entry) =>
       transcriptView(entry, steps, reference.runId),
     ),
-    // The next older page starts before this page's oldest entry; only emit a
-    // cursor when older retained entries actually exist.
-    ...(page.hasOlder && page.entries[0] !== undefined
-      ? { older: encodeCursor(page.entries[0].seq) }
+    ...(page.hasOlder && entries[0] !== undefined
+      ? {
+          older: encodeCursor({
+            version: 1,
+            runId: reference.runId,
+            session: reference.session,
+            cutoff,
+            before: entries[0].order,
+          }),
+        }
       : {}),
   };
 }
-/** The opaque `older` cursor: base64url over the store sequence. Opaque to
- *  clients, decoded only here — the raw sequence never crosses the Port. */
-function encodeCursor(seq: number): string {
-  return Buffer.from(JSON.stringify(seq)).toString("base64url");
+function encodeCursor(cursor: Cursor): string {
+  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
 }
-
-/** Decode a cursor this seam produced, or undefined for anything else (a stale or
- *  forged cursor becomes a normalized Problem, never a throw or a wrong page). */
-function decodeCursor(cursor: string): number | undefined {
+function decodeCursor(cursor: string): Cursor | undefined {
   try {
-    const parsed: unknown = JSON.parse(
-      Buffer.from(cursor, "base64url").toString("utf8"),
-    );
-    // Store sequences are positive integers, so anything else is a forged or
-    // corrupted cursor — a Problem, never a silently-empty page.
-    return typeof parsed === "number" && Number.isInteger(parsed) && parsed > 0
-      ? parsed
+    if (!/^[A-Za-z0-9_-]+$/.test(cursor)) return undefined;
+    const bytes = Buffer.from(cursor, "base64url");
+    if (bytes.toString("base64url") !== cursor) return undefined;
+    const parsed = cursorSchema.safeParse(JSON.parse(bytes.toString("utf8")));
+    return parsed.success && parsed.data.before.seq <= parsed.data.cutoff
+      ? parsed.data
       : undefined;
   } catch {
     return undefined;

@@ -6,7 +6,7 @@ import {
   eq,
   isNotNull,
   isNull,
-  lt,
+  lte,
   max,
   ne,
   sql,
@@ -634,14 +634,52 @@ export function readHarnessSessions(
 // their exact content; only a newly admitted input dereferences the Turn input.
 const conversationColumns = {
   seq: turnEvents.transcript_seq,
+  turnSequence: turns.sequence,
   session: turns.session_key,
   turnId: turnEvents.turn_id,
   payload: turnEvents.payload,
   input: turns.input,
   at: turnEvents.at,
 };
+// Compute unstamped historical ordinals once per read. A correlated count per
+// candidate makes a bounded page quadratic in the number of retained events.
+function conversationFacts(db: SQLiteBunDatabase) {
+  const history = db.$with("history_positions").as(
+    db
+      .select({
+        seq: turnEvents.seq,
+        ordinal:
+          sql<number>`row_number() over (order by ${turnEvents.seq}) - 1`.as(
+            "ordinal",
+          ),
+      })
+      .from(turnEvents)
+      .where(
+        and(
+          ne(turnEvents.kind, "turn-input"),
+          ne(turnEvents.kind, "legacy-message"),
+        ),
+      ),
+  );
+  const position = sql<number>`case
+    when ${turnEvents.kind} = 'turn-input' then -1
+    when ${turnEvents.kind} = 'legacy-message' then ${turnEvents.transcript_seq}
+    else coalesce(json_extract(${turnEvents.payload}, '$.historyOrder'), ${history.ordinal})
+  end`;
+  return {
+    position,
+    query: db
+      .with(history)
+      .select({ ...conversationColumns, position })
+      .from(turnEvents)
+      .innerJoin(turns, eq(turns.turn_id, turnEvents.turn_id))
+      .leftJoin(history, eq(history.seq, turnEvents.seq)),
+  };
+}
 const transcriptRow = z.object({
-  seq: z.number(),
+  seq: z.number().int().positive(),
+  turnSequence: z.number().int().nonnegative(),
+  position: z.number().int().min(-1),
   session: z.string(),
   turnId: z.string(),
   payload: z.string(),
@@ -655,6 +693,11 @@ function transcriptRecord(row: unknown): TranscriptEntryRecord {
   );
   return {
     seq: parsed.seq,
+    order: {
+      turnSequence: parsed.turnSequence,
+      position: parsed.position,
+      seq: parsed.seq,
+    },
     session: parsed.session,
     turnId: parsed.turnId,
     at: parsed.at,
@@ -665,12 +708,10 @@ function transcriptRecord(row: unknown): TranscriptEntryRecord {
 export function readTranscript(
   db: SQLiteBunDatabase,
 ): readonly TranscriptEntryRecord[] {
-  return db
-    .select(conversationColumns)
-    .from(turnEvents)
-    .innerJoin(turns, eq(turns.turn_id, turnEvents.turn_id))
+  const { query, position } = conversationFacts(db);
+  return query
     .where(isNotNull(turnEvents.transcript_seq))
-    .orderBy(asc(turnEvents.transcript_seq))
+    .orderBy(asc(turns.sequence), asc(position), asc(turnEvents.transcript_seq))
     .all()
     .map(transcriptRecord);
 }
@@ -680,20 +721,25 @@ export function readTranscriptPage(
   request: TranscriptPageRequest,
 ): TranscriptPage {
   const limit = Math.max(1, request.limit);
-  const rows = db
-    .select(conversationColumns)
-    .from(turnEvents)
-    .innerJoin(turns, eq(turns.turn_id, turnEvents.turn_id))
+  const { query, position } = conversationFacts(db);
+  const rows = query
     .where(
       and(
         eq(turns.session_key, request.session),
-        isNotNull(turnEvents.transcript_seq),
+        lte(turnEvents.transcript_seq, request.cutoff),
         ...(request.before === undefined
           ? []
-          : [lt(turnEvents.transcript_seq, request.before)]),
+          : [
+              sql`(${turns.sequence}, ${position}, ${turnEvents.transcript_seq}) <
+              (${request.before.turnSequence}, ${request.before.position}, ${request.before.seq})`,
+            ]),
       ),
     )
-    .orderBy(desc(turnEvents.transcript_seq))
+    .orderBy(
+      desc(turns.sequence),
+      desc(position),
+      desc(turnEvents.transcript_seq),
+    )
     .limit(limit + 1)
     .all();
   const hasOlder = rows.length > limit;
@@ -703,4 +749,13 @@ export function readTranscriptPage(
       .map(transcriptRecord),
     hasOlder,
   };
+}
+
+export function readTranscriptCutoff(db: SQLiteBunDatabase): number {
+  return (
+    db
+      .select({ value: max(turnEvents.transcript_seq) })
+      .from(turnEvents)
+      .get()?.value ?? 0
+  );
 }

@@ -433,8 +433,11 @@ function runResult(
                   runId,
                   s,
                   names.get(s.session) ?? s.session,
-                  (owner?.transcriptPage({ session: s.session, limit: 1 })
-                    .entries.length ?? 0) > 0,
+                  (owner?.transcriptPage({
+                    session: s.session,
+                    cutoff: owner.transcriptCutoff(),
+                    limit: 1,
+                  }).entries.length ?? 0) > 0,
                 ),
               ),
             }

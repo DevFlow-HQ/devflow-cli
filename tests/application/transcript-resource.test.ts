@@ -12,6 +12,7 @@ import type {
 import { openCatalog } from "../../src/catalog/catalog.js";
 import type { RunGroup } from "../../src/run/store/store.js";
 import { hostPlatform } from "../helpers/commandBundle.js";
+import { openLiveRun } from "../helpers/liveRun.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
@@ -56,9 +57,13 @@ function fixture(t: TestContext) {
 
 /** Create a Run and seed `count` user Turns in one Session, plus one Turn in a
  *  second Session that must never leak into the first's page. */
-function seedRun(runGroup: RunGroup, count: number): string {
+function seedRun(
+  runGroup: RunGroup,
+  count: number,
+  operationId = "op-1",
+): string {
   const created = runGroup.createRun({
-    operationId: "op-1",
+    operationId,
     bundleSnapshotDigest: "sha256:deadbeef",
     launch: { goal: "ship it" },
     at: AT,
@@ -263,4 +268,362 @@ test("m10-interruption-and-transcript: retained entry identity survives repeat r
   assert.ok(reread.found);
   for (const e of reread.entries.slice(0, 43))
     assert.equal(e.id, retainedIds.get(e.content));
+});
+
+test("m10-audit-conversation-order: first appearances, interrupted text and late Steers agree across history, transcript and export", async (t) => {
+  const { app, runGroup } = fixture(t);
+  const runId = seedRun(runGroup, 1);
+  const owner = runGroup.acquireRun(runId);
+  assert.ok(owner);
+  const append = (kind: string, payload: object) => {
+    assert.ok(
+      owner.appendTurnEvent({
+        turnId: "t-0",
+        kind,
+        payload: JSON.stringify(payload),
+        at: AT,
+      }).ok,
+    );
+  };
+  append("steer", {
+    steerId: "late",
+    text: "Sent early",
+    sentAt: AT.toISOString(),
+    historyOrder: 1,
+    settlement: { kind: "waiting" },
+  });
+  append("assistant-content", {
+    messageId: "second",
+    content: "Settled first",
+    historyOrder: 3,
+  });
+  append("assistant-content", {
+    messageId: "first",
+    content: "Interrupted partial",
+    historyOrder: 0,
+    incomplete: true,
+  });
+  append("steer", {
+    steerId: "late",
+    text: "Sent early",
+    sentAt: AT.toISOString(),
+    historyOrder: 1,
+    settlement: { kind: "delivered", delivery: "within-turn" },
+  });
+  append("steer", {
+    steerId: "waiting",
+    text: "Not delivered",
+    sentAt: AT.toISOString(),
+    historyOrder: 4,
+    settlement: { kind: "waiting" },
+  });
+  owner.close();
+  const refs = pageRef(app, runId);
+  const expected = [
+    "input 0",
+    "Interrupted partial",
+    "Sent early",
+    "Settled first",
+  ];
+  for (const ref of [refs.page, refs.export]) {
+    const read = app.projectionPort.readTranscript(ref);
+    assert.ok(read.found);
+    assert.deepEqual(
+      read.entries.map((e) => e.content),
+      expected,
+    );
+    assert.equal(read.entries[1]?.incomplete, true);
+  }
+  const history = app.projectionPort.openProjection({
+    family: "session-history",
+    runId,
+    session: "s",
+  });
+  assert.ok(history.snapshot.result.found);
+  assert.deepEqual(
+    history.snapshot.result.history.rows.flatMap((row) =>
+      row.value.kind === "message" ||
+      row.value.kind === "entry-prompt" ||
+      (row.value.kind === "steer" && row.value.delivery !== "waiting")
+        ? [row.value.content]
+        : [],
+    ),
+    expected,
+  );
+  history.close();
+  await app.shutdown();
+});
+
+test("m10-audit-conversation-order: one cutoff excludes late settlements inside read ranges and older ranges, while reopen and export include them in place", async (t) => {
+  const { app, runGroup } = fixture(t);
+  const runId = seedRun(runGroup, 43);
+  const refs = pageRef(app, runId);
+  const newest = app.projectionPort.readTranscript(refs.page);
+  assert.ok(newest.found && newest.type === "transcript-page" && newest.older);
+  const olderRef = { ...refs.page, older: newest.older };
+  const middle = app.projectionPort.readTranscript(olderRef);
+  assert.ok(middle.found && middle.type === "transcript-page" && middle.older);
+  const owner = runGroup.acquireRun(runId);
+  assert.ok(owner);
+  for (const n of [3, 10, 30]) {
+    assert.ok(
+      owner.appendTurnEvent({
+        turnId: `t-${n}`,
+        kind: "assistant-content",
+        payload: JSON.stringify({
+          messageId: "late",
+          content: `reply ${n}`,
+          historyOrder: 0,
+        }),
+        at: AT,
+      }).ok,
+    );
+  }
+  assert.ok(
+    owner.admitTurn({
+      turnId: "append",
+      attemptId: "0.0:write",
+      session: "s",
+      origin: "human",
+      kind: "agent",
+      input: "later input",
+      recoveryCoordinate: "native",
+      harness: "claude-code",
+      at: AT,
+    }).ok,
+  );
+  owner.close();
+  assert.deepEqual(app.projectionPort.readTranscript(olderRef), middle);
+  const oldest = app.projectionPort.readTranscript({
+    ...refs.page,
+    older: middle.older,
+  });
+  assert.ok(oldest.found && oldest.type === "transcript-page");
+  assert.deepEqual(
+    [...oldest.entries, ...middle.entries, ...newest.entries].map(
+      (e) => e.content,
+    ),
+    Array.from({ length: 43 }, (_, n) => `input ${n}`),
+  );
+  assert.equal(
+    new Set(
+      [...oldest.entries, ...middle.entries, ...newest.entries].map(
+        (e) => e.id,
+      ),
+    ).size,
+    43,
+  );
+  const exported = app.projectionPort.readTranscript(refs.export);
+  assert.ok(exported.found);
+  const expected: string[] = [];
+  for (let n = 0; n < 43; n++) {
+    expected.push(`input ${n}`);
+    if ([3, 10, 30].includes(n)) expected.push(`reply ${n}`);
+  }
+  expected.push("later input");
+  assert.deepEqual(
+    exported.entries.map((e) => e.content),
+    expected,
+  );
+  const reopened = app.projectionPort.readTranscript(refs.page);
+  assert.ok(reopened.found && reopened.type === "transcript-page");
+  assert.deepEqual(
+    reopened.entries.map((e) => e.content),
+    expected.slice(-20),
+  );
+  const ids = new Map(exported.entries.map((e) => [e.content, e.id]));
+  for (const e of [...oldest.entries, ...middle.entries, ...newest.entries])
+    assert.equal(e.id, ids.get(e.content));
+  await app.shutdown();
+});
+
+for (const total of [20, 21])
+  test(`m10-audit-conversation-order: exact ${total}-entry traversal boundary`, async (t) => {
+    const { app, runGroup } = fixture(t);
+    const runId = seedRun(runGroup, total);
+    const refs = pageRef(app, runId);
+    const page = app.projectionPort.readTranscript(refs.page);
+    assert.ok(page.found && page.type === "transcript-page");
+    assert.equal(page.entries.length, 20);
+    assert.deepEqual(
+      page.entries.map((e) => e.content),
+      Array.from({ length: 20 }, (_, n) => `input ${n + total - 20}`),
+    );
+    if (total === 20) assert.equal(page.older, undefined);
+    else {
+      assert.ok(page.older);
+      const older = app.projectionPort.readTranscript({
+        ...refs.page,
+        older: page.older,
+      });
+      assert.ok(older.found && older.type === "transcript-page");
+      assert.deepEqual(
+        older.entries.map((e) => e.content),
+        ["input 0"],
+      );
+      assert.equal(older.older, undefined);
+    }
+    await app.shutdown();
+  });
+
+test("m10-audit-conversation-order: cursors reject foreign Runs, Sessions and malformed boundaries with the typed Problem", async (t) => {
+  const { app, runGroup } = fixture(t);
+  const runId = seedRun(runGroup, 21);
+  const foreignRun = seedRun(runGroup, 21, "op-2");
+  const refs = pageRef(app, runId);
+  const first = app.projectionPort.readTranscript(refs.page);
+  assert.ok(first.found && first.type === "transcript-page" && first.older);
+  for (const reference of [
+    { ...refs.page, runId: foreignRun, older: first.older },
+    { ...refs.page, session: "other", older: first.older },
+    ...[
+      "!",
+      "MQ",
+      "e30",
+      first.older + "=",
+      Buffer.from(
+        JSON.stringify({
+          version: 1,
+          runId,
+          session: "s",
+          cutoff: 0,
+          before: { turnSequence: 0, position: -1, seq: 1 },
+        }),
+      ).toString("base64url"),
+    ].map((older) => ({ ...refs.page, older })),
+  ]) {
+    const read = app.projectionPort.readTranscript(reference);
+    assert.ok(!read.found);
+    assert.equal(read.problem.code, "run-transcript-cursor-invalid");
+  }
+  await app.shutdown();
+});
+
+test("m10-audit-conversation-order: live first appearance stamps survive out-of-order settlement and Interrupt without per-chunk writes", async (t) => {
+  const { port, runId, owner, channel, finish } = await openLiveRun(t);
+  t.after(finish);
+  const at = AT;
+  assert.ok(
+    owner.admitTurn({
+      turnId: "turn",
+      attemptId: "0.0:echo",
+      session: "s",
+      origin: "human",
+      kind: "interactive-agent",
+      input: "Input",
+      recoveryCoordinate: "native",
+      harness: "codex",
+      at,
+    }).ok,
+  );
+  const observe = (messageId: string, content: string) =>
+    channel.observe({
+      message: { turnId: "turn", session: "s", messageId, content },
+    });
+  observe("first", "Starting");
+  assert.ok(
+    owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "tool-call",
+      payload: JSON.stringify({
+        callId: "tool",
+        tool: "read",
+        input: "file",
+        outcome: { kind: "running" },
+      }),
+      at,
+    }).ok,
+  );
+  observe("second", "Later reply");
+  assert.ok(
+    owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "assistant-content",
+      payload: JSON.stringify({ messageId: "second", content: "Later reply" }),
+      at,
+    }).ok,
+  );
+  const pageRef = { runId, session: "s", type: "transcript-page" } as const;
+  const before = port.readTranscript(pageRef);
+  assert.ok(before.found);
+  assert.deepEqual(
+    before.entries.map((e) => e.content),
+    ["Input", "Later reply"],
+  );
+  const events = owner.turnEvents();
+  observe("first", "Starting, growing");
+  observe("first", "Interrupted partial");
+  observe("crash-lost", "Never retained");
+  assert.deepEqual(
+    owner.turnEvents(),
+    events,
+    "live chunks do not write canonical events",
+  );
+  assert.ok(
+    owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "assistant-content",
+      payload: JSON.stringify({
+        messageId: "first",
+        content: "Interrupted partial",
+        incomplete: true,
+      }),
+      at,
+    }).ok,
+  );
+  assert.ok(
+    owner.settleTurn({
+      turnId: "turn",
+      session: "s",
+      resultKind: "interrupted",
+      resultDetail: "{}",
+      availability: "open",
+      at,
+    }).ok,
+  );
+  for (const type of ["transcript-page", "transcript-export"] as const) {
+    const read = port.readTranscript({ runId, session: "s", type });
+    assert.ok(read.found);
+    assert.deepEqual(
+      read.entries.map((e) => e.content),
+      ["Input", "Interrupted partial", "Later reply"],
+    );
+    assert.equal(read.entries[1]?.incomplete, true);
+  }
+  const history = port.openProjection({
+    family: "session-history",
+    runId,
+    session: "s",
+  });
+  assert.ok(history.snapshot.result.found);
+  assert.deepEqual(
+    history.snapshot.result.history.rows.flatMap((row) =>
+      row.source === "stored" && row.value.kind === "message"
+        ? [row.value.content]
+        : [],
+    ),
+    ["Input", "Interrupted partial", "Later reply"],
+  );
+  history.close();
+});
+
+test("m10-audit-conversation-order: a large export crosses its bounded batch without gaps, duplicates or Session leakage", async (t) => {
+  const { app, runGroup } = fixture(t);
+  const runId = seedRun(runGroup, 1_001);
+  const refs = pageRef(app, runId);
+  const exported = app.projectionPort.readTranscript(refs.export);
+  assert.ok(exported.found && exported.type === "transcript-export");
+  assert.deepEqual(
+    exported.entries.map((e) => e.content),
+    Array.from({ length: 1_001 }, (_, n) => `input ${n}`),
+  );
+  assert.equal(new Set(exported.entries.map((e) => e.id)).size, 1_001);
+  const page = app.projectionPort.readTranscript(refs.page);
+  assert.ok(page.found && page.type === "transcript-page");
+  assert.equal(page.entries.length, 20);
+  assert.deepEqual(
+    page.entries.map((e) => e.content),
+    Array.from({ length: 20 }, (_, n) => `input ${981 + n}`),
+  );
+  await app.shutdown();
 });

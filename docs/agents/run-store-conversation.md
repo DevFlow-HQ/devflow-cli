@@ -13,7 +13,10 @@ The [Run Store notes](../../src/run/store/AGENTS.md) keep ownership and fencing 
 - Turn request (ADR 0034): `admitTurn` writes the requested Model choice into the nullable, free-text `turn.requested_model`/`requested_effort`, null for
   no request and on older rows; `TurnRecord.modelChoice` is present only when a model is stored, and settlement never touches them.
 - Conversation ordering (#411): nullable unique `turn_event.transcript_seq` keeps old transcript positions and allocates later ones under the owner fence.
-  Pages filter by Session and exclusive `before`; later appends never renumber retained rows. Legacy rows have no fabricated new metadata.
+  This is eligibility and retained identity, not first appearance. `transcriptCutoff` reads its current maximum; bounded pages filter by Session,
+  cutoff and an exclusive typed order boundary, returning at most `limit` entries plus `hasOlder` from one extra row. Application owns cursors and snapshots.
+  Order evidence is Turn sequence, input first, then persisted `historyOrder`, or authoritative migrated transcript position for legacy conversation.
+  Unstamped historical facts retain event append-order evidence. Later appends never renumber retained rows; legacy first appearances are never reconstructed.
   `turn-input` stores admitted input with `role: "user"` and `kind: "entry-prompt"` for every `managed` origin, including Agent-step retries and re-sends.
   Human Turn inputs store `kind: "message"`. Earlier stored kinds remain unchanged in transcript pages and exports; Session history derives attribution from origin.
   `legacy-message` retains migrated conversation without invented Turn metadata. Both are excluded from `turnEvents()`.

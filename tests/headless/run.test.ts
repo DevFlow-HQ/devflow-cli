@@ -1851,3 +1851,110 @@ test("m10-audit-changed-file-cap: headless transcript and export keep complete m
   assert.equal(await h.run(["run", "read", runId, "--transcript"]), 0);
   assert.equal(h.stdout().split(content).length - 1, 2);
 });
+
+test("m10-audit-conversation-order: headless JSON orders first appearances and keeps the frozen page/export mapper", async (t) => {
+  const h = await harness(t);
+  const { id, digest } = await h.install();
+  h.approve();
+  const runId = await launchTrusted({
+    h,
+    bundle: { id, digest },
+    expectedExit: 0,
+  });
+  assert.ok(h.runGroup);
+  const owner = h.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  const at = new Date("2026-10-06T00:00:00.000Z");
+  assert.ok(
+    owner.admitTurn({
+      turnId: "ordered",
+      attemptId: "0.0:agent",
+      session: "s",
+      origin: "human",
+      kind: "agent",
+      input: "Input",
+      recoveryCoordinate: "native",
+      harness: "codex",
+      at,
+    }).ok,
+  );
+  for (const [messageId, content, historyOrder, incomplete] of [
+    ["later", "Settled first", 2, false],
+    ["earlier", "Interrupted partial", 0, true],
+  ] as const) {
+    assert.ok(
+      owner.appendTurnEvent({
+        turnId: "ordered",
+        kind: "assistant-content",
+        payload: JSON.stringify({
+          messageId,
+          content,
+          historyOrder,
+          ...(incomplete ? { incomplete } : {}),
+        }),
+        at,
+      }).ok,
+    );
+  }
+  assert.ok(
+    owner.appendTurnEvent({
+      turnId: "ordered",
+      kind: "steer",
+      payload: JSON.stringify({
+        steerId: "direction",
+        text: "Sent early",
+        historyOrder: 1,
+        sentAt: at.toISOString(),
+        settlement: { kind: "delivered", delivery: "after-boundary" },
+      }),
+      at,
+    }).ok,
+  );
+  owner.close();
+  h.reset();
+  assert.equal(
+    await h.run(["run", "read", runId, "--transcript", "--json"]),
+    0,
+    h.output(),
+  );
+  const entries = [
+    {
+      session: "s",
+      role: "user",
+      content: "Input",
+      step: "agent",
+      kind: "message",
+      turn: "ordered",
+    },
+    {
+      session: "s",
+      role: "assistant",
+      content: "Interrupted partial",
+      step: "agent",
+      kind: "message",
+      turn: "ordered",
+      incomplete: true,
+    },
+    {
+      session: "s",
+      role: "user",
+      content: "Sent early",
+      step: "agent",
+      kind: "steer",
+      turn: "ordered",
+      steer: { id: "direction", delivery: "after-boundary" },
+    },
+    {
+      session: "s",
+      role: "assistant",
+      content: "Settled first",
+      step: "agent",
+      kind: "message",
+      turn: "ordered",
+    },
+  ];
+  assert.deepEqual(JSON.parse(h.stdout()), {
+    page: { found: true, type: "transcript-page", entries },
+    export: { found: true, type: "transcript-export", entries },
+  });
+});

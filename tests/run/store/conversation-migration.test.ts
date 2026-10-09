@@ -72,7 +72,11 @@ test("m10-previous-release-conversation: authoritative empty/divergent messages 
         assert.deepEqual(owner.pendingGate(), expected.pendingGate);
         assert.deepEqual(owner.harnessSessions(), expected.sessions);
         assert.ok(owner.currentVersion("proof"));
-        const page = owner.transcriptPage({ session: "shared", limit: 20 });
+        const page = owner.transcriptPage({
+          cutoff: owner.transcriptCutoff(),
+          session: "shared",
+          limit: 20,
+        });
         assert.equal(page.entries.length, 20);
         assert.equal(page.hasOlder, true);
         assert.deepEqual(
@@ -129,8 +133,13 @@ test("m10-previous-release-conversation: authoritative empty/divergent messages 
       );
       assert.equal(owner.transcript().at(-1)?.content, "later message");
       assert.ok(
-        owner.transcriptPage({ session: "shared", limit: 20 }).entries.at(-1)!
-          .seq > 24,
+        owner
+          .transcriptPage({
+            cutoff: owner.transcriptCutoff(),
+            session: "shared",
+            limit: 20,
+          })
+          .entries.at(-1)!.seq > 24,
       );
     } finally {
       owner.close();
