@@ -128,7 +128,7 @@ const requestRaised = z.object({
   requestId: z.string(),
   tool: z.string(),
   input: z.string().optional(),
-  decisions: z.array(z.string()).optional(),
+  decisions: z.array(z.string()).readonly().optional(),
 });
 const requestAnswered = z.object({
   requestId: z.string(),

@@ -149,11 +149,13 @@ export function conversationConsumer(
       });
       owner.appendTurnEvent({
         turnId: "later",
-        kind: "assistant-content",
-        payload: JSON.stringify({
-          messageId: "later-message",
-          content: "Later reply",
-        }),
+        fact: {
+          kind: "assistant-content",
+          data: {
+            messageId: "later-message",
+            content: "Later reply",
+          },
+        },
         at: new Date(),
       });
       owner.settleTurn({

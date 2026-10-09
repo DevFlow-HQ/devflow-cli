@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import type { AppendTurnEventRequest } from "../../src/run/store/store.js";
 import { openLiveRun } from "../helpers/liveRun.js";
 
 function admit(
@@ -107,8 +108,10 @@ for (const size of [100, 10_000])
     assert.ok(
       run.owner.appendTurnEvent({
         turnId: "turn",
-        kind: "assistant-content",
-        payload: JSON.stringify({ messageId: "live", content: "Done" }),
+        fact: {
+          kind: "assistant-content",
+          data: { messageId: "live", content: "Done" },
+        },
         at: new Date(),
       }).ok,
     );
@@ -155,11 +158,13 @@ for (const size of [100, 10_000])
         const before = performance.now();
         run.owner.appendTurnEvent({
           turnId: "turn",
-          kind: "assistant-content",
-          payload: JSON.stringify({
-            messageId: `bench-${i}`,
-            content: "Settled",
-          }),
+          fact: {
+            kind: "assistant-content",
+            data: {
+              messageId: `bench-${i}`,
+              content: "Settled",
+            },
+          },
           at: new Date(),
         });
         appendTotal += performance.now() - before;
@@ -217,8 +222,7 @@ test("m10-audit-history-index: no observer means previews derive nothing; irrele
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "model",
-    payload: JSON.stringify({ model: "new-model" }),
+    fact: { kind: "model", data: { model: "new-model" } },
     at: new Date(),
   });
   run.owner.writeState("running");
@@ -239,13 +243,15 @@ test("m10-audit-history-index: eviction belongs to each subscription and same-Ap
   for (let i = 0; i < 200; i++)
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId: `tool-${i}`,
-        tool: "read",
-        input: `File ${i}`,
-        outcome: { kind: "running" },
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId: `tool-${i}`,
+          tool: "read",
+          input: `File ${i}`,
+          outcome: { kind: "running" },
+        },
+      },
       at: new Date(),
     });
   const old = run.port.openProjection({
@@ -325,10 +331,9 @@ test("m10-audit-history-index: duplicate facts and another Session's writes do n
     session: "s",
   });
   t.after(page.close);
-  const event = {
+  const event: AppendTurnEventRequest = {
     turnId: "turn",
-    kind: "thought",
-    payload: JSON.stringify({ summaryId: "one", content: "Kept" }),
+    fact: { kind: "thought", data: { summaryId: "one", content: "Kept" } },
     at: new Date(),
   };
   run.owner.appendTurnEvent(event);
@@ -347,7 +352,10 @@ test("m10-audit-history-index: duplicate facts and another Session's writes do n
   });
   run.owner.appendTurnEvent({
     ...event,
-    payload: JSON.stringify({ summaryId: "one", content: "Ignored duplicate" }),
+    fact: {
+      kind: "thought",
+      data: { summaryId: "one", content: "Ignored duplicate" },
+    },
   });
   run.owner.admitTurn({
     turnId: "other",
@@ -362,8 +370,10 @@ test("m10-audit-history-index: duplicate facts and another Session's writes do n
   });
   run.owner.appendTurnEvent({
     turnId: "other",
-    kind: "thought",
-    payload: JSON.stringify({ summaryId: "other", content: "Invisible" }),
+    fact: {
+      kind: "thought",
+      data: { summaryId: "other", content: "Invisible" },
+    },
     at: new Date(),
   });
   await Promise.resolve();
@@ -419,11 +429,13 @@ test("m10-audit-application-duplicates: history names a foreign live owner and r
   admit(owner, "external");
   owner.appendTurnEvent({
     turnId: "external",
-    kind: "assistant-content",
-    payload: JSON.stringify({
-      messageId: "external",
-      content: "Committed elsewhere",
-    }),
+    fact: {
+      kind: "assistant-content",
+      data: {
+        messageId: "external",
+        content: "Committed elsewhere",
+      },
+    },
     at: new Date(),
   });
   owner.settleTurn({

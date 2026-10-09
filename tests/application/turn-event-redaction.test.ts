@@ -69,8 +69,10 @@ for (const kind of ["codex", "claude-code"] as const) {
     assert.ok(
       oldOwner.appendTurnEvent({
         turnId: "old-turn",
-        kind: "assistant-content",
-        payload: JSON.stringify({ messageId: "old-message", content: bearer }),
+        fact: {
+          kind: "assistant-content",
+          data: { messageId: "old-message", content: bearer },
+        },
         at: new Date(),
       }).ok,
     );

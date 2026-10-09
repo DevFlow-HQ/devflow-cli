@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { AppendTurnEventRequest } from "../../src/run/store/store.js";
 import { realpathSync } from "node:fs";
 import {
   createApplication,
@@ -94,13 +95,15 @@ test("m10-audit-run-scoped-fanout: Turn events and settlement perform zero censu
     assert.ok(
       run.owner.appendTurnEvent({
         turnId: "turn",
-        kind: "tool-call",
-        payload: JSON.stringify({
-          callId: `tool-${i}`,
-          tool: "read",
-          input: `File ${i}`,
-          outcome: { kind: "completed" },
-        }),
+        fact: {
+          kind: "tool-call",
+          data: {
+            callId: `tool-${i}`,
+            tool: "read",
+            input: `File ${i}`,
+            outcome: { kind: "completed" },
+          },
+        },
         at: AT,
       }).ok,
     );
@@ -122,8 +125,10 @@ test("m10-audit-run-scoped-fanout: Turn events and settlement perform zero censu
   // Settled facts flush a pending window immediately, including the Turn result.
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "answer", content: "Done" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "answer", content: "Done" },
+    },
     at: AT,
   });
   const settledNext = iterators[1]!.next();
@@ -207,10 +212,12 @@ test("m10-audit-run-scoped-fanout: deduplicated append pushes nothing and closin
   });
   const view = run.port.openProjection({ family: "run", runId: run.runId });
   t.after(view.close);
-  const event = {
+  const event: AppendTurnEventRequest = {
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "answer", content: "Done" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "answer", content: "Done" },
+    },
     at: AT,
   };
   assert.ok(run.owner.appendTurnEvent(event).ok);
@@ -223,7 +230,10 @@ test("m10-audit-run-scoped-fanout: deduplicated append pushes nothing and closin
   assert.equal(await isPending(next), true);
   run.owner.appendTurnEvent({
     ...event,
-    payload: JSON.stringify({ messageId: "another", content: "Later" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "another", content: "Later" },
+    },
   });
   assert.equal(clock.pending.size, 1);
   view.close();
@@ -232,7 +242,10 @@ test("m10-audit-run-scoped-fanout: deduplicated append pushes nothing and closin
   t.after(reopened.close);
   run.owner.appendTurnEvent({
     ...event,
-    payload: JSON.stringify({ messageId: "third", content: "Reopened" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "third", content: "Reopened" },
+    },
   });
   clock.flush();
   assert.equal(
@@ -446,8 +459,10 @@ test("m10-audit-run-scoped-fanout: shutdown cancels pending Run work and ends ob
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "answer", content: "Done" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "answer", content: "Done" },
+    },
     at: AT,
   });
   assert.equal(clock.pending.size, 1);

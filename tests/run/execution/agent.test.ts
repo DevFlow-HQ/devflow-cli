@@ -10,6 +10,7 @@ import {
   translateCause,
   type HarnessProfile,
   type PreparedHarness,
+  type TurnFact,
   type TurnRequest,
   type TurnResult,
 } from "../../../src/harness/harness.js";
@@ -1757,13 +1758,17 @@ for (const fault of ["invalid", "storage", "malformed", "fenced"] as const) {
         : {
             ...f.owner,
             appendTurnEvent(request) {
-              if (request.kind === "tool-call" && fault === "malformed") {
+              if (request.fact.kind === "tool-call" && fault === "malformed") {
+                // An unchecked caller's data that does not match its kind.
                 return f.owner.appendTurnEvent({
                   ...request,
-                  payload: "private_turn_text_432",
+                  fact: {
+                    kind: "tool-call",
+                    data: "private_turn_text_432",
+                  } as unknown as TurnFact,
                 });
               }
-              if (request.kind === "tool-call")
+              if (request.fact.kind === "tool-call")
                 return fault === "fenced"
                   ? { ok: false, reason: "fenced" }
                   : {

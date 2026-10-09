@@ -679,8 +679,10 @@ test("m10-audit-history-latest-delivery: the production history client reads who
   assert.ok(
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "assistant-content",
-      payload: JSON.stringify({ messageId: "one", content: "Settled" }),
+      fact: {
+        kind: "assistant-content",
+        data: { messageId: "one", content: "Settled" },
+      },
       at: new Date(),
     }).ok,
   );

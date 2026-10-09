@@ -619,11 +619,10 @@ export function createSessionHistory(deps: {
     ): AppendTurnEventRequest {
       const run = runs.get(runId);
       const turn = run?.turns.get(request.turnId);
-      const fact = readTurnFact(request);
+      const fact = request.fact;
       if (
         run === undefined ||
         turn === undefined ||
-        fact === undefined ||
         fact.kind === "model" ||
         fact.kind === "agent-call-expired"
       )

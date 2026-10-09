@@ -1,3 +1,4 @@
+import { turnFact, type TurnFactData } from "../helpers/turnFact.js";
 import { historyTextEdges, screenHistoryPortion } from "../../src/tui/tui.js";
 import type { RunWorkbenchView } from "../../src/tui/tui.js";
 import assert from "node:assert/strict";
@@ -16,10 +17,10 @@ import type {
   HistoryContentRequest,
 } from "../../src/application/projection-port.js";
 
-async function fixture(
+async function fixture<K extends "turn-diff" | "tool-call">(
   t: Parameters<typeof openLiveRun>[0],
-  kind: "turn-diff" | "tool-call",
-  payload: object,
+  kind: K,
+  payload: TurnFactData<K>,
   appearance: "dark" | "light" = "dark",
 ) {
   let pendingPreview: (() => void) | undefined;
@@ -46,8 +47,7 @@ async function fixture(
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind,
-    payload: JSON.stringify(payload),
+    fact: turnFact(kind, payload),
     at: new Date(),
   });
   const opened = run.port.openProjection({
@@ -254,8 +254,10 @@ test("m10-audit-history-tool-content: output expansion loads locally, retries in
   assert.ok(older);
   wb.run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "m", content: "Other row" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "m", content: "Other row" },
+    },
     at: new Date(),
   });
   const updated = await wb.opened.updates[Symbol.asyncIterator]().next();
@@ -291,7 +293,7 @@ test("m10-audit-history-tool-content: visible large paths and complete file meta
   const firstPath = "FIRST_PATH_" + "x".repeat(5000) + "_PATH_END";
   const files = Array.from({ length: 300 }, (_, i) => ({
     path: i === 0 ? firstPath : `supplied-${i}.ts`,
-    kind: "update",
+    kind: "update" as const,
     additions: i,
     removals: 2,
   }));

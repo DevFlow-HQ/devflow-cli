@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
+import type { TurnFact } from "../../src/harness/harness.js";
+import { turnFact, type TurnFactData } from "../helpers/turnFact.js";
 import test, { type TestContext } from "node:test";
 import {
   createApplication,
@@ -275,12 +277,14 @@ test("m10-audit-conversation-order: first appearances, interrupted text and late
   const runId = seedRun(runGroup, 1);
   const owner = runGroup.acquireRun(runId);
   assert.ok(owner);
-  const append = (kind: string, payload: object) => {
+  const append = <K extends TurnFact["kind"]>(
+    kind: K,
+    payload: TurnFactData<K>,
+  ) => {
     assert.ok(
       owner.appendTurnEvent({
         turnId: "t-0",
-        kind,
-        payload: JSON.stringify(payload),
+        fact: turnFact(kind, payload),
         at: AT,
       }).ok,
     );
@@ -369,12 +373,14 @@ test("m10-audit-conversation-order: one cutoff excludes late settlements inside 
     assert.ok(
       owner.appendTurnEvent({
         turnId: `t-${n}`,
-        kind: "assistant-content",
-        payload: JSON.stringify({
-          messageId: "late",
-          content: `reply ${n}`,
-          historyOrder: 0,
-        }),
+        fact: {
+          kind: "assistant-content",
+          data: {
+            messageId: "late",
+            content: `reply ${n}`,
+            historyOrder: 0,
+          },
+        },
         at: AT,
       }).ok,
     );
@@ -524,13 +530,15 @@ test("m10-audit-conversation-order: live first appearance stamps survive out-of-
   assert.ok(
     owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId: "tool",
-        tool: "read",
-        input: "file",
-        outcome: { kind: "running" },
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId: "tool",
+          tool: "read",
+          input: "file",
+          outcome: { kind: "running" },
+        },
+      },
       at,
     }).ok,
   );
@@ -538,8 +546,10 @@ test("m10-audit-conversation-order: live first appearance stamps survive out-of-
   assert.ok(
     owner.appendTurnEvent({
       turnId: "turn",
-      kind: "assistant-content",
-      payload: JSON.stringify({ messageId: "second", content: "Later reply" }),
+      fact: {
+        kind: "assistant-content",
+        data: { messageId: "second", content: "Later reply" },
+      },
       at,
     }).ok,
   );
@@ -562,12 +572,14 @@ test("m10-audit-conversation-order: live first appearance stamps survive out-of-
   assert.ok(
     owner.appendTurnEvent({
       turnId: "turn",
-      kind: "assistant-content",
-      payload: JSON.stringify({
-        messageId: "first",
-        content: "Interrupted partial",
-        incomplete: true,
-      }),
+      fact: {
+        kind: "assistant-content",
+        data: {
+          messageId: "first",
+          content: "Interrupted partial",
+          incomplete: true,
+        },
+      },
       at,
     }).ok,
   );

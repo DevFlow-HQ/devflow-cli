@@ -524,6 +524,12 @@ jobs:
           tests/composition/run-lifecycle-log.test.ts
           tests/headless/agent-step.test.ts
           tests/tui/live-run-workbench.test.tsx
+      - name: m10-followup-typed-turn-facts
+        run: >-
+          bun run test --
+          -t '^m10-followup-typed-turn-facts(:|$)'
+          tests/run/store/session-and-transcript-evidence.test.ts
+          tests/run/store/conversation-migration.test.ts
       - name: m10-audit-headless-output-parity
         run: >-
           bun run test --

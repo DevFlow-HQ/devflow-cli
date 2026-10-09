@@ -6,7 +6,6 @@ import {
   createTurnEventProducerForTest,
   type TurnEvent,
 } from "../../src/harness/harness.js";
-import { readTurnFact } from "../../src/run/store/store.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import type { RequestChannel } from "../../src/run/execution/execution.js";
 import type { RunOwner } from "../../src/run/store/store.js";
@@ -173,7 +172,10 @@ export async function openLiveRun(
           )
             state.receipt = owner.appendTurnEvent({
               ...state.request,
-              payload: JSON.stringify(event.call),
+              fact:
+                event.kind === "tool-call"
+                  ? { kind: "tool-call", data: event.call }
+                  : { kind: "tool-partial", data: event.call },
             });
         });
         producers.set(turnId, state);
@@ -185,9 +187,9 @@ export async function openLiveRun(
           return owner.record;
         },
         appendTurnEvent(request) {
-          const fact = readTurnFact(request);
+          const { fact } = request;
           if (
-            (fact?.kind !== "tool-call" && fact?.kind !== "tool-partial") ||
+            (fact.kind !== "tool-call" && fact.kind !== "tool-partial") ||
             fact.data.tool !== "command"
           )
             return owner.appendTurnEvent(request);

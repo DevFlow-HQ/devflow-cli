@@ -21,6 +21,7 @@ import type {
   ModelChoice,
   SafeCause,
   SteerCapability,
+  TurnFact,
 } from "../../harness/harness.js";
 import { type ProcessAdapter } from "../../process/process.js";
 import type {
@@ -412,11 +413,12 @@ export interface AdmitTurnRequest {
   readonly at: Date;
 }
 
-/** Append one normalized durable Turn event (append-only). */
+/** Append one normalized durable Turn fact (append-only). The Store checks the
+ *  fact, with any stamped `historyOrder`, against its kind's schema and refuses a
+ *  malformed one or an unknown kind as `unrecordable`. */
 export interface AppendTurnEventRequest {
   readonly turnId: string;
-  readonly kind: string;
-  readonly payload: string; // JSON
+  readonly fact: TurnFact;
   readonly historyOrder?: number;
   readonly at: Date;
 }

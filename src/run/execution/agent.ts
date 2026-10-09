@@ -533,7 +533,7 @@ async function driveHarnessTurn(
       observe({
         kind: "turn-event-refused",
         ...ids,
-        eventKind: request.kind,
+        eventKind: request.fact.kind,
         refusal: receipt,
       });
     }
@@ -638,13 +638,15 @@ async function driveHarnessTurn(
               : { outcome: "refused", reason: legality.reason };
         const recorded = append({
           turnId,
-          kind: "agent-call",
-          payload: JSON.stringify({
-            callId: event.call.callId.opaque,
-            id: event.call.id,
-            reason: event.call.reason,
-            answer,
-          }),
+          fact: {
+            kind: "agent-call",
+            data: {
+              callId: event.call.callId.opaque,
+              id: event.call.id,
+              reason: event.call.reason,
+              answer,
+            },
+          },
           at: new Date(),
         });
         callAnswers.push(
@@ -659,8 +661,10 @@ async function driveHarnessTurn(
               if (receipt.outcome === "rejected")
                 append({
                   turnId,
-                  kind: "agent-call-expired",
-                  payload: JSON.stringify({ callId: event.call.callId.opaque }),
+                  fact: {
+                    kind: "agent-call-expired",
+                    data: { callId: event.call.callId.opaque },
+                  },
                   at: new Date(),
                 });
             }),
@@ -710,12 +714,14 @@ async function driveHarnessTurn(
         if (!settledSteers.has(input.steerId)) {
           const recorded = append({
             turnId,
-            kind: "steer",
-            payload: JSON.stringify({
-              ...input,
-              sentAt: sentAt.toISOString(),
-              settlement: { kind: "waiting" },
-            }),
+            fact: {
+              kind: "steer",
+              data: {
+                ...input,
+                sentAt: sentAt.toISOString(),
+                settlement: { kind: "waiting" },
+              },
+            },
             at: sentAt,
           });
           if (!recorded.ok)
@@ -1182,25 +1188,29 @@ function recordTurnEvent(
   if (event.kind === "elicitation-declined") {
     return append({
       turnId,
-      kind: event.kind,
-      payload: JSON.stringify({
-        harness: event.harness,
-        server: event.server,
-        message: event.message,
-        ...(event.url === undefined ? {} : { url: event.url }),
-      }),
+      fact: {
+        kind: "elicitation-declined",
+        data: {
+          harness: event.harness,
+          server: event.server,
+          message: event.message,
+          ...(event.url === undefined ? {} : { url: event.url }),
+        },
+      },
       at: new Date(),
     });
   } else if (event.kind === "steer") {
     return append({
       turnId,
-      kind: "steer",
-      payload: JSON.stringify({
-        steerId: event.steerId,
-        text: event.text,
-        sentAt: event.sentAt,
-        settlement: event.settlement,
-      }),
+      fact: {
+        kind: "steer",
+        data: {
+          steerId: event.steerId,
+          text: event.text,
+          sentAt: event.sentAt,
+          settlement: event.settlement,
+        },
+      },
       at: new Date(),
     });
   } else if (event.kind === "model") {
@@ -1211,59 +1221,66 @@ function recordTurnEvent(
       return;
     return append({
       turnId,
-      kind: "model",
-      payload: JSON.stringify({
-        model: event.observation.model,
-        ...(event.observation.effort !== undefined
-          ? { effort: event.observation.effort }
-          : {}),
-      }),
+      fact: {
+        kind: "model",
+        data: {
+          model: event.observation.model,
+          ...(event.observation.effort !== undefined
+            ? { effort: event.observation.effort }
+            : {}),
+        },
+      },
       at: new Date(),
     });
   } else if (event.kind === "assistant-content") {
     return append({
       turnId,
-      kind: "assistant-content",
-      payload: JSON.stringify({
-        content: event.content,
-        ...(event.messageId === undefined
-          ? {}
-          : { messageId: event.messageId }),
-        ...(event.incomplete === undefined
-          ? {}
-          : { incomplete: event.incomplete }),
-        ...(event.parentActivity === undefined
-          ? {}
-          : { parentActivity: event.parentActivity }),
-      }),
+      fact: {
+        kind: "assistant-content",
+        data: {
+          content: event.content,
+          ...(event.messageId === undefined
+            ? {}
+            : { messageId: event.messageId }),
+          ...(event.incomplete === undefined
+            ? {}
+            : { incomplete: event.incomplete }),
+          ...(event.parentActivity === undefined
+            ? {}
+            : { parentActivity: event.parentActivity }),
+        },
+      },
       at: new Date(),
     });
   } else if (event.kind === "turn-diff") {
     return append({
       turnId,
-      kind: "turn-diff",
-      payload: JSON.stringify(event.diff),
+      fact: { kind: "turn-diff", data: event.diff },
       at: new Date(),
     });
   } else if (event.kind === "thought") {
     return append({
       turnId,
-      kind: "thought",
-      payload: JSON.stringify({
-        summaryId: event.summaryId,
-        content: event.content,
-        ...(event.incomplete === undefined ? {} : { incomplete: true }),
-        ...(event.durationMs === undefined
-          ? {}
-          : { durationMs: event.durationMs }),
-      }),
+      fact: {
+        kind: "thought",
+        data: {
+          summaryId: event.summaryId,
+          content: event.content,
+          ...(event.incomplete === undefined ? {} : { incomplete: true }),
+          ...(event.durationMs === undefined
+            ? {}
+            : { durationMs: event.durationMs }),
+        },
+      },
       at: new Date(),
     });
   } else if (event.kind === "tool-call" || event.kind === "tool-partial") {
     return append({
       turnId,
-      kind: event.kind,
-      payload: JSON.stringify(event.call),
+      fact:
+        event.kind === "tool-call"
+          ? { kind: "tool-call", data: event.call }
+          : { kind: "tool-partial", data: event.call },
       at: new Date(),
     });
   } else if (event.kind === "request-raised") {
@@ -1273,13 +1290,15 @@ function recordTurnEvent(
     if (event.request.shape.kind === "approval") {
       return append({
         turnId,
-        kind: "request-raised",
-        payload: JSON.stringify({
-          requestId: event.request.requestId.opaque,
-          tool: event.request.shape.tool,
-          input: event.request.shape.input,
-          decisions: event.request.shape.decisions,
-        }),
+        fact: {
+          kind: "request-raised",
+          data: {
+            requestId: event.request.requestId.opaque,
+            tool: event.request.shape.tool,
+            input: event.request.shape.input,
+            decisions: event.request.shape.decisions,
+          },
+        },
         at: new Date(),
       });
     }
@@ -1291,19 +1310,23 @@ function recordTurnEvent(
       event.answer.kind === "approval" ? event.answer.decision : undefined;
     return append({
       turnId,
-      kind: "request-answered",
-      payload: JSON.stringify({
-        requestId: event.requestId.opaque,
-        by,
-        ...(decision !== undefined ? { decision } : {}),
-      }),
+      fact: {
+        kind: "request-answered",
+        data: {
+          requestId: event.requestId.opaque,
+          by,
+          ...(decision !== undefined ? { decision } : {}),
+        },
+      },
       at: new Date(),
     });
   } else if (event.kind === "request-expired") {
     return append({
       turnId,
-      kind: "request-expired",
-      payload: JSON.stringify({ requestId: event.requestId.opaque }),
+      fact: {
+        kind: "request-expired",
+        data: { requestId: event.requestId.opaque },
+      },
       at: new Date(),
     });
   }

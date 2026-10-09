@@ -438,13 +438,15 @@ for (const state of ["running", "blocked"] as const) {
     assert.ok(
       owner.appendTurnEvent({
         turnId: last.turnId,
-        kind: "agent-call",
-        payload: JSON.stringify({
-          callId: "crash-call",
-          id: "step_done",
-          reason: "finished before crash",
-          answer: { outcome: "accepted" },
-        }),
+        fact: {
+          kind: "agent-call",
+          data: {
+            callId: "crash-call",
+            id: "step_done",
+            reason: "finished before crash",
+            answer: { outcome: "accepted" },
+          },
+        },
         at: new Date(),
       }).ok,
     );
@@ -800,13 +802,15 @@ test("resume applies a clean stage done recorded before a crash", async (t) => {
   assert.ok(
     owner.appendTurnEvent({
       turnId: last.turnId,
-      kind: "agent-call",
-      payload: JSON.stringify({
-        callId: "crash-call",
-        id: "stage_done",
-        reason: "no ticket left",
-        answer: { outcome: "accepted" },
-      }),
+      fact: {
+        kind: "agent-call",
+        data: {
+          callId: "crash-call",
+          id: "stage_done",
+          reason: "no ticket left",
+          answer: { outcome: "accepted" },
+        },
+      },
       at: new Date(),
     }).ok,
   );

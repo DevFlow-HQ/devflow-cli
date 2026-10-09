@@ -21,11 +21,13 @@ test("m10-audit-history-tool-content: huge supplied diffs reconstruct exactly th
   assert.ok(Buffer.byteLength(patch) > 9 * 1024 * 1024);
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "turn-diff",
-    payload: JSON.stringify({
-      content: patch,
-      files: [{ path: "src/file.ts", kind: "update" }],
-    }),
+    fact: {
+      kind: "turn-diff",
+      data: {
+        content: patch,
+        files: [{ path: "src/file.ts", kind: "update" }],
+      },
+    },
     at: new Date(),
   });
   const opened = run.port.openProjection({
@@ -109,14 +111,16 @@ test("m10-audit-history-tool-content: every tool field and 200 maximum command t
   for (let i = 0; i < 200; i++)
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId: `c${i}`,
-        tool: "command",
-        input: `cmd ${i}`,
-        outcome: { kind: "completed" },
-        output: { text: tail },
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId: `c${i}`,
+          tool: "command",
+          input: `cmd ${i}`,
+          outcome: { kind: "completed" },
+          output: { text: tail },
+        },
+      },
       at: new Date(),
     });
   const opened = current(run);
@@ -139,34 +143,36 @@ test("m10-audit-history-tool-content: every tool field and 200 maximum command t
     unit = "UNIT " + "u".repeat(25000);
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "metadata",
-      tool: "other",
-      input,
-      cwd,
-      outcome: { kind: "failed", error },
-      nativeOmission: omission,
-      count: { value: 3, unit },
-      files: Array.from({ length: 500 }, (_, i) => ({
-        path: `FILE ${i} ` + "p".repeat(3000),
-        kind: "update",
-        additions: i,
-        removals: 2,
-        patch: {
-          kind: "structured",
-          hunks: [
-            {
-              oldStart: 1,
-              oldLines: 1,
-              newStart: 1,
-              newLines: 1,
-              lines: ["-界", "+😀"],
-            },
-          ],
-        },
-      })),
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "metadata",
+        tool: "other",
+        input,
+        cwd,
+        outcome: { kind: "failed", error },
+        nativeOmission: omission,
+        count: { value: 3, unit },
+        files: Array.from({ length: 500 }, (_, i) => ({
+          path: `FILE ${i} ` + "p".repeat(3000),
+          kind: "update",
+          additions: i,
+          removals: 2,
+          patch: {
+            kind: "structured",
+            hunks: [
+              {
+                oldStart: 1,
+                oldLines: 1,
+                newStart: 1,
+                newLines: 1,
+                lines: ["-界", "+😀"],
+              },
+            ],
+          },
+        })),
+      },
+    },
     at: new Date(),
   });
   const updated = await opened.updates[Symbol.asyncIterator]().next();
@@ -225,14 +231,16 @@ for (const length of [29999, 30000, 30001])
     const supplied = "x".repeat(length - 1) + "Z";
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId: "c",
-        tool: "command",
-        input: "cmd",
-        outcome: { kind: "completed" },
-        output: { text: supplied },
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId: "c",
+          tool: "command",
+          input: "cmd",
+          outcome: { kind: "completed" },
+          output: { text: supplied },
+        },
+      },
       at: new Date(),
     });
     const opened = current(run);
@@ -261,13 +269,15 @@ test("m10-audit-history-tool-content: live versions pin only active reads; recla
   admit(run);
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "c",
-      tool: "command",
-      input: "cmd",
-      outcome: { kind: "running" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "c",
+        tool: "command",
+        input: "cmd",
+        outcome: { kind: "running" },
+      },
+    },
     at: new Date(),
   });
   const one = current(run),
@@ -340,14 +350,16 @@ test("m10-audit-history-tool-content: live versions pin only active reads; recla
   );
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "c",
-      tool: "command",
-      input: "cmd",
-      outcome: { kind: "completed" },
-      output: { text: "FINAL".repeat(2000) },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "c",
+        tool: "command",
+        input: "cmd",
+        outcome: { kind: "completed" },
+        output: { text: "FINAL".repeat(2000) },
+      },
+    },
     at: new Date(),
   });
   const final = await two.updates[Symbol.asyncIterator]().next();
@@ -379,13 +391,15 @@ for (const final of ["empty", "absent"] as const)
     admit(run);
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId: "c",
-        tool: "command",
-        input: "cmd",
-        outcome: { kind: "running" },
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId: "c",
+          tool: "command",
+          input: "cmd",
+          outcome: { kind: "running" },
+        },
+      },
       at: new Date(),
     });
     const opened = current(run);
@@ -405,14 +419,16 @@ for (const final of ["empty", "absent"] as const)
     });
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId: "c",
-        tool: "command",
-        input: "cmd",
-        outcome: { kind: "completed" },
-        ...(final === "empty" ? { output: { text: "" } } : {}),
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId: "c",
+          tool: "command",
+          input: "cmd",
+          outcome: { kind: "completed" },
+          ...(final === "empty" ? { output: { text: "" } } : {}),
+        },
+      },
       at: new Date(),
     });
     const page = await opened.updates[Symbol.asyncIterator]().next();
@@ -446,8 +462,7 @@ test("m10-audit-history-tool-content: reverse Unicode boundaries, bounded read l
   const patch = "a".repeat(4094) + "😀" + "界".repeat(9000);
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "turn-diff",
-    payload: JSON.stringify({ content: patch, files: [] }),
+    fact: { kind: "turn-diff", data: { content: patch, files: [] } },
     at: new Date(),
   });
   const opened = current(run);
@@ -515,13 +530,15 @@ test("m10-audit-history-tool-content: an unmatched large stored start remains re
   const input = "CANONICAL_INPUT_" + "x".repeat(10000);
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "c",
-      tool: "other",
-      input,
-      outcome: { kind: "running" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "c",
+        tool: "other",
+        input,
+        outcome: { kind: "running" },
+      },
+    },
     at: new Date(),
   });
   const opened = current(run);
@@ -571,8 +588,10 @@ test("m10-audit-history-tool-content: stored-read failures preserve their cause 
   admit(run);
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "turn-diff",
-    payload: JSON.stringify({ content: "PATCH".repeat(2000), files: [] }),
+    fact: {
+      kind: "turn-diff",
+      data: { content: "PATCH".repeat(2000), files: [] },
+    },
     at: new Date(),
   });
   const opened = current(run);

@@ -1,3 +1,5 @@
+import type { TurnFact } from "../../src/harness/harness.js";
+import { turnFact, type TurnFactData } from "../helpers/turnFact.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
@@ -53,12 +55,16 @@ function admit(
     }).ok,
   );
 }
-function append(run: LiveRun, kind: string, data: object, turnId = "turn") {
+function append<K extends TurnFact["kind"]>(
+  run: LiveRun,
+  kind: K,
+  data: TurnFactData<K>,
+  turnId = "turn",
+) {
   assert.ok(
     run.owner.appendTurnEvent({
       turnId,
-      kind,
-      payload: JSON.stringify(data),
+      fact: turnFact(kind, data),
       at: new Date("2026-10-09T00:00:01Z"),
     }).ok,
   );

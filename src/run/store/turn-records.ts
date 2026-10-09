@@ -61,104 +61,56 @@ const harnessSessionRow = z.object({
   availability: z.string(),
   availability_detail: z.string().nullable(),
 });
+type TurnFactKind = TurnFact["kind"];
+type TurnFactOf<K extends TurnFactKind> = Extract<TurnFact, { kind: K }>;
+function checkedAs<K extends TurnFactKind>(kind: K) {
+  return (data: unknown): TurnFactOf<K> | z.ZodError => {
+    const parsed = turnFactSchemas[kind].safeParse(data);
+    // The schema indexed by `kind` parses exactly that kind's data.
+    return parsed.success
+      ? ({ kind, data: parsed.data } as TurnFactOf<K>)
+      : parsed.error;
+  };
+}
+// One keyed check per schema kind, shared by every write and read: a kind added to
+// `turnFactSchemas` without an entry here fails type-checking.
+const turnFactChecks: {
+  readonly [K in TurnFactKind]: (data: unknown) => TurnFactOf<K> | z.ZodError;
+} = {
+  "assistant-content": checkedAs("assistant-content"),
+  thought: checkedAs("thought"),
+  "turn-diff": checkedAs("turn-diff"),
+  "tool-call": checkedAs("tool-call"),
+  "tool-partial": checkedAs("tool-partial"),
+  steer: checkedAs("steer"),
+  model: checkedAs("model"),
+  "agent-call": checkedAs("agent-call"),
+  "agent-call-expired": checkedAs("agent-call-expired"),
+  "tool-activity": checkedAs("tool-activity"),
+  "request-raised": checkedAs("request-raised"),
+  "request-answered": checkedAs("request-answered"),
+  "request-expired": checkedAs("request-expired"),
+  "elicitation-declined": checkedAs("elicitation-declined"),
+};
+function checkTurnFact(kind: string, data: unknown): TurnFact | Error {
+  return Object.hasOwn(turnFactChecks, kind)
+    ? turnFactChecks[kind as TurnFactKind](data)
+    : new TypeError("Turn event kind has no schema.");
+}
 // Only qualified settled messages and delivered Steers are conversation rows.
 // Unknown or unqualified metadata remains absent.
 /** Decode persisted normalized facts once at the Store ingress. Unknown legacy facts remain unqualified. */
 export function readTurnFact(
   event: Pick<TurnEventRecord, "kind" | "payload">,
 ): TurnFact | undefined {
+  let data: unknown;
   try {
-    const data: unknown = JSON.parse(event.payload);
-    switch (event.kind) {
-      case "assistant-content": {
-        const parsed = turnFactSchemas["assistant-content"].safeParse(data);
-        return parsed.success
-          ? { kind: "assistant-content", data: parsed.data }
-          : undefined;
-      }
-      case "thought": {
-        const parsed = turnFactSchemas["thought"].safeParse(data);
-        return parsed.success
-          ? { kind: "thought", data: parsed.data }
-          : undefined;
-      }
-      case "turn-diff": {
-        const parsed = turnFactSchemas["turn-diff"].safeParse(data);
-        return parsed.success
-          ? { kind: "turn-diff", data: parsed.data }
-          : undefined;
-      }
-      case "tool-call": {
-        const parsed = turnFactSchemas["tool-call"].safeParse(data);
-        return parsed.success
-          ? { kind: "tool-call", data: parsed.data }
-          : undefined;
-      }
-      case "tool-partial": {
-        const parsed = turnFactSchemas["tool-partial"].safeParse(data);
-        return parsed.success
-          ? { kind: "tool-partial", data: parsed.data }
-          : undefined;
-      }
-      case "steer": {
-        const parsed = turnFactSchemas["steer"].safeParse(data);
-        return parsed.success
-          ? { kind: "steer", data: parsed.data }
-          : undefined;
-      }
-      case "model": {
-        const parsed = turnFactSchemas["model"].safeParse(data);
-        return parsed.success
-          ? { kind: "model", data: parsed.data }
-          : undefined;
-      }
-      case "agent-call": {
-        const parsed = turnFactSchemas["agent-call"].safeParse(data);
-        return parsed.success
-          ? { kind: "agent-call", data: parsed.data }
-          : undefined;
-      }
-      case "agent-call-expired": {
-        const parsed = turnFactSchemas["agent-call-expired"].safeParse(data);
-        return parsed.success
-          ? { kind: "agent-call-expired", data: parsed.data }
-          : undefined;
-      }
-      case "tool-activity": {
-        const parsed = turnFactSchemas["tool-activity"].safeParse(data);
-        return parsed.success
-          ? { kind: "tool-activity", data: parsed.data }
-          : undefined;
-      }
-      case "request-raised": {
-        const parsed = turnFactSchemas["request-raised"].safeParse(data);
-        return parsed.success
-          ? { kind: "request-raised", data: parsed.data }
-          : undefined;
-      }
-      case "request-answered": {
-        const parsed = turnFactSchemas["request-answered"].safeParse(data);
-        return parsed.success
-          ? { kind: "request-answered", data: parsed.data }
-          : undefined;
-      }
-      case "request-expired": {
-        const parsed = turnFactSchemas["request-expired"].safeParse(data);
-        return parsed.success
-          ? { kind: "request-expired", data: parsed.data }
-          : undefined;
-      }
-      case "elicitation-declined": {
-        const parsed = turnFactSchemas["elicitation-declined"].safeParse(data);
-        return parsed.success
-          ? { kind: "elicitation-declined", data: parsed.data }
-          : undefined;
-      }
-    }
+    data = JSON.parse(event.payload);
   } catch {
     return undefined;
   }
-  return undefined;
+  const fact = checkTurnFact(event.kind, data);
+  return fact instanceof Error ? undefined : fact;
 }
 export function readToolCallEvent(
   event: Pick<TurnEventRecord, "kind" | "payload">,
@@ -270,19 +222,28 @@ export function admitTurn(
     .run();
 }
 
-// Append one normalized durable Turn event (#116), append-only.
+/** A checked append: stored (absent when ignored as a duplicate), or refused as
+ *  malformed before anything is written. */
+export type AppendedTurnEvent =
+  | { readonly kind: "appended"; readonly event?: TurnEventRecord }
+  | { readonly kind: "malformed"; readonly cause: Error };
+
+// Append one normalized durable Turn event (#116), append-only. Every fact, with
+// its stamped order, is checked against its kind's schema before any write.
 export function appendTurnEvent(
   db: SQLiteBunDatabase,
   request: AppendTurnEventRequest,
-): TurnEventRecord | undefined {
-  const fact = readTurnFact(request);
-  let payload =
-    fact === undefined || request.historyOrder === undefined
-      ? request.payload
-      : JSON.stringify({ ...fact.data, historyOrder: request.historyOrder });
+): AppendedTurnEvent {
+  const fact = checkTurnFact(
+    request.fact.kind,
+    request.historyOrder === undefined
+      ? request.fact.data
+      : { ...request.fact.data, historyOrder: request.historyOrder },
+  );
+  if (fact instanceof Error) return { kind: "malformed", cause: fact };
+  let payload: object = fact.data;
   let transcriptSeq: number | undefined;
-  if (request.kind === "turn-diff") {
-    const diff = turnFactSchemas["turn-diff"].parse(JSON.parse(payload));
+  if (fact.kind === "turn-diff") {
     const duplicate = db
       .select({ seq: turnEvents.seq })
       .from(turnEvents)
@@ -293,10 +254,8 @@ export function appendTurnEvent(
         ),
       )
       .get();
-    if (duplicate !== undefined) return;
-    payload = JSON.stringify(diff);
-  } else if (request.kind === "thought") {
-    const thought = turnFactSchemas.thought.parse(JSON.parse(payload));
+    if (duplicate !== undefined) return { kind: "appended" };
+  } else if (fact.kind === "thought") {
     const duplicate = db
       .select({ seq: turnEvents.seq })
       .from(turnEvents)
@@ -304,14 +263,13 @@ export function appendTurnEvent(
         and(
           eq(turnEvents.turn_id, request.turnId),
           eq(turnEvents.kind, "thought"),
-          sql`json_extract(${turnEvents.payload}, '$.summaryId') = ${thought.summaryId}`,
+          sql`json_extract(${turnEvents.payload}, '$.summaryId') = ${fact.data.summaryId}`,
         ),
       )
       .get();
-    if (duplicate !== undefined) return;
-    payload = JSON.stringify(thought);
-  } else if (request.kind === "tool-call" || request.kind === "tool-partial") {
-    const call = turnFactSchemas["tool-call"].parse(JSON.parse(payload));
+    if (duplicate !== undefined) return { kind: "appended" };
+  } else if (fact.kind === "tool-call" || fact.kind === "tool-partial") {
+    const call = fact.data;
     const previous = db
       .select({ payload: turnEvents.payload, kind: turnEvents.kind })
       .from(turnEvents)
@@ -333,29 +291,24 @@ export function appendTurnEvent(
       });
     if (
       previous.some((row) => row.call.outcome.kind !== "running") ||
-      (request.kind === "tool-call" &&
+      (fact.kind === "tool-call" &&
         call.outcome.kind === "running" &&
         previous.length > 0) ||
-      (request.kind === "tool-partial" &&
-        (call.outcome.kind !== "running" ||
-          call.output?.incomplete !== true ||
-          previous.some((row) => row.kind === "tool-partial")))
+      (fact.kind === "tool-partial" &&
+        previous.some((row) => row.kind === "tool-partial"))
     )
-      return;
-    payload = JSON.stringify({
+      return { kind: "appended" };
+    payload = {
       ...call,
       ...(previous[0]?.call.historyOrder === undefined
         ? {}
         : { historyOrder: previous[0].call.historyOrder }),
-    });
-  } else if (request.kind === "assistant-content") {
-    const message = turnFactSchemas["assistant-content"].safeParse(
-      JSON.parse(payload),
-    );
+    };
+  } else if (fact.kind === "assistant-content") {
+    const message = fact.data;
     if (
-      message.success &&
-      message.data.messageId !== undefined &&
-      message.data.parentActivity === undefined
+      message.messageId !== undefined &&
+      message.parentActivity === undefined
     ) {
       // The same native message can be repeated. Its first settled fact wins.
       const duplicate = db
@@ -365,22 +318,21 @@ export function appendTurnEvent(
           and(
             eq(turnEvents.turn_id, request.turnId),
             eq(turnEvents.kind, "assistant-content"),
-            sql`json_extract(${turnEvents.payload}, '$.messageId') = ${message.data.messageId}`,
+            sql`json_extract(${turnEvents.payload}, '$.messageId') = ${message.messageId}`,
           ),
         )
         .get();
-      if (duplicate !== undefined) return;
-      payload = JSON.stringify({
-        ...message.data,
+      if (duplicate !== undefined) return { kind: "appended" };
+      payload = {
+        ...message,
         role: "assistant",
         kind: "message",
         turn: request.turnId,
-      });
+      };
       transcriptSeq = nextConversationPosition(db);
     }
-  } else if (request.kind === "steer") {
-    const steer = turnFactSchemas.steer.parse(JSON.parse(payload));
-    payload = JSON.stringify(steer);
+  } else if (fact.kind === "steer") {
+    const steer = fact.data;
     if (steer.settlement.kind === "delivered") {
       const duplicate = db
         .select({ seq: turnEvents.seq })
@@ -394,8 +346,8 @@ export function appendTurnEvent(
           ),
         )
         .get();
-      if (duplicate !== undefined) return;
-      payload = JSON.stringify({
+      if (duplicate !== undefined) return { kind: "appended" };
+      payload = {
         ...steer,
         role: "user",
         content: steer.text,
@@ -405,7 +357,7 @@ export function appendTurnEvent(
           id: steer.steerId,
           delivery: steer.settlement.delivery,
         },
-      });
+      };
       transcriptSeq = nextConversationPosition(db);
     }
   }
@@ -413,18 +365,21 @@ export function appendTurnEvent(
     .insert(turnEvents)
     .values({
       turn_id: request.turnId,
-      kind: request.kind,
-      payload,
+      kind: fact.kind,
+      payload: JSON.stringify(payload),
       transcript_seq: transcriptSeq ?? null,
       at: request.at.toISOString(),
     })
     .returning()
     .get();
   return {
-    turnId: row.turn_id,
-    kind: row.kind,
-    payload: row.payload,
-    at: row.at,
+    kind: "appended",
+    event: {
+      turnId: row.turn_id,
+      kind: row.kind,
+      payload: row.payload,
+      at: row.at,
+    },
   };
 }
 

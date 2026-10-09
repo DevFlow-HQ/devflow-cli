@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { z } from "zod";
 import { Database } from "bun:sqlite";
+import { readTurnFact } from "../../../src/run/store/store.js";
 import { makeTempDir } from "../../helpers/tempDir.js";
 import { openFakeRunGroup as openRunGroup } from "./fake-git-process.js";
 
@@ -306,4 +307,51 @@ test("m10-audit-legacy-turn-order: authentic tool/request writes and interleaved
       group.close();
     }
   }
+});
+
+test("m10-followup-typed-turn-facts: previous-release rows read through the keyed reader with every field they stored", () => {
+  const stored = new Set<string>();
+  for (const name of [
+    "previous-release-conversation",
+    "previous-release-turn-order",
+  ]) {
+    const source = new URL(`../../fixtures/${name}/`, import.meta.url);
+    const { runId } = z
+      .object({ runId: z.string() })
+      .parse(
+        JSON.parse(readFileSync(new URL("expected.json", source), "utf8")),
+      );
+    const home = makeTempDir("secant-typed-legacy-");
+    cpSync(source, home, { recursive: true });
+    const group = openRunGroup(home, workspace, {
+      selfPid: -1,
+      isOwnerAlive: () => true,
+    });
+    try {
+      const owner = group.acquireRun(runId, { takeover: true });
+      assert.ok(owner);
+      try {
+        for (const event of owner.turnEvents()) {
+          const fact = readTurnFact(event);
+          assert.equal(fact?.kind, event.kind, event.payload);
+          stored.add(event.kind);
+          // Conversation columns the reader strips are the only fields not read.
+          const row = JSON.parse(event.payload) as Record<string, unknown>;
+          for (const [key, value] of Object.entries(fact!.data))
+            assert.deepEqual(value, row[key], `${event.kind}.${key}`);
+        }
+      } finally {
+        owner.close();
+      }
+    } finally {
+      group.close();
+    }
+  }
+  assert.deepEqual([...stored].sort(), [
+    "assistant-content",
+    "model",
+    "request-answered",
+    "request-raised",
+    "tool-activity",
+  ]);
 });

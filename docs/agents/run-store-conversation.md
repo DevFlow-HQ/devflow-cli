@@ -25,6 +25,9 @@ The [Run Store notes](../../src/run/store/AGENTS.md) keep ownership and fencing 
   Migration validates every old row before transactional drop; orphans fail and rollback preserves old rows/journal. `settleTurn` adds no final copy.
 - Turn ordering (#116): `turn.sequence` is `count(turn)` taken under the admit transaction, so it numbers every Turn in the Run regardless of Session.
   Two Sessions' Turns interleave in one numbering.
-- `turn_event.payload` validates messages/tools with complete patches/Thoughts/Turn diffs/Steers and preserves first `historyOrder`; output keeps 30,000 characters.
+- `appendTurnEvent` takes a typed `TurnFact`. The Store checks every kind, with its stamped `historyOrder`, against `turnFactSchemas` before writing and
+  refuses a malformed fact or unknown kind as `unrecordable`, never a throw. `readTurnFact` is one keyed lookup over the same checks; its map is typed
+  so a schema kind without an entry fails type-checking. Previous-release rows read through it unchanged.
+- `turn_event.payload` stores the checked value: complete patches, Thoughts, Turn diffs and Steers, preserving first `historyOrder`; output keeps 30,000 characters.
   `tool-partial` retains incomplete running tails. Duplicate starts/partials/terminals/Thoughts/Turn diffs are ignored; only conversation entries
   get transcript positions.

@@ -12,7 +12,9 @@ import type {
   ProjectionPort,
   ProjectionSelector,
 } from "../../src/application/projection-port.js";
+import type { ToolCall } from "../../src/harness/harness.js";
 import { openLiveRun } from "../helpers/liveRun.js";
+import { turnFact } from "../helpers/turnFact.js";
 
 function openHistory({
   t,
@@ -73,11 +75,13 @@ test("m10-session-history: a known Session opens atomically and catches up curre
   assert.ok(
     owner.appendTurnEvent({
       turnId: "turn-1",
-      kind: "assistant-content",
-      payload: JSON.stringify({
-        messageId: "private-message-id",
-        content: "Complete",
-      }),
+      fact: {
+        kind: "assistant-content",
+        data: {
+          messageId: "private-message-id",
+          content: "Complete",
+        },
+      },
       at: new Date(),
     }).ok,
   );
@@ -179,8 +183,10 @@ test("m10-session-history: previews coalesce every row's complete value once per
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "one", content: "" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "one", content: "" },
+    },
     at: new Date(),
   });
   const terminal = await reader.next();
@@ -301,13 +307,15 @@ test("m12-local-test-helpers: first appearance survives late settlement and reop
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "ordered-call",
-      tool: "read",
-      input: "file",
-      outcome: { kind: "running" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "ordered-call",
+        tool: "read",
+        input: "file",
+        outcome: { kind: "running" },
+      },
+    },
     at: new Date(),
   });
   const page = await opened.updates[Symbol.asyncIterator]().next();
@@ -316,11 +324,13 @@ test("m12-local-test-helpers: first appearance survives late settlement and reop
   const initial = page.value.snapshot.result.history.rows[1]!;
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({
-      messageId: "reused-native-id",
-      content: "Settles after tool",
-    }),
+    fact: {
+      kind: "assistant-content",
+      data: {
+        messageId: "reused-native-id",
+        content: "Settles after tool",
+      },
+    },
     at: new Date(),
   });
   const final = await opened.updates[Symbol.asyncIterator]().next();
@@ -342,21 +352,25 @@ test("m12-local-test-helpers: first appearance survives late settlement and reop
   admit(run.owner, "turn-two");
   run.owner.appendTurnEvent({
     turnId: "turn-two",
-    kind: "assistant-content",
-    payload: JSON.stringify({
-      messageId: "reused-native-id",
-      content: "Second Turn",
-    }),
+    fact: {
+      kind: "assistant-content",
+      data: {
+        messageId: "reused-native-id",
+        content: "Second Turn",
+      },
+    },
     at: new Date(),
   });
   admit(run.owner, "turn-three", "other");
   run.owner.appendTurnEvent({
     turnId: "turn-three",
-    kind: "assistant-content",
-    payload: JSON.stringify({
-      messageId: "reused-native-id",
-      content: "Other Session",
-    }),
+    fact: {
+      kind: "assistant-content",
+      data: {
+        messageId: "reused-native-id",
+        content: "Other Session",
+      },
+    },
     at: new Date(),
   });
   await run.finish();
@@ -452,8 +466,7 @@ test("m10-interruption-and-transcript: partials, Agent-call disposition, model a
   ] as const)
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind,
-      payload: JSON.stringify(value),
+      fact: turnFact(kind, value),
       at: new Date(),
     });
   run.owner.settleTurn({
@@ -555,11 +568,17 @@ test("m10-session-history: interleaved same-name tools settle in their original 
     session: "s",
   });
   const reader = opened.updates[Symbol.asyncIterator]();
-  const append = (callId: string, input: string, outcome: object) =>
+  const append = (
+    callId: string,
+    input: string,
+    outcome: ToolCall["outcome"],
+  ) =>
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({ callId, tool: "read", input, outcome }),
+      fact: {
+        kind: "tool-call",
+        data: { callId, tool: "read", input, outcome },
+      },
       at: new Date(),
     });
   append("one", "first.ts", { kind: "running" });
@@ -640,14 +659,16 @@ test("m10-session-history: tool previews share the message budget, remain comple
   const reader = opened.updates[Symbol.asyncIterator]();
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "call",
-      parentCallId: "parent",
-      tool: "search",
-      input: "original",
-      outcome: { kind: "running" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "call",
+        parentCallId: "parent",
+        tool: "search",
+        input: "original",
+        outcome: { kind: "running" },
+      },
+    },
     at: new Date(),
   });
   const initial = await reader.next();
@@ -715,13 +736,15 @@ test("m10-session-history: tool previews share the message budget, remain comple
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "call",
-      tool: "search",
-      input: "final",
-      outcome: { kind: "declined", reason: "Not allowed" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "call",
+        tool: "search",
+        input: "final",
+        outcome: { kind: "declined", reason: "Not allowed" },
+      },
+    },
     at: new Date(),
   });
   const final = await reader.next();
@@ -752,8 +775,10 @@ test("m10-session-history: tool previews share the message budget, remain comple
   timer.flush();
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "message", content: "Complete" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "message", content: "Complete" },
+    },
     at: new Date(),
   });
   const next = await reader.next();
@@ -769,16 +794,22 @@ for (const resultKind of ["completed", "interrupted", "lost"])
     const run = await openLiveRun(t);
     t.after(run.finish);
     admit(run.owner);
-    const append = (turnId: string, input: string, outcome: object) =>
+    const append = (
+      turnId: string,
+      input: string,
+      outcome: ToolCall["outcome"],
+    ) =>
       run.owner.appendTurnEvent({
         turnId,
-        kind: "tool-call",
-        payload: JSON.stringify({
-          callId: "reused",
-          tool: "command",
-          input,
-          outcome,
-        }),
+        fact: {
+          kind: "tool-call",
+          data: {
+            callId: "reused",
+            tool: "command",
+            input,
+            outcome,
+          },
+        },
         at: new Date(),
       });
     append("turn", "first", { kind: "running" });
@@ -858,13 +889,15 @@ test("m10-session-history: one mixed 200/201 bound counts calls once and evicted
     if (i % 2 === 0)
       run.owner.appendTurnEvent({
         turnId: "turn",
-        kind: "tool-call",
-        payload: JSON.stringify({
-          callId: `call-${i}`,
-          tool: "read",
-          input: `file-${i}`,
-          outcome: { kind: "running" },
-        }),
+        fact: {
+          kind: "tool-call",
+          data: {
+            callId: `call-${i}`,
+            tool: "read",
+            input: `file-${i}`,
+            outcome: { kind: "running" },
+          },
+        },
         at: new Date(),
       });
     else
@@ -888,13 +921,15 @@ test("m10-session-history: one mixed 200/201 bound counts calls once and evicted
   assert.equal(page.snapshot.result.history.hasEarlier, false);
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "newest",
-      tool: "other",
-      input: "newest",
-      outcome: { kind: "running" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "newest",
+        tool: "other",
+        input: "newest",
+        outcome: { kind: "running" },
+      },
+    },
     at: new Date(),
   });
   const update = await page.updates[Symbol.asyncIterator]().next();
@@ -914,13 +949,15 @@ test("m10-session-history: one mixed 200/201 bound counts calls once and evicted
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "call-0",
-      tool: "read",
-      input: "evicted terminal",
-      outcome: { kind: "completed" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "call-0",
+        tool: "read",
+        input: "evicted terminal",
+        outcome: { kind: "completed" },
+      },
+    },
     at: new Date(),
   });
   const settled = await page.updates[Symbol.asyncIterator]().next();
@@ -945,13 +982,15 @@ test("m10-session-history: terminal removal of memory-only previews never resurr
   for (let i = 0; i < 200; i++)
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId: `tool-${i}`,
-        tool: "read",
-        input: `file-${i}`,
-        outcome: { kind: "running" },
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId: `tool-${i}`,
+          tool: "read",
+          input: `file-${i}`,
+          outcome: { kind: "running" },
+        },
+      },
       at: new Date(),
     });
   for (let i = 0; i < 2; i++)
@@ -1037,13 +1076,15 @@ test("m10-session-history: Thought preview/final reconciliation keeps first posi
   assert.ok(!row.id.includes("private-summary"));
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "tool",
-      tool: "read",
-      input: "file",
-      outcome: { kind: "running" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "tool",
+        tool: "read",
+        input: "file",
+        outcome: { kind: "running" },
+      },
+    },
     at: new Date(),
   });
   await reader.next();
@@ -1057,12 +1098,14 @@ test("m10-session-history: Thought preview/final reconciliation keeps first posi
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "thought",
-    payload: JSON.stringify({
-      summaryId: "private-summary",
-      content: "First line\nAuthoritative full body",
-      durationMs: 1200,
-    }),
+    fact: {
+      kind: "thought",
+      data: {
+        summaryId: "private-summary",
+        content: "First line\nAuthoritative full body",
+        durationMs: 1200,
+      },
+    },
     at: new Date(),
   });
   const final = await reader.next();
@@ -1090,11 +1133,13 @@ test("m10-session-history: Thought preview/final reconciliation keeps first posi
   timer.flush();
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "thought",
-    payload: JSON.stringify({
-      summaryId: "private-summary",
-      content: "Duplicate",
-    }),
+    fact: {
+      kind: "thought",
+      data: {
+        summaryId: "private-summary",
+        content: "Duplicate",
+      },
+    },
     at: new Date(),
   });
   assert.equal(
@@ -1151,13 +1196,15 @@ test("m10-session-history: mixed Thought/message/tool rows share the exact 200/2
     else
       run.owner.appendTurnEvent({
         turnId: "turn",
-        kind: "tool-call",
-        payload: JSON.stringify({
-          callId: `item-${index}`,
-          tool: "read",
-          input: String(index),
-          outcome: { kind: "running" },
-        }),
+        fact: {
+          kind: "tool-call",
+          data: {
+            callId: `item-${index}`,
+            tool: "read",
+            input: String(index),
+            outcome: { kind: "running" },
+          },
+        },
         at: new Date(),
       });
   }
@@ -1257,8 +1304,7 @@ test("m10-session-history: empty Thought replacements suppress bodies and never 
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "thought",
-    payload: JSON.stringify({ summaryId: "cleared", content: "" }),
+    fact: { kind: "thought", data: { summaryId: "cleared", content: "" } },
     at: new Date(),
   });
   run.channel.observe({
@@ -1321,11 +1367,10 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
       },
     ],
     outcome: { kind: "completed" },
-  };
+  } as const;
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify(call),
+    fact: { kind: "tool-call", data: call },
     at: new Date(),
   });
   await reader.next();
@@ -1339,8 +1384,7 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "turn-diff",
-    payload: JSON.stringify(diff),
+    fact: { kind: "turn-diff", data: diff },
     at: new Date(),
   });
   const update = await reader.next();
@@ -1393,8 +1437,10 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
   );
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "turn-diff",
-    payload: JSON.stringify({ files: [], content: "Duplicate final" }),
+    fact: {
+      kind: "turn-diff",
+      data: { files: [], content: "Duplicate final" },
+    },
     at: new Date(),
   });
   assert.equal(
@@ -1470,13 +1516,15 @@ test("m10-session-history: cumulative diff shares preview fairness and the exact
     else
       run.owner.appendTurnEvent({
         turnId: "turn",
-        kind: "tool-call",
-        payload: JSON.stringify({
-          callId: String(index),
-          tool: "file-change",
-          input: String(index),
-          outcome: { kind: "running" },
-        }),
+        fact: {
+          kind: "tool-call",
+          data: {
+            callId: String(index),
+            tool: "file-change",
+            input: String(index),
+            outcome: { kind: "running" },
+          },
+        },
         at: new Date(),
       });
   }
@@ -1518,8 +1566,7 @@ test("m10-session-history: cumulative diff shares preview fairness and the exact
   });
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "turn-diff",
-    payload: JSON.stringify({ content: "Evicted final", files: [] }),
+    fact: { kind: "turn-diff", data: { content: "Evicted final", files: [] } },
     at: new Date(),
   });
   timer.flush();
@@ -1548,13 +1595,15 @@ test("m10-interruption-and-transcript: crash reopening loses memory-only cumulat
   admit(run.owner);
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "edit",
-      tool: "file-change",
-      input: "file.ts",
-      outcome: { kind: "running" },
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "edit",
+        tool: "file-change",
+        input: "file.ts",
+        outcome: { kind: "running" },
+      },
+    },
     at: new Date(),
   });
   run.channel.observe({
@@ -1698,8 +1747,7 @@ for (const final of [
     };
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify(call),
+      fact: { kind: "tool-call", data: call },
       at: new Date(),
     });
     const start = await reader.next();
@@ -1714,7 +1762,7 @@ for (const final of [
         call: { ...call, output: { text: "preview" } },
       },
     });
-    const outcome =
+    const outcome: ToolCall["outcome"] =
       final === "failed"
         ? { kind: "failed", error: "failure reason" }
         : final === "declined"
@@ -1722,16 +1770,18 @@ for (const final of [
           : { kind: "completed" };
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        ...call,
-        outcome,
-        ...(final === "replacement"
-          ? { output: { text: "FINAL" } }
-          : final === "empty"
-            ? { output: { text: "" } }
-            : {}),
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          ...call,
+          outcome,
+          ...(final === "replacement"
+            ? { output: { text: "FINAL" } }
+            : final === "empty"
+              ? { output: { text: "" } }
+              : {}),
+        },
+      },
       at: new Date(),
     });
     const terminal = await reader.next();
@@ -1798,8 +1848,7 @@ for (const resultKind of ["completed", "interrupted", "lost"])
     };
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify(call),
+      fact: { kind: "tool-call", data: call },
       at: new Date(),
     });
     const start = await reader.next();
@@ -1816,11 +1865,13 @@ for (const resultKind of ["completed", "interrupted", "lost"])
     });
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-partial",
-      payload: JSON.stringify({
-        ...call,
-        output: { text: "retained partial", incomplete: true },
-      }),
+      fact: {
+        kind: "tool-partial",
+        data: {
+          ...call,
+          output: { text: "retained partial", incomplete: true },
+        },
+      },
       at: new Date(),
     });
     const partial = await reader.next();

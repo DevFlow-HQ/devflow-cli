@@ -1034,16 +1034,14 @@ test("timeline detail keeps 160 characters and caps 161 at an explicit 160-chara
   assert.ok(
     owner.appendTurnEvent({
       turnId: "turn-1",
-      kind: "assistant-content",
-      payload: JSON.stringify({ content: "x".repeat(160) }),
+      fact: { kind: "assistant-content", data: { content: "x".repeat(160) } },
       at: new Date("2026-09-22T10:00:02.000Z"),
     }).ok,
   );
   assert.ok(
     owner.appendTurnEvent({
       turnId: "turn-1",
-      kind: "assistant-content",
-      payload: JSON.stringify({ content: "y".repeat(161) }),
+      fact: { kind: "assistant-content", data: { content: "y".repeat(161) } },
       at: new Date("2026-09-22T10:00:03.000Z"),
     }).ok,
   );
@@ -1506,7 +1504,7 @@ test("declined elicitation history retains the server, message and URL with reme
     { ok: true },
   );
   const elicitation = {
-    harness: "claude-code",
+    harness: "claude-code" as const,
     server: "setup",
     message: "Please finish setup",
     url: "https://example.com/setup",
@@ -1514,8 +1512,7 @@ test("declined elicitation history retains the server, message and URL with reme
   assert.ok(
     owner.appendTurnEvent({
       turnId: "t",
-      kind: "elicitation-declined",
-      payload: JSON.stringify(elicitation),
+      fact: { kind: "elicitation-declined", data: elicitation },
       at: new Date(),
     }).ok,
   );

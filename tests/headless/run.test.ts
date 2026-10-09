@@ -573,55 +573,65 @@ test("m10-interruption-and-transcript: headless maps exact stored metadata and e
   });
   owner.appendTurnEvent({
     turnId: "message-turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "first", content: "First" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "first", content: "First" },
+    },
     at,
   });
   owner.appendTurnEvent({
     turnId: "message-turn",
-    kind: "steer",
-    payload: JSON.stringify({
-      steerId: "steer-id",
-      text: "Direction",
-      sentAt: at.toISOString(),
-      settlement: { kind: "delivered", delivery: "after-boundary" },
-    }),
+    fact: {
+      kind: "steer",
+      data: {
+        steerId: "steer-id",
+        text: "Direction",
+        sentAt: at.toISOString(),
+        settlement: { kind: "delivered", delivery: "after-boundary" },
+      },
+    },
     at,
   });
   owner.appendTurnEvent({
     turnId: "message-turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({
-      messageId: "partial",
-      content: "Partial",
-      incomplete: true,
-    }),
+    fact: {
+      kind: "assistant-content",
+      data: {
+        messageId: "partial",
+        content: "Partial",
+        incomplete: true,
+      },
+    },
     at,
   });
   owner.appendTurnEvent({
     turnId: "message-turn",
-    kind: "tool-call",
-    payload: JSON.stringify({
-      callId: "file-call",
-      tool: "file-change",
-      input: "requested.ts",
-      outcome: { kind: "completed" },
-      files: [
-        {
-          path: "observed.ts",
-          patch: { kind: "unified", content: "PRIVATE_CALL_PATCH" },
-        },
-      ],
-    }),
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "file-call",
+        tool: "file-change",
+        input: "requested.ts",
+        outcome: { kind: "completed" },
+        files: [
+          {
+            path: "observed.ts",
+            patch: { kind: "unified", content: "PRIVATE_CALL_PATCH" },
+          },
+        ],
+      },
+    },
     at,
   });
   owner.appendTurnEvent({
     turnId: "message-turn",
-    kind: "turn-diff",
-    payload: JSON.stringify({
-      files: [{ path: "cumulative.ts" }],
-      content: "PRIVATE_TURN_DIFF",
-    }),
+    fact: {
+      kind: "turn-diff",
+      data: {
+        files: [{ path: "cumulative.ts" }],
+        content: "PRIVATE_TURN_DIFF",
+      },
+    },
     at,
   });
   owner.settleTurn({
@@ -1572,7 +1582,7 @@ for (const url of ["https://example.com/setup", undefined]) {
     const owner = h.runGroup.acquireRun(created.runId);
     assert.ok(owner);
     const evidence = {
-      harness: "claude-code",
+      harness: "claude-code" as const,
       server: "setup",
       message: "Finish\u0000setup\u001b[31m now\u001b[0m",
       ...(url === undefined ? {} : { url }),
@@ -1594,8 +1604,7 @@ for (const url of ["https://example.com/setup", undefined]) {
     assert.ok(
       owner.appendTurnEvent({
         turnId: "turn-1",
-        kind: "elicitation-declined",
-        payload: JSON.stringify(evidence),
+        fact: { kind: "elicitation-declined", data: evidence },
         at: new Date(),
       }).ok,
     );
@@ -1706,29 +1715,35 @@ test("m10-audit-headless-output-parity: text transcript annotates Entry prompts,
   });
   owner.appendTurnEvent({
     turnId: "annotated-turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "first", content: "First" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "first", content: "First" },
+    },
     at,
   });
   owner.appendTurnEvent({
     turnId: "annotated-turn",
-    kind: "steer",
-    payload: JSON.stringify({
-      steerId: "direction",
-      text: "Direction",
-      sentAt: at.toISOString(),
-      settlement: { kind: "delivered", delivery: "after-boundary" },
-    }),
+    fact: {
+      kind: "steer",
+      data: {
+        steerId: "direction",
+        text: "Direction",
+        sentAt: at.toISOString(),
+        settlement: { kind: "delivered", delivery: "after-boundary" },
+      },
+    },
     at,
   });
   owner.appendTurnEvent({
     turnId: "annotated-turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({
-      messageId: "partial",
-      content: "\u001b[31mPartial\u001b[0m",
-      incomplete: true,
-    }),
+    fact: {
+      kind: "assistant-content",
+      data: {
+        messageId: "partial",
+        content: "\u001b[31mPartial\u001b[0m",
+        incomplete: true,
+      },
+    },
     at,
   });
   owner.settleTurn({
@@ -1769,7 +1784,7 @@ test("m10-audit-changed-file-cap: headless transcript and export keep complete m
   const at = new Date("2026-10-08T00:00:00Z");
   const files = Array.from({ length: 300 }, (_, index) => ({
     path: `file-${index}.ts`,
-    patch: { kind: "unified", content: `+patch-${index}` },
+    patch: { kind: "unified" as const, content: `+patch-${index}` },
   }));
   const content = files.map((file) => file.path).join("\n");
   owner.admitTurn({
@@ -1785,30 +1800,30 @@ test("m10-audit-changed-file-cap: headless transcript and export keep complete m
   });
   owner.appendTurnEvent({
     turnId: "large-turn",
-    kind: "tool-call",
+    fact: {
+      kind: "tool-call",
+      data: {
+        callId: "large-call",
+        tool: "file-change",
+        input: content,
+        files,
+        outcome: { kind: "completed" },
+      },
+    },
     at,
-    payload: JSON.stringify({
-      callId: "large-call",
-      tool: "file-change",
-      input: content,
-      files,
-      outcome: { kind: "completed" },
-    }),
   });
   owner.appendTurnEvent({
     turnId: "large-turn",
-    kind: "turn-diff",
+    fact: { kind: "turn-diff", data: { files, content } },
     at,
-    payload: JSON.stringify({ files, content }),
   });
   owner.appendTurnEvent({
     turnId: "large-turn",
-    kind: "assistant-content",
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "large-message", content },
+    },
     at,
-    payload: JSON.stringify({
-      messageId: "large-message",
-      content,
-    }),
   });
   owner.settleTurn({
     turnId: "large-turn",
@@ -1885,13 +1900,15 @@ test("m10-audit-conversation-order: headless JSON orders first appearances and k
     assert.ok(
       owner.appendTurnEvent({
         turnId: "ordered",
-        kind: "assistant-content",
-        payload: JSON.stringify({
-          messageId,
-          content,
-          historyOrder,
-          ...(incomplete ? { incomplete } : {}),
-        }),
+        fact: {
+          kind: "assistant-content",
+          data: {
+            messageId,
+            content,
+            historyOrder,
+            ...(incomplete ? { incomplete } : {}),
+          },
+        },
         at,
       }).ok,
     );
@@ -1899,14 +1916,16 @@ test("m10-audit-conversation-order: headless JSON orders first appearances and k
   assert.ok(
     owner.appendTurnEvent({
       turnId: "ordered",
-      kind: "steer",
-      payload: JSON.stringify({
-        steerId: "direction",
-        text: "Sent early",
-        historyOrder: 1,
-        sentAt: at.toISOString(),
-        settlement: { kind: "delivered", delivery: "after-boundary" },
-      }),
+      fact: {
+        kind: "steer",
+        data: {
+          steerId: "direction",
+          text: "Sent early",
+          historyOrder: 1,
+          sentAt: at.toISOString(),
+          settlement: { kind: "delivered", delivery: "after-boundary" },
+        },
+      },
       at,
     }).ok,
   );

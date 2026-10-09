@@ -95,22 +95,26 @@ test("m10-audit-history-latest-delivery: unread large pages replace each other w
   const reader = healthy.updates[Symbol.asyncIterator]();
   run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({
-      messageId: "large-message",
-      content: "x".repeat(4 * 1024 * 1024),
-    }),
+    fact: {
+      kind: "assistant-content",
+      data: {
+        messageId: "large-message",
+        content: "x".repeat(4 * 1024 * 1024),
+      },
+    },
     at: new Date(),
   });
   await reader.next();
   for (let index = 0; index < 3; index++) {
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "assistant-content",
-      payload: JSON.stringify({
-        messageId: `changed-${index}`,
-        content: `Changed ${index}`,
-      }),
+      fact: {
+        kind: "assistant-content",
+        data: {
+          messageId: `changed-${index}`,
+          content: `Changed ${index}`,
+        },
+      },
       at: new Date(),
     });
     const update = await reader.next();
@@ -195,8 +199,10 @@ test("m10-audit-history-latest-delivery: two quick pages with 150 full command t
     assert.ok(
       run.owner.appendTurnEvent({
         turnId: "turn",
-        kind: "assistant-content",
-        payload: JSON.stringify({ messageId: content, content }),
+        fact: {
+          kind: "assistant-content",
+          data: { messageId: content, content },
+        },
         at: new Date(),
       }).ok,
     );
@@ -237,13 +243,15 @@ test("m10-audit-history-latest-delivery: mixed unread pages and previews reconci
     assert.ok(
       run.owner.appendTurnEvent({
         turnId: "turn",
-        kind: "tool-call",
-        payload: JSON.stringify({
-          callId: "call",
-          tool: "read",
-          input: "a.ts",
-          outcome,
-        }),
+        fact: {
+          kind: "tool-call",
+          data: {
+            callId: "call",
+            tool: "read",
+            input: "a.ts",
+            outcome,
+          },
+        },
         at: new Date(),
       }).ok,
     );
@@ -503,8 +511,10 @@ test("m10-audit-history-latest-delivery: shutdown prioritizes one terminal over 
   assert.ok(
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "assistant-content",
-      payload: JSON.stringify({ messageId: "stored", content: "Complete" }),
+      fact: {
+        kind: "assistant-content",
+        data: { messageId: "stored", content: "Complete" },
+      },
       at: new Date(),
     }).ok,
   );
@@ -563,8 +573,10 @@ test("m10-audit-history-latest-delivery: deleting the subject prioritizes one te
   assert.ok(
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: "assistant-content",
-      payload: JSON.stringify({ messageId: "stored", content: "Unread" }),
+      fact: {
+        kind: "assistant-content",
+        data: { messageId: "stored", content: "Unread" },
+      },
       at: new Date(),
     }).ok,
   );

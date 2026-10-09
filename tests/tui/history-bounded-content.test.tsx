@@ -1,3 +1,4 @@
+import type { TurnFact } from "../../src/harness/harness.js";
 import { historyTextEdges } from "../../src/tui/tui.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -15,15 +16,13 @@ import type {
   HistoryContentRequest,
 } from "../../src/application/projection-port.js";
 
-type Event = { readonly kind: string; readonly payload: object };
-
 /** The production Port behind the Workbench, with recorded content reads. */
 async function fixture(
   t: Parameters<typeof openLiveRun>[0],
   options: {
     readonly input?: string;
     readonly origin?: "human" | "managed";
-    readonly events?: readonly Event[];
+    readonly events?: readonly TurnFact[];
     readonly appearance?: "dark" | "light";
   } = {},
 ) {
@@ -52,8 +51,7 @@ async function fixture(
   for (const event of options.events ?? [])
     run.owner.appendTurnEvent({
       turnId: "turn",
-      kind: event.kind,
-      payload: JSON.stringify(event.payload),
+      fact: event,
       at: new Date(),
     });
   const preferences = previewPreferences();
@@ -164,7 +162,7 @@ for (const appearance of ["dark", "light"] as const)
       events: [
         {
           kind: "assistant-content",
-          payload: { messageId: "m", content: reply },
+          data: { messageId: "m", content: reply },
         },
       ],
     });
@@ -200,7 +198,7 @@ test("m10-audit-history-bounded-content: a long Steer reads in place and a faile
     events: [
       {
         kind: "steer",
-        payload: {
+        data: {
           steerId: "s",
           text: steer,
           sentAt: "2026-10-09T00:00:01.000Z",
@@ -256,7 +254,7 @@ for (const kind of ["thought", "entry-prompt"] as const)
       t,
       kind === "thought"
         ? {
-            events: [{ kind: "thought", payload: { summaryId: "t", content } }],
+            events: [{ kind: "thought", data: { summaryId: "t", content } }],
           }
         : { origin: "managed", input: content },
     );
@@ -291,7 +289,7 @@ test("m10-audit-history-bounded-content: cut Agent-call and request previews rea
     events: [
       {
         kind: "agent-call",
-        payload: {
+        data: {
           callId: "c",
           id: "CALL_" + "c".repeat(2_000),
           reason: "Reason",
@@ -303,7 +301,7 @@ test("m10-audit-history-bounded-content: cut Agent-call and request previews rea
       },
       {
         kind: "request-raised",
-        payload: {
+        data: {
           requestId: "r",
           tool: "TOOL",
           input: "REQUEST_" + "q".repeat(20_000),
@@ -353,7 +351,7 @@ test("m10-audit-history-bounded-content: a paused reader keeps its row and offse
     events: [
       {
         kind: "assistant-content",
-        payload: { messageId: "m", content: reply },
+        data: { messageId: "m", content: reply },
       },
     ],
   });
@@ -367,8 +365,10 @@ test("m10-audit-history-bounded-content: a paused reader keeps its row and offse
     .trim();
   wb.run.owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "later", content: "LATER_ROW" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "later", content: "LATER_ROW" },
+    },
     at: new Date(),
   });
   const update = await wb.opened.updates[Symbol.asyncIterator]().next();

@@ -1210,13 +1210,22 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
         const appended = guardedTransaction((tx) =>
           appendTurnEvent(tx, request),
         );
-        return appended.kind === "fenced"
-          ? { ok: false, reason: "fenced" }
+        if (appended.kind === "fenced") return { ok: false, reason: "fenced" };
+        const result = appended.value;
+        // A refused fact's cause can quote the Turn content it checked.
+        return result.kind === "malformed"
+          ? {
+              ok: false,
+              reason: "unrecordable",
+              cause: result.cause,
+              safeCause: {
+                type: result.cause.name,
+                message: "Turn event fact does not match its kind's schema.",
+              },
+            }
           : {
               ok: true,
-              ...(appended.value === undefined
-                ? {}
-                : { event: appended.value }),
+              ...(result.event === undefined ? {} : { event: result.event }),
             };
       } catch (cause) {
         // Drizzle's wrapper includes SQL parameters, which contain Turn content.
@@ -1227,13 +1236,7 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
           ok: false,
           reason: "unrecordable",
           cause: original,
-          safeCause:
-            original instanceof SyntaxError
-              ? {
-                  type: "SyntaxError",
-                  message: "Turn event payload is not valid JSON.",
-                }
-              : translateCause(original),
+          safeCause: translateCause(original),
         };
       }
     },

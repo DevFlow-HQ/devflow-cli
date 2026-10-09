@@ -3,9 +3,13 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { Database } from "bun:sqlite";
-import type {
-  AdmitTurnRequest,
-  RunGroup,
+import type { ToolCall, TurnFact } from "../../../src/harness/harness.js";
+import { turnFact, type TurnFactData } from "../../helpers/turnFact.js";
+import {
+  readTurnFact,
+  type AdmitTurnRequest,
+  type RunGroup,
+  type RunOwner,
 } from "../../../src/run/store/store.js";
 import { makeTempDir } from "../../helpers/tempDir.js";
 import { openFakeRunGroup as openRunGroup } from "./fake-git-process.js";
@@ -75,14 +79,15 @@ test("a Turn is admitted, events append, and the result settles immutably (#116)
 
   owner.appendTurnEvent({
     turnId: "turn-1",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "hello-message", content: "hello" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "hello-message", content: "hello" },
+    },
     at: AT,
   });
   owner.appendTurnEvent({
     turnId: "turn-1",
-    kind: "tool-activity",
-    payload: JSON.stringify({ tool: "Edit", phase: "started" }),
+    fact: { kind: "tool-activity", data: { tool: "Edit", phase: "started" } },
     at: AT,
   });
   assert.equal(owner.turnEvents().length, 2);
@@ -165,8 +170,10 @@ test("a fenced owner refuses every Turn-side write and the authored pending gate
   assert.deepEqual(
     stale.appendTurnEvent({
       turnId: "turn-1",
-      kind: "assistant-content",
-      payload: JSON.stringify({ messageId: "hello-message", content: "hello" }),
+      fact: {
+        kind: "assistant-content",
+        data: { messageId: "hello-message", content: "hello" },
+      },
       at: AT,
     }),
     fenced,
@@ -680,11 +687,13 @@ test("m10-interruption-and-transcript: each settled message and delivered Steer 
     harness: "claude-code",
     at: AT,
   });
-  const append = (kind: string, payload: unknown) =>
+  const append = <K extends TurnFact["kind"]>(
+    kind: K,
+    payload: TurnFactData<K>,
+  ) =>
     owner.appendTurnEvent({
       turnId: "entry",
-      kind,
-      payload: JSON.stringify(payload),
+      fact: turnFact(kind, payload),
       at: AT,
     });
   append("assistant-content", { messageId: "first", content: "First message" });
@@ -696,7 +705,11 @@ test("m10-interruption-and-transcript: each settled message and delivered Steer 
   append("assistant-content", {
     content: "Unqualified identity is not conversation",
   });
-  for (const delivery of ["within-turn", "after-boundary", "re-delivered"]) {
+  for (const delivery of [
+    "within-turn",
+    "after-boundary",
+    "re-delivered",
+  ] as const) {
     append("steer", {
       steerId: delivery,
       text: `Steer ${delivery}`,
@@ -780,18 +793,24 @@ test("m10-interruption-and-transcript: tool starts and observed settlements surv
       at: AT,
     }).ok,
   );
-  const append = (callId: string, historyOrder: number, outcome: object) =>
+  const append = (
+    callId: string,
+    historyOrder: number,
+    outcome: ToolCall["outcome"],
+  ) =>
     owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId,
-        parentCallId: "private-parent",
-        tool: "read",
-        input: "file",
-        historyOrder,
-        outcome,
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId,
+          parentCallId: "private-parent",
+          tool: "read",
+          input: "file",
+          historyOrder,
+          outcome,
+        },
+      },
       at: AT,
     });
   append("settled", 2, { kind: "running" });
@@ -852,7 +871,7 @@ test("m10-session-history: validated supplied patches and Turn diffs survive cra
       at: AT,
     });
   }
-  const files = [
+  const files: ToolCall["files"] = [
     {
       path: "observed.ts",
       kind: "update",
@@ -873,21 +892,23 @@ test("m10-session-history: validated supplied patches and Turn diffs survive cra
   ];
   const append = (
     turnId: string,
-    outcome: object,
+    outcome: ToolCall["outcome"],
     historyOrder: number,
-    facts?: readonly object[],
+    facts?: ToolCall["files"],
   ) =>
     owner.appendTurnEvent({
       turnId,
-      kind: "tool-call",
-      payload: JSON.stringify({
-        callId: "reused",
-        tool: "file-change",
-        input: "requested.ts",
-        outcome,
-        historyOrder,
-        ...(facts === undefined ? {} : { files: facts }),
-      }),
+      fact: {
+        kind: "tool-call",
+        data: {
+          callId: "reused",
+          tool: "file-change",
+          input: "requested.ts",
+          outcome,
+          historyOrder,
+          ...(facts === undefined ? {} : { files: facts }),
+        },
+      },
       at: AT,
     });
   append("first", { kind: "running" }, 2);
@@ -907,22 +928,20 @@ test("m10-session-history: validated supplied patches and Turn diffs survive cra
   assert.equal(
     owner.appendTurnEvent({
       turnId: "first",
-      kind: "turn-diff",
-      payload: JSON.stringify({ files: [], content: 7 }),
+      // A malformed diff, as an unchecked caller would send it.
+      fact: { kind: "turn-diff", data: { files: [], content: 7 } as never },
       at: AT,
     }).ok,
     false,
   );
   owner.appendTurnEvent({
     turnId: "first",
-    kind: "turn-diff",
-    payload: JSON.stringify(diff),
+    fact: { kind: "turn-diff", data: diff },
     at: AT,
   });
   owner.appendTurnEvent({
     turnId: "first",
-    kind: "turn-diff",
-    payload: JSON.stringify({ files: [], content: "late" }),
+    fact: { kind: "turn-diff", data: { files: [], content: "late" } },
     at: AT,
   });
   const events = owner.turnEvents();
@@ -988,11 +1007,10 @@ test("m10-interruption-and-transcript: admitted command partials retain bounded 
     cwd: WORKSPACE,
     outcome: { kind: "running" },
     historyOrder: 2,
-  };
+  } as const;
   owner.appendTurnEvent({
     turnId: "turn",
-    kind: "tool-call",
-    payload: JSON.stringify(call),
+    fact: { kind: "tool-call", data: call },
     at: AT,
   });
   const partial = {
@@ -1000,12 +1018,11 @@ test("m10-interruption-and-transcript: admitted command partials retain bounded 
     historyOrder: 99,
     output: { text: "OLD" + "x".repeat(30_000), incomplete: true },
     nativeOmission: "Harness omitted stdout",
-  };
+  } as const;
   for (let i = 0; i < 2; i++)
     owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-partial",
-      payload: JSON.stringify(partial),
+      fact: { kind: "tool-partial", data: partial },
       at: AT,
     });
   const retained = owner
@@ -1070,11 +1087,10 @@ for (const size of [29_999, 30_000, 30_001])
       output: { text: "a".repeat(size - 1) + "Z" },
       exitCode: 0,
       nativeOmission: "reported native omission",
-    };
+    } as const;
     owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify(call),
+      fact: { kind: "tool-call", data: call },
       at: AT,
     });
     const event = owner
@@ -1146,11 +1162,10 @@ test("m10-audit-turn-event-refusal: invalid facts and a storage fault refuse ato
       outcome: { kind: "completed" },
       exitCode: 0.5,
     },
-  ]) {
+  ] satisfies ToolCall[]) {
     const result = owner.appendTurnEvent({
       turnId: "turn",
-      kind: "tool-call",
-      payload: JSON.stringify(call),
+      fact: { kind: "tool-call", data: call },
       at: AT,
     });
     assert.equal(result.ok, false);
@@ -1160,16 +1175,16 @@ test("m10-audit-turn-event-refusal: invalid facts and a storage fault refuse ato
   }
   const malformed = owner.appendTurnEvent({
     turnId: "turn",
-    kind: "thought",
-    payload: "private_turn_text_432",
+    // Data that does not match its kind, as an unchecked caller would send it.
+    fact: { kind: "thought", data: "private_turn_text_432" as never },
     at: AT,
   });
   assert.equal(malformed.ok, false);
   if (!malformed.ok && malformed.reason === "unrecordable") {
-    assert.ok(malformed.cause instanceof SyntaxError);
+    assert.ok(malformed.cause instanceof Error);
     assert.deepEqual(malformed.safeCause, {
-      type: "SyntaxError",
-      message: "Turn event payload is not valid JSON.",
+      type: "ZodError",
+      message: "Turn event fact does not match its kind's schema.",
     });
     assert.equal(
       JSON.stringify(malformed.safeCause).includes("private_turn_text_432"),
@@ -1185,8 +1200,10 @@ test("m10-audit-turn-event-refusal: invalid facts and a storage fault refuse ato
   );
   const fault = owner.appendTurnEvent({
     turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({ messageId: "failed", content: "Missing" }),
+    fact: {
+      kind: "assistant-content",
+      data: { messageId: "failed", content: "Missing" },
+    },
     at: AT,
   });
   assert.equal(fault.ok, false);
@@ -1202,8 +1219,10 @@ test("m10-audit-turn-event-refusal: invalid facts and a storage fault refuse ato
   assert.ok(
     owner.appendTurnEvent({
       turnId: "turn",
-      kind: "assistant-content",
-      payload: JSON.stringify({ messageId: "later", content: "Later" }),
+      fact: {
+        kind: "assistant-content",
+        data: { messageId: "later", content: "Later" },
+      },
       at: AT,
     }).ok,
   );
@@ -1223,6 +1242,179 @@ test("m10-audit-turn-event-refusal: invalid facts and a storage fault refuse ato
     ["Work", "Later"],
   );
 });
+
+test("m10-followup-typed-turn-facts: every malformed or unknown Turn fact is refused as unrecordable and stores nothing", (t) => {
+  const group = openRunGroup(makeTempDir("secant-typed-facts-"), WORKSPACE);
+  t.after(() => group.close());
+  const owner = group.acquireRun(create(group, "op-typed-facts").runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.ok(
+    owner.admitTurn({
+      turnId: "turn",
+      attemptId: "attempt",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      input: "Work",
+      recoveryCoordinate: "native",
+      harness: "codex",
+      at: AT,
+    }).ok,
+  );
+  // Each fact reaches the Store only through a cast, as an unchecked caller would.
+  const malformed = [
+    { kind: "model", data: { model: "" } },
+    { kind: "agent-call", data: { callId: "call", id: "next" } },
+    { kind: "request-raised", data: { tool: "shell" } },
+    { kind: "assistant-content", data: { content: 5, messageId: "m" } },
+    {
+      kind: "tool-partial",
+      data: {
+        callId: "settled-partial",
+        tool: "command",
+        input: "build",
+        outcome: { kind: "completed" },
+        output: { text: "tail", incomplete: true },
+      },
+    },
+    { kind: "invented", data: { content: "private_turn_text_512" } },
+  ] as unknown as readonly TurnFact[];
+  for (const fact of malformed) {
+    const result = owner.appendTurnEvent({ turnId: "turn", fact, at: AT });
+    assert.ok(!result.ok, fact.kind);
+    assert.equal(result.reason, "unrecordable", fact.kind);
+    if (result.reason === "unrecordable")
+      assert.equal(
+        JSON.stringify(result.safeCause).includes("private_turn_text_512"),
+        false,
+      );
+    assert.deepEqual(owner.turnEvents(), [], fact.kind);
+  }
+  assert.deepEqual(
+    owner.transcript().map((entry) => entry.content),
+    ["Work"],
+  );
+  // A stamped order is checked with the fact it orders.
+  const stamped = owner.appendTurnEvent({
+    turnId: "turn",
+    fact: { kind: "model", data: { model: "gpt-5" } },
+    historyOrder: -1,
+    at: AT,
+  });
+  assert.ok(!stamped.ok);
+  assert.equal(stamped.reason, "unrecordable");
+  assert.deepEqual(owner.turnEvents(), []);
+  // A well-formed fact of each kind is stored as the value it was checked to be.
+  assert.ok(
+    owner.appendTurnEvent({
+      turnId: "turn",
+      fact: { kind: "model", data: { model: "gpt-5", effort: "high" } },
+      historyOrder: 3,
+      at: AT,
+    }).ok,
+  );
+  assert.deepEqual(
+    owner.turnEvents().map((event) => [event.kind, JSON.parse(event.payload)]),
+    [["model", { model: "gpt-5", effort: "high", historyOrder: 3 }]],
+  );
+});
+
+test("m10-followup-typed-turn-facts: one well-formed fact of every stored kind reads back as written", (t) => {
+  const group = openRunGroup(makeTempDir("secant-typed-kinds-"), WORKSPACE);
+  t.after(() => group.close());
+  const owner = group.acquireRun(create(group, "op-typed-kinds").runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.ok(
+    owner.admitTurn({
+      turnId: "turn",
+      attemptId: "attempt",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      input: "Work",
+      recoveryCoordinate: "native",
+      harness: "codex",
+      at: AT,
+    }).ok,
+  );
+  const call = {
+    callId: "call",
+    tool: "command",
+    input: "build",
+    outcome: { kind: "running" },
+  } as const;
+  const facts = {
+    "assistant-content": { messageId: "m", content: "Reply" },
+    thought: { summaryId: "t", content: "Thinking", durationMs: 4 },
+    "turn-diff": { content: "+line", files: [{ path: "a.ts" }] },
+    "tool-call": call,
+    "tool-partial": {
+      ...call,
+      callId: "partial",
+      output: { text: "out", incomplete: true },
+    },
+    steer: {
+      steerId: "s",
+      text: "Steer",
+      sentAt: AT.toISOString(),
+      settlement: { kind: "waiting" },
+    },
+    model: { model: "gpt-5", effort: "high" },
+    "agent-call": {
+      callId: "agent",
+      id: "step_done",
+      reason: "Ready",
+      answer: { outcome: "accepted" },
+    },
+    "agent-call-expired": { callId: "agent" },
+    "tool-activity": { tool: "shell", summary: "ran" },
+    "request-raised": {
+      requestId: "r",
+      tool: "shell",
+      input: "ls",
+      decisions: ["allow"],
+    },
+    "request-answered": { requestId: "r", by: "human", decision: "allow" },
+    "request-expired": { requestId: "r" },
+    "elicitation-declined": { harness: "codex", message: "Declined" },
+  } satisfies { [K in TurnFact["kind"]]: TurnFactData<K> };
+  const kinds = Object.keys(facts) as TurnFact["kind"][];
+  for (const [order, kind] of kinds.entries())
+    assert.ok(
+      owner.appendTurnEvent({
+        turnId: "turn",
+        fact: turnFact(kind, facts[kind]),
+        historyOrder: order,
+        at: AT,
+      }).ok,
+      kind,
+    );
+  assert.deepEqual(
+    owner.turnEvents().map((event) => readTurnFact(event)),
+    kinds.map((kind, order) => ({
+      kind,
+      data: { ...facts[kind], historyOrder: order },
+    })),
+  );
+});
+
+function typedTurnFactWrites(owner: RunOwner): void {
+  owner.appendTurnEvent({
+    turnId: "turn",
+    // @ts-expect-error A payload that does not match its kind does not compile.
+    fact: { kind: "model", data: { content: "hello" } },
+    at: AT,
+  });
+  owner.appendTurnEvent({
+    turnId: "turn",
+    // @ts-expect-error A kind outside the schema set does not compile.
+    fact: { kind: "invented", data: {} },
+    at: AT,
+  });
+}
+void typedTurnFactWrites;
 
 test("m10-audit-entry-prompt-kind: managed Turn inputs are Entry prompts independently of Step kind; human inputs remain messages", (t) => {
   const group = openRunGroup(makeTempDir("secant-entry-prompts-"), WORKSPACE);
@@ -1330,16 +1522,18 @@ test("m10-audit-steer-stored-when-sent: Store rejects invalid waiting and settle
     { kind: "waiting" },
     { kind: "dropped", reason: "loss" },
     { kind: "delivered", delivery: "within-turn" },
-  ]) {
+  ] as const) {
     const result = owner.appendTurnEvent({
       turnId: "turn",
-      kind: "steer",
-      payload: JSON.stringify({
-        steerId: "",
-        text: "Invalid Steer",
-        sentAt: AT.toISOString(),
-        settlement,
-      }),
+      fact: {
+        kind: "steer",
+        data: {
+          steerId: "",
+          text: "Invalid Steer",
+          sentAt: AT.toISOString(),
+          settlement,
+        },
+      },
       at: AT,
     });
     assert.ok(!result.ok);
@@ -1381,12 +1575,14 @@ test("m10-audit-conversation-order: bounded Store reads separate eligibility fro
     assert.ok(
       owner.appendTurnEvent({
         turnId,
-        kind: "assistant-content",
-        payload: JSON.stringify({
-          messageId,
-          content: messageId,
-          historyOrder,
-        }),
+        fact: {
+          kind: "assistant-content",
+          data: {
+            messageId,
+            content: messageId,
+            historyOrder,
+          },
+        },
         at: AT,
       }).ok,
     );
