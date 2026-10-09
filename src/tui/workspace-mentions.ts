@@ -179,11 +179,12 @@ function tokenAt(text: string, caret: number) {
         }
       }
     }
-    const rangeAt = quoted
-      ? quoteEnd > 0
-        ? body.indexOf("#", quoteEnd + 1)
-        : -1
-      : body.indexOf("#");
+    const trailingRange = /#L\d+(?:-\d+)?$/.exec(body);
+    const rangeAt =
+      trailingRange !== null &&
+      (!quoted || (quoteEnd > 0 && trailingRange.index > quoteEnd))
+        ? trailingRange.index
+        : -1;
     const path = rangeAt < 0 ? body : body.slice(0, rangeAt);
     return {
       start,
@@ -200,7 +201,7 @@ function tokenAt(text: string, caret: number) {
 }
 function mentionText(candidate: WorkspacePathCandidate, range: string): string {
   const path = candidate.path + (candidate.kind === "folder" ? "/" : "");
-  const quoted = /\s/.test(path)
+  const quoted = /[\s#"]/.test(path)
     ? `"${path.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
     : path;
   return `@${quoted}${candidate.kind === "file" ? range : ""}`;

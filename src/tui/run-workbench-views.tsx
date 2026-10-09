@@ -1,4 +1,3 @@
-import stringWidth from "string-width";
 import type { MentionReplacement } from "./workspace-mentions.js";
 import { TextAttributes, type TextareaRenderable } from "@opentui/core";
 import {
@@ -757,20 +756,7 @@ function PromptField(props: {
     const editor = box();
     if (editor === undefined) return;
     const value = editor.plainText;
-    const prefix = value
-      .split("\n")
-      .slice(0, editor.logicalCursor.row)
-      .map((line) => line + "\n")
-      .join("");
-    const line = value.split("\n")[editor.logicalCursor.row] ?? "";
-    let columns = 0;
-    let offset = prefix.length;
-    for (const { segment } of new Intl.Segmenter().segment(line)) {
-      const width = segment === "\t" ? 4 : stringWidth(segment);
-      if (columns + width > editor.logicalCursor.col) break;
-      columns += width;
-      offset += segment.length;
-    }
+    const offset = editor.getTextRange(0, editor.cursorOffset).length;
     batch(() => {
       if (value !== reported) {
         reported = value;
@@ -784,21 +770,23 @@ function PromptField(props: {
     const replacement = props.replacement();
     if (editor === undefined || replacement === undefined) return;
     untrack(() => {
-      const text = editor.plainText;
-      const displayOffset = (offset: number) =>
-        text
-          .slice(0, offset)
-          .split("\n")
-          .reduce(
-            (sum, line, i) =>
-              sum +
-              stringWidth(line.replace(/\t/g, "    ")) +
-              (i === 0 ? 0 : 1),
-            0,
-          );
+      // Tokens never cross a logical line. Find their native positions using
+      // the editor's ranges, including its tab and grapheme boundaries.
+      const nativeOffset = (offset: number) => {
+        let start = editor.editBuffer.getLineStartOffset(
+          editor.logicalCursor.row,
+        );
+        let end = editor.editBuffer.getEOL().offset;
+        while (start < end) {
+          const middle = Math.ceil((start + end) / 2);
+          if (editor.getTextRange(0, middle).length <= offset) start = middle;
+          else end = middle - 1;
+        }
+        return start;
+      };
       editor.setSelection(
-        displayOffset(replacement.start),
-        displayOffset(replacement.end),
+        nativeOffset(replacement.start),
+        nativeOffset(replacement.end),
       );
       editor.insertText(replacement.text);
       editor.clearSelection();

@@ -287,7 +287,7 @@ function matches(
   candidates: readonly WorkspacePathCandidate[],
   rawQuery: string,
 ): WorkspacePathCandidate[] {
-  const query = rawQuery.toLowerCase().replace(/\/$/, "");
+  const query = rawQuery.toLowerCase().replace(/^\.\//, "").replace(/\/$/, "");
   const dots = query.split("/").filter((part) => part.startsWith("."));
   return candidates
     .filter(

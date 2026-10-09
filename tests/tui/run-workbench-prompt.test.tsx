@@ -3349,3 +3349,202 @@ for (const appearance of ["dark", "light"] as const) {
     });
   }
 }
+
+for (const prefix of ["before\t ", "first\tline\n漢字 👩‍💻 á\t "]) {
+  test(`m10-audit-compose-mention-offsets: native token replacement after ${JSON.stringify(prefix)}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    const queries: string[] = [];
+    wb.control.view.searchWorkspacePaths = async (input) => {
+      queries.push(input.query);
+      return {
+        status: "available",
+        candidates: [{ path: "my file.ts", kind: "file" }],
+      };
+    };
+    await wb.t.mockInput.pasteBracketedText(prefix + "@my#L10-20 tail");
+    for (let i = 0; i < 8; i++) wb.t.mockInput.pressArrow("left");
+    await mentionFrame(wb, /› @my file.ts/);
+    assert.deepEqual(queries, ["my"]);
+    await press(wb.t, wb.renderer, "tab");
+    await type(wb.t, "!");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(
+      wb.control.sends[0]?.text,
+      prefix + '@"my file.ts"#L10-20! tail',
+    );
+  });
+}
+
+for (const [draft, query, expected] of [
+  ["@C#notes.md", "C#notes.md", '@"C#notes.md"'],
+  ["@C#notes.md#L2", "C#notes.md", '@"C#notes.md"#L2'],
+  ["@C#notes.md#L2-8", "C#notes.md", '@"C#notes.md"#L2-8'],
+  ["@C#notes.md#L2tail", "C#notes.md#L2tail", '@"C#notes.md"'],
+  ["@C#notes.md#2", "C#notes.md#2", '@"C#notes.md"'],
+  ['@"C#notes.md#L2"', "C#notes.md#L2", '@"C#notes.md"'],
+  ['@"C#notes.md"#L2-8', "C#notes.md", '@"C#notes.md"#L2-8'],
+] as const) {
+  test(`m10-audit-compose-mention-offsets: only a trailing line range is retained for ${draft}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    const queries: string[] = [];
+    wb.control.view.searchWorkspacePaths = async (input) => {
+      queries.push(input.query);
+      return {
+        status: "available",
+        candidates: [{ path: "C#notes.md", kind: "file" }],
+      };
+    };
+    await wb.t.mockInput.pasteBracketedText(draft);
+    await mentionFrame(wb, /› @C#notes.md/);
+    assert.deepEqual(queries, [query]);
+    await press(wb.t, wb.renderer, "tab");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, expected);
+  });
+}
+
+for (const candidate of [
+  { path: 'say"hi.md', kind: "file" },
+  { path: 'dir"quote', kind: "folder" },
+  { path: 'back\\slash"quote.md', kind: "file" },
+] as const) {
+  test(`m10-audit-compose-mention-offsets: quotes and backslashes are escaped in ${candidate.kind} mentions ${candidate.path}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    const queries: string[] = [];
+    wb.control.view.searchWorkspacePaths = async (input) => {
+      queries.push(input.query);
+      return { status: "available", candidates: [candidate] };
+    };
+    await type(wb.t, "@quote#L3");
+    await mentionFrame(wb, /› @/);
+    await press(wb.t, wb.renderer, "tab");
+    // A new query over the inserted token must decode the path again.
+    await type(wb.t, "x");
+    await mentionFrame(wb, /› @/);
+    assert.equal(
+      queries[1],
+      candidate.path + (candidate.kind === "folder" ? "/" : ""),
+    );
+    await press(wb.t, wb.renderer, "escape");
+    await press(wb.t, wb.renderer, "return");
+    const expected =
+      candidate.path === 'say"hi.md'
+        ? '@"say\\"hi.md"#L3x'
+        : candidate.kind === "folder"
+          ? '@"dir\\"quote/"x'
+          : '@"back\\\\slash\\"quote.md"#L3x';
+    assert.equal(wb.control.sends[0]?.text, expected);
+  });
+}
+
+for (const appearance of ["dark", "light"] as const) {
+  for (const [width, height] of [
+    [48, 18],
+    [120, 24],
+    [121, 24],
+    [160, 40],
+  ] as const) {
+    test(`m10-audit-compose-mention-offsets: ${appearance} completion keeps focus, paused history, theme roles and large paths at ${width}x${height}`, async () => {
+      const preferences = {
+        ...inertPreferencesView(),
+        snapshot: () => ({
+          family: "preferences" as const,
+          preferences: { theme: "everforest", appearance },
+          supportedThemes: ["everforest"],
+          actionOffers: [],
+        }),
+      };
+      const wb = await mountWorkbench(
+        interactiveRunOf({ actionOffers: [SEND_OFFER], timeline: events(80) }),
+        width,
+        height,
+        undefined,
+        true,
+        undefined,
+        preferences,
+      );
+      const path = 'folder/C#"' + "large-name-".repeat(50) + ".ts";
+      wb.control.view.searchWorkspacePaths = async () => ({
+        status: "available",
+        candidates: [
+          { path: "folder", kind: "folder" },
+          { path, kind: "file" },
+        ],
+      });
+      await wb.t.mockInput.pasteBracketedText("before\t @folder tail");
+      for (let i = 0; i < 5; i++) wb.t.mockInput.pressArrow("left");
+      await mentionFrame(wb, /› @folder\/ · folder/);
+      const candidate = wb.t
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
+        .find((span) => span.text.includes("› @folder/"));
+      assert.ok(candidate);
+      assert.deepEqual(
+        [candidate.fg.r, candidate.fg.g, candidate.fg.b].map((v) =>
+          Math.round(v * 255),
+        ),
+        appearance === "dark" ? [211, 198, 170] : [92, 106, 114],
+      );
+      assert.match(wb.t.captureCharFrame(), /↵\/tab insert/);
+      await press(wb.t, wb.renderer, "pageup");
+      assert.match(wb.t.captureCharFrame(), /Paused|Jump to latest/);
+      const anchor = wb.t.captureCharFrame().split("\n")[1];
+      wb.control.setRun(
+        interactiveRunOf({ actionOffers: [SEND_OFFER], timeline: events(85) }),
+      );
+      await wb.t.renderOnce();
+      assert.equal(wb.t.captureCharFrame().split("\n")[1], anchor);
+      wb.renderer.key("down");
+      wb.t.mockInput.pressArrow("down");
+      await wb.t.renderOnce();
+      assert.match(wb.t.captureCharFrame(), /› @folder\/C#"large/);
+      assert.match(wb.t.captureCharFrame(), /…/);
+      for (const nextWidth of [120, 121, width]) {
+        resizeWorkbench(wb.t, wb.renderer, nextWidth, height);
+        await wb.t.renderOnce();
+        const frame = wb.t.captureCharFrame();
+        assert.match(frame, /Paused|Jump to latest/);
+        assert.match(frame, /› @folder\/C#"large/);
+        assert.match(frame, /↵\/tab insert/);
+        noOverflow(frame, nextWidth);
+        assert.equal(wb.t.captureSpans().rows, height);
+      }
+      await press(wb.t, wb.renderer, "tab");
+      await type(wb.t, "!");
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(
+        wb.control.sends[0]?.text,
+        'before\t @"folder/C#\\"' + "large-name-".repeat(50) + '.ts"! tail',
+      );
+    });
+  }
+}
+
+for (const cue of ["@", "@my"]) {
+  test(`m10-audit-compose-mention-offsets: ${cue} opens at the native buffer end after multiple tabs`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    const queries: string[] = [];
+    wb.control.view.searchWorkspacePaths = async (input) => {
+      queries.push(input.query);
+      return {
+        status: "available",
+        candidates: [{ path: "file.ts", kind: "file" }],
+      };
+    };
+    await wb.t.mockInput.pasteBracketedText("before\t\t " + cue);
+    await mentionFrame(wb, /› @file.ts/);
+    assert.deepEqual(queries, [cue === "@" ? "" : "my"]);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends.length, 0);
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, "before\t\t @file.ts");
+  });
+}

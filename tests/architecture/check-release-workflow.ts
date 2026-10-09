@@ -196,6 +196,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-interruption-and-transcript",
   "m10-observed-harness-facts",
   "m10-audit-workbench-test-domains",
+  "m10-audit-compose-mention-offsets",
   "m10-audit-draft-recovery",
   "m10-audit-row-layout-once",
   "m10-audit-screen-control-bytes",

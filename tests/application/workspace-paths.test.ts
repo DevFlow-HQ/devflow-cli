@@ -811,3 +811,43 @@ test("m10-audit-token-ripgrep-listing: a cap does not hide a genuine helper clea
   assert.equal(result.status, "unavailable");
   if (result.status === "unavailable") assert.equal(result.cause, cause);
 });
+
+test("m10-audit-compose-mention-offsets: ./ has empty-query visibility and ranking while explicit hidden names still opt in", async (t) => {
+  const { port, runId } = fixture(t, [
+    ".secret\0.hidden/file.ts\0src/a.ts\0readme.md\0",
+  ]);
+  const signal = new AbortController().signal;
+  const expected = {
+    status: "available",
+    candidates: [
+      { path: "src", kind: "folder" },
+      { path: "readme.md", kind: "file" },
+    ],
+  };
+  for (const query of ["", "./"]) {
+    assert.deepEqual(
+      await port.searchWorkspacePaths({ runId, query, signal }),
+      expected,
+    );
+  }
+  assert.deepEqual(
+    await port.searchWorkspacePaths({ runId, query: "./src", signal }),
+    {
+      status: "available",
+      candidates: [
+        { path: "src", kind: "folder" },
+        { path: "src/a.ts", kind: "file" },
+      ],
+    },
+  );
+  assert.deepEqual(
+    await port.searchWorkspacePaths({ runId, query: "./.hidden", signal }),
+    {
+      status: "available",
+      candidates: [
+        { path: ".hidden", kind: "folder" },
+        { path: ".hidden/file.ts", kind: "file" },
+      ],
+    },
+  );
+});

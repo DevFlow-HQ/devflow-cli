@@ -319,6 +319,12 @@ jobs:
           tests/tui/run-workbench-interaction.test.tsx
           tests/tui/run-workbench-layout.test.tsx
           tests/tui/run-workbench-prompt.test.tsx
+      - name: m10-audit-compose-mention-offsets
+        run: >-
+          bun run test --
+          -t '^m10-audit-compose-mention-offsets(:|$)'
+          tests/tui/run-workbench-prompt.test.tsx
+          tests/application/workspace-paths.test.ts
       - name: m10-audit-draft-recovery
         run: >-
           bun run test --

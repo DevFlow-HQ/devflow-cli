@@ -4,6 +4,7 @@
 
 - Before changing Run reads, history, observer delivery, progress, context/usage, or Workspace path search, read
   [Application history](../../docs/agents/application-history.md).
+- Workspace path matching removes a leading `./` before hidden-path opt-in and ranking; only explicit dot-name components reveal hidden paths (#447).
 - Home-scoped `preferences` needs no Harness or approval. Its keys are raw strings; `change-preferences` returns the transaction's saved pair.
   The ledger replays receipts without saving again; failed saves are not-applied with no effects.
 - Windows fallback notices are live launch evidence retained per Run for this Application lifetime (#363), across tracking replacement and Projection reopen.
