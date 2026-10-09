@@ -1,41 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { historyTextEdges, screenHistoryPortion } from "../../src/tui/tui.js";
-import { readHistoryText } from "../application/history-content-fixture.js";
+import {
+  readHistoryText,
+  structuredDiff,
+} from "../application/history-content-fixture.js";
 import { openLiveRun } from "../helpers/liveRun.js";
-import { turnFact, type TurnFactData } from "../helpers/turnFact.js";
+import { turnFact } from "../helpers/turnFact.js";
 
 const MB = 1_000_000;
 // The Application's private text page size, mirrored once here.
 const TEXT_SIZE = 4095;
-
-/** A structured Turn diff whose detail text is about `bytes` long. */
-function structuredDiff(bytes: number): TurnFactData<"turn-diff"> {
-  const line = "+" + "const value = compute(input, options);".padEnd(59, " ");
-  const lines = Math.ceil(bytes / (line.length + 1));
-  const hunks = [];
-  for (let at = 0; at < lines; at += 8)
-    hunks.push({
-      oldStart: at + 1,
-      oldLines: 0,
-      newStart: at + 1,
-      newLines: 8,
-      lines: Array.from(
-        { length: Math.min(8, lines - at) },
-        (_, i) => `${line}${at + i}`,
-      ),
-    });
-  return {
-    content: "Turn diff",
-    files: [
-      {
-        path: "src/large.ts",
-        kind: "update",
-        patch: { kind: "structured", hunks },
-      },
-    ],
-  };
-}
 
 test("m10-followup-bounded-history-cost: a structured Turn diff reads page by page in linear time with presentation edges", async (t) => {
   // Count the body units Application feeds the presentation analyser, and its passes.

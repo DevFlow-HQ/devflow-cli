@@ -6,6 +6,7 @@ import type {
   ProjectionPort,
   SessionFileChange,
 } from "../../src/application/projection-port.js";
+import type { TurnFactData } from "../helpers/turnFact.js";
 
 export async function readHistoryText(
   port: ProjectionPort,
@@ -102,4 +103,32 @@ export async function readHistoryFiles(
     files.push({ ...file, patch: { kind: "structured", hunks } });
   }
   return files;
+}
+
+/** A structured Turn diff whose detail text is about `bytes` long. */
+export function structuredDiff(bytes: number): TurnFactData<"turn-diff"> {
+  const line = "+" + "const value = compute(input, options);".padEnd(59, " ");
+  const lines = Math.ceil(bytes / (line.length + 1));
+  const hunks = [];
+  for (let at = 0; at < lines; at += 8)
+    hunks.push({
+      oldStart: at + 1,
+      oldLines: 0,
+      newStart: at + 1,
+      newLines: 8,
+      lines: Array.from(
+        { length: Math.min(8, lines - at) },
+        (_, i) => `${line}${at + i}`,
+      ),
+    });
+  return {
+    content: "Turn diff",
+    files: [
+      {
+        path: "src/large.ts",
+        kind: "update",
+        patch: { kind: "structured", hunks },
+      },
+    ],
+  };
 }

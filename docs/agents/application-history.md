@@ -29,7 +29,10 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
   items, with at most 32 active traversals per Application.
   Continuations stay on one exact version. Stored references keep append-only event coordinates, or the immutable index fact for Turn inputs and
   migrated messages, never cached bodies; release drops a traversal's body. A text continuation carries the total, its resuming part, and the edge
-  analyser's state, so a sequential read is linear; a seek walks from the start (#514). Live previews and derived Turn results are held versions that survive
+  analyser's state, so a sequential read is linear (#514). A seek walks from its traversal's nearest checkpoint (part position and analyser state,
+  every eight pages, widened to at most 128 per traversal). Seeks and sequential reads keep the first point they reach in each spacing, so once a
+  span has been read a seek into it walks at most one spacing plus a page; only the first walk into an unread span starts further back (#520).
+  Checkpoints die with the traversal and never reach a cursor or the Store. Live previews and derived Turn results are held versions that survive
   only current windows and active traversals. A live preview over a stored start reads its own value. Closing one observer releases only its reads.
   Every variable-length field is a preview with a reference: messages, Thoughts, Entry prompts and Steers inline up to 4,095 units and 12 KiB
   encoded (`reference`); Agent calls, Requests, activity and Turn results cap strings at 512 units/1 KiB (`detail`); tool strings keep 512 units,

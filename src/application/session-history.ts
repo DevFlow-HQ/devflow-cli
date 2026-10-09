@@ -143,6 +143,7 @@ export function createSessionHistory(deps: {
   readonly subscriptions: SubscriptionLifecycle;
   readonly schedule: (callback: () => void, delayMs: number) => () => void;
   readonly retained?: (runId: string, values: number) => void;
+  readonly walked?: Parameters<typeof createHistoryContent>[0]["walked"];
 }) {
   const runs = new Map<string, RunHistory>();
   const observers = new Set<Observer>();
@@ -150,6 +151,7 @@ export function createSessionHistory(deps: {
   const content = createHistoryContent({
     available: deps.available,
     textEdges: deps.textEdges,
+    walked: deps.walked,
     readStored(runId, at) {
       let value: StoredHistoryValue | undefined;
       if (at.kind === "event") {

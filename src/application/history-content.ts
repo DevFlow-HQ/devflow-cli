@@ -28,6 +28,10 @@ import type {
 const TEXT_SIZE = 4095;
 const ITEM_SIZE = 8;
 const ACTIVE_LIMIT = 32;
+// A traversal keeps a checkpoint every eight pages, widening the spacing so it
+// never keeps more than 128 (#520).
+const CHECKPOINT_PAGES = 8;
+const CHECKPOINT_LIMIT = 128;
 // Private inline thresholds as [UTF-16 units, encoded bytes]. With references and
 // headers, each projected row stays under 18 KiB, so a complete 200-row page plus
 // one later preview per row stays inside the 8 MiB encoded allowance (#490).
@@ -90,6 +94,15 @@ interface Resume {
   readonly edges?: HistoryTextEdgeResume;
   readonly edgesAt?: number;
 }
+/** A place in a text body: the part holding `position`, which starts at
+ * `skipped`, and the edge analyser's state there. */
+interface Point {
+  readonly at: PartAt;
+  readonly skipped: number;
+  readonly position: number;
+  readonly edges?: HistoryTextEdgeResume;
+}
+const ORIGIN: Point = { at: START, skipped: 0, position: 0 };
 type Version = {
   readonly id: string;
   readonly runId: string;
@@ -104,6 +117,9 @@ interface Read {
   readonly reference: string;
   readonly scope: string;
   readonly value: StoredHistoryValue;
+  /** At most one seek point per spacing, keyed by its index; dropped with the
+   * traversal and never stored. */
+  readonly checkpoints: Map<number, Point>;
   readonly releaseSignal?: () => void;
 }
 
@@ -123,6 +139,13 @@ export type HistoryTextEdgeAnalyser = (
   readonly resume?: HistoryTextEdgeResume;
 };
 
+/** Observes each text read's walk: the body parts it visited and its traversal's
+ * checkpoints afterwards; a test asserts seek cost through it (#520). */
+export type HistoryContentWalkObserver = (walk: {
+  readonly parts: number;
+  readonly checkpoints: number;
+}) => void;
+
 const missing = (
   code = "history-content-stale",
 ): Extract<HistoryContentRead, { readonly found: false }> => ({
@@ -141,12 +164,15 @@ export function createHistoryContent(deps: {
   readStored(runId: string, at: StoredAt): StoredHistoryValue | Problem;
   available(runId: string): true | Problem;
   readonly textEdges?: HistoryTextEdgeAnalyser;
+  readonly walked?: HistoryContentWalkObserver;
 }) {
   const key = randomBytes(32);
   const versions = new Map<string, Version>();
   const storedVersions = new Map<string, Version>();
   const values = new WeakMap<StoredHistoryValue, Version>();
   const reads = new Map<string, Read>();
+  // Parts the current text read has visited, reported to `walked`.
+  let partsVisited = 0;
   function seal(value: object): string {
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -538,16 +564,20 @@ export function createHistoryContent(deps: {
     [group, sub, index]: PartAt = START,
   ): Generator<readonly [string, PartAt]> {
     const head = headParts(value, address);
-    for (let i = group === 0 ? index : head.length; i < head.length; i++)
+    for (let i = group === 0 ? index : head.length; i < head.length; i++) {
+      partsVisited++;
       yield [head[i]!, [0, 0, i]];
+    }
     const files = fileGroups(value, address);
     for (let f = Math.max(0, group - 1); f < files.length; f++) {
       const resumed = f === group - 1;
       const file = files[f]!;
       const header = fileHead(file, address.field);
       const first = !resumed ? 0 : sub === 0 ? index : header.length;
-      for (let i = first; i < header.length; i++)
+      for (let i = first; i < header.length; i++) {
+        partsVisited++;
         yield [header[i]!, [1 + f, 0, i]];
+      }
       const patch = file.patch;
       if (address.field !== "detail" || patch?.kind !== "structured") continue;
       for (
@@ -558,7 +588,8 @@ export function createHistoryContent(deps: {
         const hunk = patch.hunks[h]!;
         // A header, then each line and its newline.
         const parts = 1 + 2 * hunk.lines.length;
-        for (let k = resumed && h === sub - 1 ? index : 0; k < parts; k++)
+        for (let k = resumed && h === sub - 1 ? index : 0; k < parts; k++) {
+          partsVisited++;
           yield [
             k === 0
               ? `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n`
@@ -567,6 +598,7 @@ export function createHistoryContent(deps: {
                 : "\n",
             [1 + f, 1 + h, k],
           ];
+        }
       }
     }
   }
@@ -717,6 +749,7 @@ export function createHistoryContent(deps: {
             reference: reference.id,
             scope: address.scope,
             value,
+            checkpoints: new Map(),
             releaseSignal: () =>
               request.signal?.removeEventListener("abort", abort),
           };
@@ -737,6 +770,7 @@ export function createHistoryContent(deps: {
             next: page.more ? cursor(offset + ITEM_SIZE) : undefined,
           };
         }
+        partsVisited = 0;
         // The exact version is immutable while pinned, so its total is walked once.
         let total = resumed?.total;
         if (total === undefined) {
@@ -745,21 +779,116 @@ export function createHistoryContent(deps: {
         }
         const cursor = (at: number, from?: Resume) =>
           seal({ readId, reference: reference.id, offset: at, total, from });
+        // Transient bounded portions from `position` to `until`, beginning at a part known to precede it.
+        function* portions(
+          at: PartAt,
+          partStart: number,
+          position: number,
+          until = Infinity,
+        ): Generator<string> {
+          for (const [part] of textParts(value, address, at)) {
+            const first = Math.max(0, position - partStart);
+            const last = Math.min(part.length, until - partStart);
+            partStart += part.length;
+            for (let cut = first; cut < last; cut += TEXT_SIZE)
+              yield part.slice(cut, Math.min(last, cut + TEXT_SIZE));
+            if (partStart >= until) return;
+          }
+        }
+        // The analyser resumes only at its own state's position; without one it
+        // analyses afresh from the body's start. A source cut at `until` still
+        // captures the state there, but its edges are incomplete.
+        const analyse = (
+          point: Point,
+          start: number,
+          end: number,
+          until?: number,
+        ) => {
+          const from =
+            point.position === 0 || point.edges !== undefined ? point : ORIGIN;
+          return deps.textEdges?.(
+            portions(from.at, from.skipped, from.position, until),
+            start,
+            end,
+            from.edges,
+          );
+        };
+        const step = (point: Point, position: number): Point => {
+          let skipped = point.skipped,
+            at = point.at;
+          for (const [part, place] of textParts(value, address, point.at)) {
+            if (skipped + part.length > position) {
+              at = place;
+              break;
+            }
+            skipped += part.length;
+          }
+          // Only the state is kept, so the source stops at `position`: an attempt
+          // left open there never scans on to the body's end.
+          const edges = analyse(
+            point,
+            point.position,
+            position,
+            position,
+          )?.resume;
+          return { at, skipped, position, ...(edges && { edges }) };
+        };
+        const checkpoints = read.checkpoints;
+        const interval =
+          TEXT_SIZE *
+          Math.max(
+            CHECKPOINT_PAGES,
+            Math.ceil(Math.ceil(total / TEXT_SIZE) / CHECKPOINT_LIMIT),
+          );
+        /** Keeps the first point a traversal reaches in each spacing after the first. */
+        function keep(point: Point): void {
+          const slot = Math.floor(point.position / interval);
+          if (
+            slot > 0 &&
+            !checkpoints.has(slot) &&
+            checkpoints.size < CHECKPOINT_LIMIT &&
+            (deps.textEdges === undefined || point.edges !== undefined)
+          )
+            checkpoints.set(slot, point);
+        }
+        /** Walks from the nearest checkpoint at or before `position`, keeping one
+         * at each spacing multiple it passes. */
+        function seek(position: number, from?: Point): Point {
+          let point = from;
+          for (
+            let slot = Math.floor(position / interval);
+            point === undefined;
+            slot--
+          ) {
+            const kept = slot > 0 ? checkpoints.get(slot) : ORIGIN;
+            if (kept !== undefined && kept.position <= position) point = kept;
+          }
+          for (
+            let mark = (Math.floor(point.position / interval) + 1) * interval;
+            mark <= position;
+            mark += interval
+          )
+            keep((point = step(point, mark)));
+          return point.position < position ? step(point, position) : point;
+        }
         // A fixed grid plus one boundary code unit keeps reverse reads exact,
         // including surrogate pairs, without a cursor stack or whole-body join.
         const startOffset = Math.max(0, offset - 1);
         const endOffset = offset + TEXT_SIZE + 1;
         const nextStart = offset + TEXT_SIZE - 1;
-        // Only a sequential read resumes; a seek walks the parts from the start.
+        // A sequential read resumes where the previous page ended; a seek resumes
+        // from the nearest checkpoint.
         const from =
           resumed?.from !== undefined && resumed.from.skipped <= startOffset
             ? resumed.from
             : undefined;
-        let skipped = from?.skipped ?? 0,
+        const sought = from ? undefined : seek(startOffset);
+        const base = from ?? sought!;
+        let skipped = base.skipped,
           content = "",
           more = false;
         let following: { at: PartAt; skipped: number } | undefined;
-        for (const [part, at] of textParts(value, address, from?.at)) {
+        for (const [part, at] of textParts(value, address, base.at)) {
           if (following === undefined && skipped + part.length > nextStart)
             following = { at, skipped };
           if (skipped + part.length <= startOffset) {
@@ -793,31 +922,24 @@ export function createHistoryContent(deps: {
         const exact = content.slice(start, end);
         const begin = startOffset + start;
         const finish = begin + exact.length;
-        // Transient bounded portions from `position`, beginning at a part known to precede it.
-        function* portions(
-          at: PartAt,
-          partStart: number,
-          position: number,
-        ): Generator<string> {
-          for (const [part] of textParts(value, address, at)) {
-            const first = Math.max(0, position - partStart);
-            partStart += part.length;
-            for (let cut = first; cut < part.length; cut += TEXT_SIZE)
-              yield part.slice(cut, cut + TEXT_SIZE);
-          }
-        }
-        const state =
-          from?.edges !== undefined && from.edgesAt === begin
-            ? from.edges
+        // A sequential read already holds the state at its start, so reading
+        // forward keeps checkpoints too.
+        const resumedAt: Point | undefined =
+          from !== undefined &&
+          (deps.textEdges === undefined ||
+            (from.edges !== undefined && from.edgesAt === begin))
+            ? {
+                at: from.at,
+                skipped: from.skipped,
+                position: begin,
+                ...(from.edges && { edges: from.edges }),
+              }
             : undefined;
-        const analysed = deps.textEdges?.(
-          state === undefined
-            ? portions(START, 0, 0)
-            : portions(from!.at, from!.skipped, begin),
-          begin,
-          finish,
-          state,
-        );
+        if (resumedAt) keep(resumedAt);
+        const analysed =
+          deps.textEdges &&
+          analyse(resumedAt ?? seek(begin, sought), begin, finish);
+        deps.walked?.({ parts: partsVisited, checkpoints: checkpoints.size });
         const lastOffset = Math.max(
           0,
           Math.floor((total - 1) / TEXT_SIZE) * TEXT_SIZE,

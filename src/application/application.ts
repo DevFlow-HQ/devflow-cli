@@ -129,7 +129,10 @@ import { readTranscriptResource } from "./transcript-resource.js";
 // Re-exported through the Module entry so clients and tests reach the page size
 // without importing the internal resolver file (module-boundaries).
 export { TRANSCRIPT_PAGE_SIZE } from "./transcript-resource.js";
-import type { HistoryTextEdgeAnalyser } from "./history-content.js";
+import type {
+  HistoryContentWalkObserver,
+  HistoryTextEdgeAnalyser,
+} from "./history-content.js";
 import { preflight } from "./preflight.js";
 import { createLiveOverlay, type LiveOverlayState } from "./live-overlay.js";
 import {
@@ -412,6 +415,8 @@ export interface ApplicationDependencies {
   /** Observes how many row values a Run's history index retains after each open,
    *  publish and release; a test asserts the window bound through it (#514). */
   readonly observeHistoryRetention?: (runId: string, values: number) => void;
+  /** A test asserts history seek cost through it (#520). */
+  readonly observeHistoryContentWalk?: HistoryContentWalkObserver;
   /** Whether the launching client can relay human turn-taking (#116). Headless
    *  cannot, so it refuses an `interactive-agent` Bundle at Preflight; the TUI sets
    *  this true. Defaults to false. */
@@ -540,6 +545,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const history = createSessionHistory({
     textEdges: deps.historyTextEdges,
     retained: deps.observeHistoryRetention,
+    walked: deps.observeHistoryContentWalk,
     observedOwner: (runId) => {
       const tracking = runs.get(runId);
       return tracking !== undefined && !tracking.done
