@@ -16,9 +16,11 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
   Iteration, or `until` passes. The Projection and every control (hold basis, Gate answers, interactive admission) read its `deriveRun`.
 - The client `RunStateName` has no `created` and gains `cancelled` (A7); the Run Store still records `created` internally, and `toRunState` maps it to `running` for the
   Projection — a launched Run reads `running` from admission.
-- Every opened Projection owns one `UpdateStream` (#306): a FIFO that never coalesces or evicts, bounded at 1,000 unread updates and 8 Mi payload units (T3 Code's
-  limits). Overflow ends only that subscription through `end("observer-lagged")`, which releases the backlog and delivers one `closed` ahead of it; `pushRunClosed`
-  uses the same `end`. The producer never waits or fails, so the Run and its other observers continue, and a reopen reads a fresh snapshot and live catch-up.
+- Every opened Projection owns one `UpdateStream` (#306, #488). Session history retains one latest unread complete page and one later preview per
+  retained row; a new page replaces all unread history state, and a preview replaces its same-row predecessor and drops evicted previews.
+  Other families remain FIFO, bounded at 1,000 unread updates and 8 Mi payload units; existing oversized-content handling remains for history until
+  #489/#490 supply content reads and encoded accounting. Overflow ends only that subscription through `end("observer-lagged")`, releasing backlog
+  and delivering one `closed` ahead of it. Producers never wait; other observers and the Run continue, and reopen reads current state.
 - `SubscriptionLifecycle` privately creates every stream, including delegated and idle views (#310); termination unregisters its producer and drops retained delivery
   state. Shutdown ends observation before owner cleanup and awaiting work; [run-control](run-control.md) owns its claim rules.
   Keep empty Run observer Sets: live fan-out retains their identity. Later opens remain supported; shutdown memoizes in-flight cleanup only.

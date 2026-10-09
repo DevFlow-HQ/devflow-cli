@@ -10,6 +10,7 @@ import type {
   RunLiveOverlay,
   RunSnapshot,
   RunView,
+  SessionHistoryRow,
 } from "../../src/application/projection-port.js";
 import {
   createLiveRunWorkbenchView,
@@ -598,3 +599,118 @@ for (const result of ["applied", "refused"] as const) {
     assert.equal(first().steerId, firstId);
   });
 }
+
+test("m10-audit-history-latest-delivery: the production history client reads whole latest values across synchronous bursts and reconnects", async (t) => {
+  let flush: (() => void) | undefined;
+  const run = await openLiveRun(t, {
+    scheduleHistoryPreview: (next) => {
+      flush = next;
+      return () => {
+        flush = undefined;
+      };
+    },
+  });
+  t.after(run.finish);
+  assert.ok(
+    run.owner.admitTurn({
+      turnId: "turn",
+      attemptId: "0.0:echo",
+      session: "s",
+      origin: "human",
+      kind: "interactive-agent",
+      input: "Input",
+      recoveryCoordinate: "private",
+      harness: "codex",
+      at: new Date(),
+    }).ok,
+  );
+  const { history, dispose } = createRoot((dispose) => ({
+    history: createLiveRunWorkbenchView(run.port).openHistory(run.runId, "s"),
+    dispose,
+  }));
+  t.after(dispose);
+  const preview = (messageId: string, content: string) => {
+    run.channel.observe({
+      message: { turnId: "turn", session: "s", messageId, content },
+    });
+    const next = flush;
+    flush = undefined;
+    next?.();
+  };
+  preview("one", "First");
+  await microtasksUntil(() => {
+    const page = history.snapshot();
+    return page.result.found && page.result.history.rows.length === 2;
+  });
+  const first = history.snapshot();
+  assert.ok(first.result.found);
+  const original = first.result.history.rows[1]!;
+  preview("one", "Unread first");
+  preview("one", "Unread second");
+  assert.ok(
+    run.owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "assistant-content",
+      payload: JSON.stringify({ messageId: "one", content: "Settled" }),
+      at: new Date(),
+    }).ok,
+  );
+  preview("two", "Old second row");
+  preview("two", "Latest second row");
+  await microtasksUntil(() => {
+    const page = history.snapshot();
+    const value = page.result.found
+      ? page.result.history.rows.at(-1)?.value
+      : undefined;
+    return value?.kind === "message" && value.content === "Latest second row";
+  });
+  const latest = history.snapshot();
+  assert.ok(latest.result.found);
+  const rows: readonly SessionHistoryRow[] = latest.result.history.rows;
+  assert.deepEqual(
+    rows.map((row) => row.value),
+    [
+      { kind: "message", role: "user", content: "Input" },
+      { kind: "message", role: "assistant", content: "Settled" },
+      { kind: "message", role: "assistant", content: "Latest second row" },
+    ],
+  );
+  assert.equal(rows[1]?.id, original.id);
+  assert.equal(rows[1]?.position, original.position);
+  assert.equal(rows[1]?.source, "stored");
+  assert.equal(history.freshness().kind, "current");
+  preview("trigger", "Before loss");
+  preview("oversized", "X".repeat(8 * 1024 * 1024 + 1));
+  preview("overflow", "After loss");
+  await microtasksUntil(() => history.freshness().kind === "disconnected");
+  const lost = history.freshness();
+  assert.ok(lost.kind === "disconnected");
+  assert.equal(lost.reason, "observer-lagged");
+  const lastKnown = history.snapshot();
+  assert.ok(lastKnown.result.found);
+  assert.equal(
+    lastKnown.result.history.rows.length,
+    4,
+    "terminal must discard the oversized queued preview",
+  );
+  history.reconnect();
+  await microtasksUntil(() => {
+    const page = history.snapshot();
+    return page.result.found && page.result.history.rows[1]?.id !== original.id;
+  });
+  const reopened = history.snapshot();
+  assert.ok(reopened.result.found);
+  assert.deepEqual(
+    reopened.result.history.rows.slice(0, 3).map((row) => row.value),
+    rows.map((row) => row.value),
+  );
+  assert.deepEqual(reopened.result.history.rows.at(-1)?.value, {
+    kind: "message",
+    role: "assistant",
+    content: "After loss",
+  });
+  const large = reopened.result.history.rows.at(-2)?.value;
+  assert.ok(large?.kind === "message");
+  assert.equal(large.content.length, 8 * 1024 * 1024 + 1);
+  assert.notEqual(reopened.result.history.rows[1]?.id, original.id);
+});

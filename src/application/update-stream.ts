@@ -26,9 +26,9 @@ const RETAINED_UNITS = 8 * 1024 * 1024;
 const measured = new WeakMap<object, number>();
 
 /**
- * One opened Projection subscription: a single-consumer FIFO that delivers every
- * update in push order, never coalescing or evicting one (#306). Its unread backlog
- * is bounded by count and retained payload; an empty backlog always admits one
+ * One opened Projection subscription. Session history retains the latest unread
+ * page and later whole-row previews (#488); other families deliver FIFO (#306).
+ * Its unread backlog is bounded by count and retained payload; an empty backlog always admits one
  * update, so an observer that is only between reads never loses a large snapshot.
  * An update that would pass either bound ends the subscription `observer-lagged`.
  *
@@ -57,6 +57,27 @@ export class UpdateStream<
       this.waiting = undefined;
       waiting({ value: update, done: false });
       return;
+    }
+    if (
+      update.kind === "durable" &&
+      update.snapshot.family === "session-history"
+    ) {
+      this.queue = [];
+      this.retainedUnits = 0;
+    } else if (update.kind === "history-preview") {
+      // Keep previews in delivery order so a newer window is applied last.
+      this.queue = this.queue.filter((entry) => {
+        const previous = entry.update;
+        if (
+          previous.kind === "history-preview" &&
+          (previous.row.id === update.row.id ||
+            previous.row.position < update.windowStart)
+        ) {
+          this.retainedUnits -= entry.units;
+          return false;
+        }
+        return true;
+      });
     }
     const units = unitsOf(update);
     if (

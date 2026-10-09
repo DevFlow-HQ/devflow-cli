@@ -426,69 +426,6 @@ test("m10-session-history: missing Run and Session are typed Problems; a known e
   await run.finish();
 });
 
-test("m10-session-history: a slow history observer closes alone; healthy FIFO publication and reopen preserve current truth", async (t) => {
-  const run = await openLiveRun(t);
-  t.after(run.finish);
-  admit(run.owner);
-  const slow = openHistory({
-    t,
-    port: run.port,
-    runId: run.runId,
-    session: "s",
-  });
-  const healthy = openHistory({
-    t,
-    port: run.port,
-    runId: run.runId,
-    session: "s",
-  });
-  const reader = healthy.updates[Symbol.asyncIterator]();
-  run.owner.appendTurnEvent({
-    turnId: "turn",
-    kind: "assistant-content",
-    payload: JSON.stringify({
-      messageId: "large-message",
-      content: "x".repeat(4 * 1024 * 1024),
-    }),
-    at: new Date(),
-  });
-  await reader.next();
-  for (let index = 0; index < 3; index++) {
-    run.owner.appendTurnEvent({
-      turnId: "turn",
-      kind: "assistant-content",
-      payload: JSON.stringify({
-        messageId: `changed-${index}`,
-        content: `Changed ${index}`,
-      }),
-      at: new Date(),
-    });
-    const update = await reader.next();
-    assert.ok(update.value?.kind === "durable");
-    assert.ok(update.value.snapshot.result.found);
-    assert.deepEqual(update.value.snapshot.result.history.rows[0]?.value, {
-      kind: "message",
-      role: "user",
-      content: "Input",
-    });
-  }
-  const lagged = slow.updates[Symbol.asyncIterator]();
-  assert.deepEqual(await lagged.next(), {
-    done: false,
-    value: { kind: "closed", reason: "observer-lagged" },
-  });
-  assert.equal((await lagged.next()).done, true);
-  const reopened = openHistory({
-    t,
-    port: run.port,
-    runId: run.runId,
-    session: "s",
-  });
-  assert.ok(reopened.snapshot.result.found);
-  assert.equal(reopened.snapshot.result.history.rows.length, 5);
-  await run.finish();
-});
-
 test("m10-interruption-and-transcript: partials, Agent-call disposition, model and duration stay truthful through settlement", async (t) => {
   const run = await openLiveRun(t);
   t.after(run.finish);

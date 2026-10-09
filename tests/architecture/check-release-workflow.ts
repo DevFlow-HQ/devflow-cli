@@ -168,6 +168,7 @@ const TEST_FILE = /\btests\/[A-Za-z0-9_./-]+\.test\.tsx?\b/g;
 const TEST_COMMAND = /\bbun\s+run\s+test(?:\s|$)/;
 
 export const NAMED_CHECK_SCENARIOS = [
+  "m10-audit-history-latest-delivery",
   "m10-audit-history-index",
   "operation-receipt-identity-and-lifetime",
   "m10-audit-operation-settlement-owner",

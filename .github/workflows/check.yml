@@ -182,6 +182,14 @@ jobs:
           tests/composition/wiring.test.ts
       - name: m10-previous-release-conversation
         run: bun run test -- -t '^m10-previous-release-conversation(:|$)' tests/run/store/conversation-migration.test.ts
+      - name: m10-audit-history-latest-delivery
+        run: >-
+          bun run test --
+          -t '^m10-audit-history-latest-delivery(:|$)'
+          tests/application/history-latest-delivery.test.ts
+          tests/application/observer-lag.test.ts
+          tests/tui/run-view.test.ts
+          tests/tui/run-workbench-history-scroll.test.tsx
       - name: m10-audit-history-index
         run: >-
           bun run test --

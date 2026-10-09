@@ -1891,3 +1891,83 @@ for (const width of [40, 100, 120, 121]) {
     assert.equal(first(), "BODY_FIRST");
   });
 }
+
+for (const appearance of ["dark", "light"] as const) {
+  for (const width of [40, 100, 120, 121]) {
+    test(`m10-audit-history-latest-delivery: ${appearance} latest page and preview replacement preserve paused content offset and native focus at ${width}`, async () => {
+      const preferences = previewPreferences();
+      const wb = await mountWorkbench(
+        interactiveRunOf({
+          sessions: [
+            {
+              session: "conversation",
+              name: "Conversation",
+              availability: "open",
+            },
+          ],
+        }),
+        width,
+        14,
+        undefined,
+        true,
+        undefined,
+        {
+          ...preferences,
+          snapshot: () => ({
+            ...preferences.snapshot(),
+            preferences: { theme: "everforest", appearance },
+          }),
+        },
+      );
+      const first = () =>
+        timelineLines(wb.t.captureCharFrame())[0]!
+          .slice(0, width > 120 ? width - 43 : width)
+          .trim();
+      const anchor = historyRow(
+        "anchor",
+        "FIRST_LINE\nHELD_OFFSET\nLAST_LINE",
+        "preview",
+      );
+      const tail = Array.from({ length: 25 }, (_, i) =>
+        activityRow(`tail-${i}`),
+      );
+      wb.control.setHistory(historyPage([anchor, ...tail]));
+      await wb.t.renderOnce();
+      await press(wb.t, wb.renderer, "home", { alt: true });
+      for (let i = 0; i < 12 && first() !== "HELD_OFFSET"; i++)
+        await press(wb.t, wb.renderer, "down", { alt: true });
+      assert.equal(first(), "HELD_OFFSET");
+      await type(wb.t, "draft");
+      wb.control.setHistory(
+        historyPage(
+          [
+            {
+              ...anchor,
+              source: "stored",
+              value: {
+                kind: "message",
+                role: "assistant",
+                content: "FIRST_LINE\nHELD_OFFSET\nSETTLED_LINE",
+              },
+            },
+            ...tail,
+            historyRow("new", "LATEST_PREVIEW", "preview"),
+          ],
+          true,
+        ),
+      );
+      await wb.t.renderOnce();
+      assert.equal(first(), "HELD_OFFSET");
+      assert.match(wb.t.captureCharFrame(), /Jump to latest/);
+      const resized = width === 121 ? 120 : 121;
+      resizeWorkbench(wb.t, wb.renderer, resized, 10);
+      await wb.t.renderOnce();
+      assert.match(timelineLines(wb.t.captureCharFrame())[0]!, /HELD_OFFSET/);
+      assert.match(wb.t.captureCharFrame(), /draft/);
+      noOverflow(wb.t.captureCharFrame(), resized);
+      await press(wb.t, wb.renderer, "end", { alt: true });
+      assert.match(wb.t.captureCharFrame(), /LATEST_PREVIEW/);
+      assert.equal(historyBadge(wb.t.captureCharFrame()), 0);
+    });
+  }
+}

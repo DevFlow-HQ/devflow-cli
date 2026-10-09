@@ -38,6 +38,7 @@ export interface LiveRun {
   readonly owner: RunOwner;
   readonly channel: RequestChannel;
   reopen(): ProjectionPort;
+  shutdown(): Promise<void>;
   /** Let the injected execution return `succeeded`, then await the launch outcome. */
   finish(): Promise<void>;
 }
@@ -238,6 +239,7 @@ export async function openLiveRun(
     storeHome,
     owner,
     channel,
+    shutdown: () => app.shutdown(),
     reopen: () =>
       createApplication({
         catalog,

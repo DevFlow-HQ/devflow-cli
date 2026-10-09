@@ -68,7 +68,7 @@ const REQUEST = {
   decisions: ["allow", "deny"] as const,
 };
 
-test("closing the last Run observer and reopening still follows live updates", async (t) => {
+test("m10-audit-history-latest-delivery: other-family FIFO: closing the last Run observer and reopening still follows live updates", async (t) => {
   const run = await openLiveRun(t);
   const first = openRun(t, run);
   first.opened.close();
@@ -81,7 +81,7 @@ test("closing the last Run observer and reopening still follows live updates", a
   await run.finish();
 });
 
-test("a slow observer retains every update up to the bound in order, uncoalesced, across all three lanes", async (t) => {
+test("m10-audit-history-latest-delivery: other-family FIFO: a slow observer retains every update up to the bound in order, uncoalesced, across all three lanes", async (t) => {
   const run = await openLiveRun(t);
   const slow = openRun(t, run);
 
@@ -115,7 +115,7 @@ test("a slow observer retains every update up to the bound in order, uncoalesced
   await run.finish();
 });
 
-test("one update past the bound ends only the slow subscription, once, while a healthy observer and the Run continue", async (t) => {
+test("m10-audit-history-latest-delivery: other-family FIFO: one update past the bound ends only the slow subscription, once, while a healthy observer and the Run continue", async (t) => {
   const run = await openLiveRun(t);
   const slow = openRun(t, run);
   const healthy = openRun(t, run);
@@ -147,7 +147,7 @@ test("one update past the bound ends only the slow subscription, once, while a h
   }
 });
 
-test("reopening after observer-lagged reads the current snapshot and live overlay", async (t) => {
+test("m10-audit-history-latest-delivery: other-family FIFO: reopening after observer-lagged reads the current snapshot and live overlay", async (t) => {
   const run = await openLiveRun(t);
   const slow = openRun(t, run);
 
@@ -178,7 +178,7 @@ test("reopening after observer-lagged reads the current snapshot and live overla
   await run.finish();
 });
 
-test("an oversized update is retained alone, and an update queued behind it ends that subscription", async (t) => {
+test("m10-audit-history-latest-delivery: other-family FIFO: an oversized update is retained alone, and an update queued behind it ends that subscription", async (t) => {
   const run = await openLiveRun(t);
   const reader = openRun(t, run);
   const slow = openRun(t, run);
@@ -196,7 +196,7 @@ test("an oversized update is retained alone, and an update queued behind it ends
   await run.finish();
 });
 
-test("retained payload bounds the backlog exactly at its budget, well below the update count", async (t) => {
+test("m10-audit-history-latest-delivery: other-family FIFO: retained payload bounds the backlog exactly at its budget, well below the update count", async (t) => {
   const run = await openLiveRun(t);
   const reader = openRun(t, run);
   const slow = openRun(t, run);
