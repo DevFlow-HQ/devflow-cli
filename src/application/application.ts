@@ -129,6 +129,7 @@ import { readTranscriptResource } from "./transcript-resource.js";
 // Re-exported through the Module entry so clients and tests reach the page size
 // without importing the internal resolver file (module-boundaries).
 export { TRANSCRIPT_PAGE_SIZE } from "./transcript-resource.js";
+import type { HistoryTextEdgeAnalyser } from "./history-content.js";
 import { preflight } from "./preflight.js";
 import { createLiveOverlay, type LiveOverlayState } from "./live-overlay.js";
 import {
@@ -176,8 +177,6 @@ import type {
   ProjectionPort,
   ProjectionSelector,
   Problem,
-  HistoryTextEdges,
-  HistoryTextEdgeResume,
   DiagnosticReference,
   ResourceRead,
   ResourceReference,
@@ -360,22 +359,6 @@ interface InteractiveContext extends ClaimedRun {
 // settled outcome as a durable update on the same stream. The async `updates`
 // stream also carries the durable change to any `workspace` Projection observing
 // when the launch Workspace becomes approved.
-
-/** Trusted presentation composition analyses bounded transient segments without
- * retaining them. Projection Port callers receive only content and edge counts.
- * `resume` is the analyser's own state at a previous portion's `end`; with it,
- * `source` begins at that position instead of the body's start, so a sequential
- * read never walks the body again (#514). */
-export type HistoryTextEdgeAnalyser = (
-  source: Iterable<string>,
-  start: number,
-  end: number,
-  resume?: HistoryTextEdgeResume,
-) => {
-  readonly edges: HistoryTextEdges;
-  /** State at `end`, for the portion that starts there. */
-  readonly resume?: HistoryTextEdgeResume;
-};
 
 export interface ApplicationDependencies {
   readonly historyTextEdges?: HistoryTextEdgeAnalyser;

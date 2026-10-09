@@ -43,14 +43,27 @@ async function readItems(
   port.releaseHistoryRead(readId);
   return items;
 }
+interface Hunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+/** A file change as content reads rebuild it: the stored change with its patch. */
+type ReadFile = Omit<SessionFileChange, "pathContent"> & {
+  readonly patch?:
+    | { readonly kind: "unified"; readonly content: string }
+    | { readonly kind: "structured"; readonly hunks: readonly Hunk[] };
+};
 export async function readHistoryFiles(
   port: ProjectionPort,
   reference: HistoryItemsReference,
-): Promise<SessionFileChange[]> {
-  const files: SessionFileChange[] = [];
+): Promise<ReadFile[]> {
+  const files: ReadFile[] = [];
   for (const item of await readItems(port, reference)) {
     assert.ok(item.kind === "file");
-    const file: SessionFileChange = {
+    const file: ReadFile = {
       path: await readHistoryText(port, item.path),
       ...(item.change === undefined ? {} : { kind: item.change }),
       ...(item.additions === undefined ? {} : { additions: item.additions }),
@@ -70,13 +83,7 @@ export async function readHistoryFiles(
       });
       continue;
     }
-    const hunks: {
-      oldStart: number;
-      oldLines: number;
-      newStart: number;
-      newLines: number;
-      lines: string[];
-    }[] = [];
+    const hunks: Hunk[] = [];
     for (const hunk of await readItems(port, item.patch.hunks)) {
       assert.ok(hunk.kind === "hunk");
       const lines: string[] = [];

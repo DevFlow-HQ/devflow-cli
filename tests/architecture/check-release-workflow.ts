@@ -240,6 +240,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-followup-bounded-history-cost",
   "m10-followup-agent-call-expiry",
   "m10-followup-history-viewport",
+  "m10-followup-dead-history-code",
 ] as const;
 
 function testFilesIn(script: string): string[] {

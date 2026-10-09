@@ -102,6 +102,60 @@ async function fixture<K extends "turn-diff" | "tool-call">(
     },
   };
 }
+const patchBody = "PATCH_FIRST\n" + "+x\n".repeat(6000) + "PATCH_LAST";
+for (const [kind, label, payload] of [
+  [
+    "tool-call",
+    "Supplied call detail",
+    {
+      callId: "c",
+      tool: "file-change",
+      input: "change",
+      files: [
+        {
+          path: "call.ts",
+          kind: "update",
+          patch: { kind: "unified", content: patchBody },
+        },
+      ],
+      outcome: { kind: "completed" },
+    },
+  ],
+  [
+    "turn-diff",
+    "Turn diff",
+    {
+      content: "DIFF",
+      files: [
+        {
+          path: "diff.ts",
+          kind: "update",
+          patch: { kind: "unified", content: patchBody },
+        },
+      ],
+    },
+  ],
+] as const)
+  test(`m10-followup-dead-history-code: a stored ${kind} patch inspects its complete text only through the delivered detail reference`, async (t) => {
+    const wb = await fixture(t, kind, payload);
+    assert.ok(wb.opened.snapshot.result.found);
+    const value = wb.opened.snapshot.result.history.rows.find(
+      (row) => row.value.kind === "tool" || row.value.kind === "turn-diff",
+    )?.value;
+    assert.ok(value?.kind === "tool" || value?.kind === "turn-diff");
+    // The Port carries no supplied patch; the detail reference is the one route.
+    assert.ok(value.detail);
+    assert.equal(JSON.stringify(value).includes("PATCH_FIRST"), false);
+    await press(wb.t, wb.renderer, "o", { ctrl: true });
+    await wb.t.waitForFrame(
+      (frame) => frame.includes(label) && frame.includes("PATCH_FIRST"),
+    );
+    assert.equal(wb.reads[0]?.reference.id, value.detail.id);
+    await press(wb.t, wb.renderer, "end");
+    await wb.t.waitForFrame((frame) => frame.includes("PATCH_LAST"));
+    assert.doesNotMatch(wb.t.captureCharFrame(), /truncated|omitted/);
+  });
+
 for (const appearance of ["dark", "light"] as const)
   test(`m10-audit-history-tool-content: ${appearance} huge patch inspection reads first and last portions through keyboard and click, resizes, and releases`, async (t) => {
     const patch =

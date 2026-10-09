@@ -22,6 +22,8 @@ import {
   txEntries,
   previewPreferences,
   freeTextRunOf,
+  historyText,
+  serveHistoryText,
 } from "./run-workbench-fixture.js";
 
 function history(value: SessionHistoryValue): SessionHistorySnapshot {
@@ -103,6 +105,8 @@ const fields: readonly {
   value: SessionHistoryValue;
   expand?: true;
   inspect?: true;
+  /** Complete texts behind the value's delivered references. */
+  texts?: Readonly<Record<string, string>>;
 }[] = [
   {
     field: "user message",
@@ -240,19 +244,19 @@ const fields: readonly {
       kind: "tool",
       tool: "file-change",
       input: "change",
-      files: [
-        {
-          path: "file.ts",
-          patch: { kind: "unified", content: unsafe + "\rSECOND" },
-        },
-      ],
+      files: [{ path: "file.ts" }],
+      fileCount: 1,
+      detail: historyText("call-detail"),
       outcome: { kind: "completed" },
     },
     inspect: true,
+    texts: {
+      "call-detail": `Input\nchange\n\nfile.ts\n${unsafe}\rSECOND`,
+    },
   },
 ];
 
-for (const { field, value, expand, inspect } of fields) {
+for (const { field, value, expand, inspect, texts } of fields) {
   test(`m10-audit-screen-control-bytes: ${field} screens through Renderer Port frames`, async () => {
     const wb = await mountWorkbench(
       runOf({
@@ -263,6 +267,7 @@ for (const { field, value, expand, inspect } of fields) {
       100,
       38,
     );
+    if (texts) serveHistoryText(wb.control, texts);
     wb.control.setHistory(history(value));
     await wb.t.renderOnce();
     if (expand || inspect) await press(wb.t, wb.renderer, "o", { ctrl: true });

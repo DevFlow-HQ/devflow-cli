@@ -8,12 +8,14 @@ import type { PreferencesView } from "../../src/tui/tui.js";
 import { PALETTES } from "./palette-expectations.js";
 import {
   hexRgb,
+  historyText,
   mountWorkbench,
   noOverflow,
   press,
   previewPreferences,
   resizeWorkbench,
   runOf,
+  serveHistoryText,
   type,
 } from "./run-workbench-fixture.js";
 
@@ -21,11 +23,9 @@ import {
 const files = Array.from({ length: 300 }, (_, index) => ({
   path: `reported/${String(300 - index).padStart(3, "0")}/a-long-directory-name/exact-file.ts`,
   kind: "update" as const,
-  patch: { kind: "unified" as const, content: `+PATCH_${index}\n` },
+  patch: `+PATCH_${index}\n`,
 }));
-const content = files
-  .map((file) => `${file.path}\n${file.patch.content}`)
-  .join("\n");
+const content = files.map((file) => `${file.path}\n${file.patch}`).join("\n");
 
 function history(
   value: SessionHistoryValue,
@@ -64,20 +64,75 @@ function history(
   };
 }
 
+type Kind = "turn-diff" | "tool";
+/** The value's reference id when Application cuts it. A Turn diff's long content
+ * is always cut; a call is cut by its file count or a supplied patch. */
+function cutId(kind: Kind, count: number, running: boolean) {
+  const patched = kind === "turn-diff" || !running;
+  return kind === "turn-diff" || count > 10 || (patched && count > 0)
+    ? `${kind}-${count}-${running}`
+    : undefined;
+}
+/** The complete texts behind every delivered reference, as Application reads them back. */
+const texts: Readonly<Record<string, string>> = Object.fromEntries(
+  (["turn-diff", "tool"] as const).flatMap((kind) =>
+    [0, 10, 11, 300].flatMap((count) =>
+      [true, false].flatMap((running) => {
+        const id = cutId(kind, count, running);
+        if (id === undefined) return [];
+        const patched = kind === "turn-diff" || !running;
+        const selected = files.slice(0, count);
+        const detail = [
+          kind === "turn-diff"
+            ? `${content}\n\nSupplied file patches`
+            : "Input\napply the reported changes",
+          ...selected.map((file) =>
+            patched
+              ? `\n\n${file.path}\n${file.kind}\n${file.patch}`
+              : `\n\n${file.path}\nNo patch supplied`,
+          ),
+        ].join("");
+        const list = selected
+          .map((file) => `${patched ? `${file.kind} ` : ""}${file.path}\n`)
+          .join("");
+        return [
+          [`${id}-detail`, detail],
+          [`${id}-files`, list],
+        ];
+      }),
+    ),
+  ),
+);
+
+/** A file-bearing value as Application delivers it: a cut value shows ten files
+ * without patches, and its supplied patches open only through `detail`. */
 function value(
-  kind: "turn-diff" | "tool",
+  kind: Kind,
   count: number,
   running: boolean,
 ): SessionHistoryValue {
-  const selected = files.slice(0, count);
+  const patched = kind === "turn-diff" || !running;
+  const shown = files
+    .slice(0, Math.min(count, 10))
+    .map(({ path, kind }) => (patched ? { path, kind } : { path }));
+  const id = cutId(kind, count, running);
+  const references =
+    id === undefined
+      ? {}
+      : {
+          fileCount: count,
+          detail: historyText(`${id}-detail`),
+          filesDetail: historyText(`${id}-files`),
+        };
   return kind === "turn-diff"
-    ? { kind, files: selected, content }
+    ? { kind, files: shown, content: content.slice(0, 512), ...references }
     : {
         kind,
         tool: "file-change",
-        input: selected.map((file) => `update ${file.path}`).join("; "),
-        files: running ? selected.map(({ path }) => ({ path })) : selected,
+        input: "apply the reported changes",
+        files: shown,
         outcome: { kind: running ? "running" : "completed" },
+        ...references,
       };
 }
 
@@ -114,6 +169,7 @@ for (const appearance of ["dark", "light"] as const) {
         undefined,
         preferences,
       );
+      serveHistoryText(wb.control, texts);
       for (const width of [40, 120, 121, 160]) {
         resizeWorkbench(wb.t, wb.renderer, width, 80);
         for (const count of [0, 10, 11, 300]) {
@@ -189,6 +245,7 @@ for (const kind of ["turn-diff", "tool"] as const) {
       120,
       40,
     );
+    serveHistoryText(wb.control, texts);
     wb.control.setHistory(history(value(kind, 300, false), "stored"));
     await wb.t.renderOnce();
     for (const route of ["key", "click"]) {

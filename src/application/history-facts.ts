@@ -8,6 +8,22 @@ import type {
   SessionHistoryValue,
 } from "./projection-port.js";
 
+export type StoredFileChange = Extract<
+  TurnFact,
+  { readonly kind: "turn-diff" }
+>["data"]["files"][number];
+/** A history value as Application holds it. Unlike the delivered value, its file
+ * changes keep their Harness-supplied patches, which only content reads expose. */
+export type StoredHistoryValue =
+  | Exclude<SessionHistoryValue, { readonly kind: "tool" | "turn-diff" }>
+  | (Omit<Extract<SessionHistoryValue, { readonly kind: "tool" }>, "files"> & {
+      readonly files?: readonly StoredFileChange[];
+    })
+  | (Omit<
+      Extract<SessionHistoryValue, { readonly kind: "turn-diff" }>,
+      "files"
+    > & { readonly files: readonly StoredFileChange[] });
+
 /** Where a stored fact's immutable retained text is read again: its append-only
  * event, or an immutable indexed fact such as a Turn input or migrated message. */
 export type StoredAt =
@@ -20,7 +36,7 @@ export interface HistoryFact {
   turn: HistoryTurn;
   readonly order: number;
   source: "stored" | "preview";
-  value: SessionHistoryValue;
+  value: StoredHistoryValue;
   stored?: StoredAt;
 }
 export function historyKey(
@@ -70,7 +86,7 @@ export function storedHistoryValue(
   fact: TurnFact,
   turn: HistoryTurn,
   modern: boolean,
-): SessionHistoryValue | undefined {
+): StoredHistoryValue | undefined {
   switch (fact.kind) {
     case "assistant-content":
       return modern &&
@@ -187,7 +203,7 @@ export function resultValue(
   turn: HistoryTurn,
   harness?: string,
   model = turn.modelChoice?.model,
-): SessionHistoryValue {
+): StoredHistoryValue {
   const duration =
     turn.settledAt === undefined ||
     turn.resultKind === "lost" ||

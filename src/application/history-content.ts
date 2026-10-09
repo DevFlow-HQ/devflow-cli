@@ -1,4 +1,3 @@
-import type { HistoryTextEdgeAnalyser } from "./application.js";
 import {
   createCipheriv,
   createDecipheriv,
@@ -8,16 +7,21 @@ import {
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { encodedStringBytes, fitEncoded } from "./encoded-json.js";
-import type { HistoryFact, StoredAt } from "./history-facts.js";
+import type {
+  HistoryFact,
+  StoredAt,
+  StoredFileChange,
+  StoredHistoryValue,
+} from "./history-facts.js";
 import type {
   HistoryContentItem,
   HistoryContentRead,
   HistoryContentRequest,
   HistoryItemsReference,
   HistoryTextEdgeResume,
+  HistoryTextEdges,
   HistoryTextReference,
   Problem,
-  SessionFileChange,
   SessionHistoryValue,
 } from "./projection-port.js";
 
@@ -37,7 +41,6 @@ const fits = (text: string | undefined, [units, bytes]: Limit) =>
 function preview(text: string, [units, bytes]: Limit = PREVIEW): string {
   return fitEncoded(text, units, bytes);
 }
-type Content = SessionHistoryValue;
 const addressSchema = z.object({
   version: z.string(),
   scope: z.string(),
@@ -90,20 +93,39 @@ interface Resume {
 type Version = {
   readonly id: string;
   readonly runId: string;
-  readonly previews: Map<string, Content>;
+  readonly previews: Map<string, SessionHistoryValue>;
 } & (
   | { readonly source: "stored"; readonly at: StoredAt }
   // Live previews and derived values without a stored coordinate.
-  | { readonly source: "held"; readonly value: Content }
+  | { readonly source: "held"; readonly value: StoredHistoryValue }
 );
 interface Read {
   readonly version: Version;
   readonly reference: string;
   readonly scope: string;
-  readonly value: Content;
+  readonly value: StoredHistoryValue;
   readonly releaseSignal?: () => void;
 }
-const missing = (code = "history-content-stale"): HistoryContentRead => ({
+
+/** Trusted presentation composition analyses bounded transient segments without
+ * retaining them. Projection Port callers receive only content and edge counts.
+ * `resume` is the analyser's own state at a previous portion's `end`; with it,
+ * `source` begins at that position instead of the body's start, so a sequential
+ * read never walks the body again (#514). */
+export type HistoryTextEdgeAnalyser = (
+  source: Iterable<string>,
+  start: number,
+  end: number,
+  resume?: HistoryTextEdgeResume,
+) => {
+  readonly edges: HistoryTextEdges;
+  /** State at `end`, for the portion that starts there. */
+  readonly resume?: HistoryTextEdgeResume;
+};
+
+const missing = (
+  code = "history-content-stale",
+): Extract<HistoryContentRead, { readonly found: false }> => ({
   found: false,
   problem: {
     code,
@@ -116,14 +138,14 @@ const missing = (code = "history-content-stale"): HistoryContentRead => ({
 /** References retain stored coordinates, never cached stored bodies. Live versions
  * survive only as current deliveries or bounded explicitly released traversals. */
 export function createHistoryContent(deps: {
-  readStored(runId: string, at: StoredAt): Content | Problem;
+  readStored(runId: string, at: StoredAt): StoredHistoryValue | Problem;
   available(runId: string): true | Problem;
   readonly textEdges?: HistoryTextEdgeAnalyser;
 }) {
   const key = randomBytes(32);
   const versions = new Map<string, Version>();
   const storedVersions = new Map<string, Version>();
-  const values = new WeakMap<Content, Version>();
+  const values = new WeakMap<StoredHistoryValue, Version>();
   const reads = new Map<string, Read>();
   function seal(value: object): string {
     const iv = randomBytes(12);
@@ -181,7 +203,7 @@ export function createHistoryContent(deps: {
   /** One pass decides and builds: every variable-length field is fitted here, so
    * a field cannot be shown unbounded or cut without its reference. Undefined
    * when nothing was cut, so a compact value stays the identical inline object. */
-  function bounded(value: Content): Content | undefined {
+  function bounded(value: StoredHistoryValue): SessionHistoryValue | undefined {
     let cut = false;
     const take = (text: string, limit: Limit = PREVIEW) => {
       const shown = preview(text, limit);
@@ -190,17 +212,15 @@ export function createHistoryContent(deps: {
     };
     const optional = (text: string | undefined) =>
       text === undefined ? undefined : take(text);
-    const files = (all: readonly SessionFileChange[]) => {
+    const files = (all: readonly StoredFileChange[]) => {
       if (all.length > 10 || all.some((file) => file.patch !== undefined))
         cut = true;
-      return all
-        .slice(0, 10)
-        .map(({ patch: _patch, pathContent: _ref, ...file }) => ({
-          ...file,
-          path: take(file.path, PATH),
-        }));
+      return all.slice(0, 10).map(({ patch: _patch, ...file }) => ({
+        ...file,
+        path: take(file.path, PATH),
+      }));
     };
-    let shown: Content;
+    let shown: SessionHistoryValue;
     switch (value.kind) {
       case "message":
       case "thought":
@@ -286,7 +306,7 @@ export function createHistoryContent(deps: {
       const base = {
         id: randomUUID(),
         runId,
-        previews: new Map<string, Content>(),
+        previews: new Map<string, SessionHistoryValue>(),
       };
       if (storedAt !== undefined) {
         version = { ...base, source: "stored", at: storedAt };
@@ -304,12 +324,12 @@ export function createHistoryContent(deps: {
   }
   /** Reuses delivered references so an unchanged row keeps an identical value. */
   function withReferences(
-    value: Content,
-    shown: Content,
+    value: StoredHistoryValue,
+    shown: SessionHistoryValue,
     version: Version,
     scope: string,
-    cached: Content | undefined,
-  ): Content {
+    cached: SessionHistoryValue | undefined,
+  ): SessionHistoryValue {
     const detail =
       (cached && "detail" in cached ? cached.detail : undefined) ??
       text(version, "detail", { scope });
@@ -372,12 +392,15 @@ export function createHistoryContent(deps: {
         : shown.output;
     return { ...shown, ...fileFields, output, detail };
   }
-  const filesOf = (value: Content) =>
+  const filesOf = (value: StoredHistoryValue) =>
     value.kind === "tool" || value.kind === "turn-diff"
       ? value.files
       : undefined;
   /** The bounded count of parts before any file, each whole. */
-  function headParts(value: Content, address: Address): readonly string[] {
+  function headParts(
+    value: StoredHistoryValue,
+    address: Address,
+  ): readonly string[] {
     const file = filesOf(value)?.[address.file ?? -1];
     const patch = file?.patch;
     switch (address.field) {
@@ -415,7 +438,7 @@ export function createHistoryContent(deps: {
     }
     throw new Error("Mismatched content target");
   }
-  function detailHead(value: Content): readonly string[] {
+  function detailHead(value: StoredHistoryValue): readonly string[] {
     switch (value.kind) {
       case "message":
       case "thought":
@@ -469,9 +492,9 @@ export function createHistoryContent(deps: {
     ];
   }
   function fileGroups(
-    value: Content,
+    value: StoredHistoryValue,
     address: Address,
-  ): readonly SessionFileChange[] {
+  ): readonly StoredFileChange[] {
     if (address.field === "file-list") return filesOf(value) ?? [];
     if (address.field !== "detail") return [];
     if (value.kind === "tool") return value.files ?? [];
@@ -481,7 +504,7 @@ export function createHistoryContent(deps: {
       : [];
   }
   function fileHead(
-    file: SessionFileChange,
+    file: StoredFileChange,
     field: Address["field"],
   ): readonly string[] {
     const counts = [
@@ -510,7 +533,7 @@ export function createHistoryContent(deps: {
   }
   /** Text parts in order from `from`, each with its own place. */
   function* textParts(
-    value: Content,
+    value: StoredHistoryValue,
     address: Address,
     [group, sub, index]: PartAt = START,
   ): Generator<readonly [string, PartAt]> {
@@ -548,7 +571,7 @@ export function createHistoryContent(deps: {
     }
   }
   function itemPage(
-    value: Content,
+    value: StoredHistoryValue,
     version: Version,
     address: Address,
     offset: number,
@@ -823,10 +846,8 @@ export function createHistoryContent(deps: {
         };
       } catch (cause) {
         if (readId) release(readId);
-        const invalid = missing("history-content-invalid");
-        return invalid.found
-          ? invalid
-          : { found: false, problem: { ...invalid.problem, cause } };
+        const { problem } = missing("history-content-invalid");
+        return { found: false, problem: { ...problem, cause } };
       }
     },
   };

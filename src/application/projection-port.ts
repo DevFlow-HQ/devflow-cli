@@ -1266,18 +1266,6 @@ export interface SessionFileChange {
   readonly additions?: number;
   readonly removals?: number;
   readonly pathContent?: HistoryTextReference;
-  readonly patch?:
-    | { readonly kind: "unified"; readonly content: string }
-    | {
-        readonly kind: "structured";
-        readonly hunks: readonly {
-          readonly oldStart: number;
-          readonly oldLines: number;
-          readonly newStart: number;
-          readonly newLines: number;
-          readonly lines: readonly string[];
-        }[];
-      };
 }
 /** Complete tool value with Application-derived Turn liveness. No correlation ids cross the Port. */
 interface SessionToolValue {

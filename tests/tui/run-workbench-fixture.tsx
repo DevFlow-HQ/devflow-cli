@@ -29,6 +29,7 @@ import type {
   BundleFocusSnapshot,
   DiagnosticReference,
   ContinueRepeatOffer,
+  HistoryTextReference,
   EndStageOffer,
   EndInteractiveStepOffer,
   InstalledBundleFocus,
@@ -460,6 +461,36 @@ export function makeRunView(initial: RunSnapshot) {
     setRequestOutcome,
     setGateOutcome,
   };
+}
+
+export const historyText = (id: string): HistoryTextReference => ({
+  type: "history-text",
+  runId: "run-1",
+  id,
+});
+/** Reads history the way Application delivers it: a row carries only
+ * `history-text` references, and each reads back its complete text. */
+export function serveHistoryText(
+  control: ReturnType<typeof makeRunView>,
+  texts: Readonly<Record<string, string>>,
+): void {
+  control.setContentReader(
+    async ({ reference }) => {
+      const content = texts[reference.id];
+      return content === undefined
+        ? {
+            found: false,
+            problem: {
+              code: "history-content-stale",
+              explanation: "No fixture content",
+              remediation: "Retry",
+              possibleEffects: "none",
+            },
+          }
+        : { found: true, type: "history-text", content, readId: reference.id };
+    },
+    () => {},
+  );
 }
 
 export function snapshotOf(run: RunView): RunSnapshot {

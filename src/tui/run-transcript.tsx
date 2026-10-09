@@ -26,7 +26,7 @@ import type {
 import { clip } from "./clip.js";
 import { SCROLL_KEYS } from "./run-timeline.js";
 import { sessionDivider, stepDivider } from "./run-timeline-rows.js";
-import { wrapRows, wrapRules, type Rule } from "./wrap.js";
+import { wrap, wrapRules, type Rule } from "./wrap.js";
 import type { Theme } from "./vendor/theme.js";
 
 export interface TranscriptTarget {
@@ -109,12 +109,16 @@ function createEntryLayout(observe: LayoutObserver) {
         observe({ kind: "transcript", id: entry.id, width });
         const leading = wrapRules(rules, width);
         const header = `${entry.role === "user" ? "◇ User Turn" : "◆ Assistant"}${entryAnnotation(entry)}`;
+        // The trailing blank line separates this entry from the next.
         const lines = [
           ...leading,
-          ...wrapRows([header], width).lines,
-          ...wrapRows([entry.content, ""], width).lines,
+          ...wrap(header, width),
+          ...wrap(entry.content, width),
+          "",
         ];
         layout = { prefix: leading.length, lines };
+        if (cached.widths.size >= 2)
+          cached.widths.delete(cached.widths.keys().next().value!);
         cached.widths.set(width, layout);
       }
       const result = {

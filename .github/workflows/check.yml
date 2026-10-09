@@ -557,6 +557,12 @@ jobs:
           bun run test --
           -t '^m10-followup-history-viewport(:|$)'
           tests/tui/run-workbench-history-viewport.test.tsx
+      - name: m10-followup-dead-history-code
+        run: >-
+          bun run test --
+          -t '^m10-followup-dead-history-code(:|$)'
+          tests/tui/run-workbench-layout.test.tsx
+          tests/tui/history-tool-content.test.tsx
       - name: M10 runtime failure regressions
         run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test

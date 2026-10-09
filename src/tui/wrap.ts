@@ -148,38 +148,11 @@ export function wrapRules(rules: readonly Rule[], width: number): string[] {
   return rules.flatMap((rule) => ruleLines(rule, width));
 }
 
-/** A row laid out under the rules that lead it: each rule's lines, then the row's
- *  wrapped text, counted as one row. */
-export interface RuledRow {
-  readonly rules: readonly Rule[];
-  readonly text: string;
-}
-
 /** Rows wrapped at one width: every row's display lines in order, and each row's
  *  line count — the `heights` the scroll reducer windows over. */
 interface WrappedRows {
   readonly lines: readonly string[];
   readonly heights: readonly number[];
-}
-
-/** Wrap each row with `wrap`, laying the results out top to bottom. A row's rules
- *  are drawn at the same width above it and count toward its height, so a divider
- *  scrolls, anchors, and counts as part of the row it leads. */
-export function wrapRows(
-  rows: readonly (string | RuledRow)[],
-  width: number,
-  hang = 0,
-): WrappedRows {
-  const lines: string[] = [];
-  const heights: number[] = [];
-  for (const row of rows) {
-    const { rules, text } =
-      typeof row === "string" ? { rules: [], text: row } : row;
-    const wrapped = [...wrapRules(rules, width), ...wrap(text, width, hang)];
-    for (const line of wrapped) lines.push(line);
-    heights.push(wrapped.length);
-  }
-  return { lines, heights };
 }
 
 /** Lay out content screened by the inspection or history display boundary. */

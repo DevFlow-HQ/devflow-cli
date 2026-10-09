@@ -1,6 +1,8 @@
 import { compareConversationOrder } from "./conversation-order.js";
-import type { HistoryTextEdgeAnalyser } from "./application.js";
-import { createHistoryContent } from "./history-content.js";
+import {
+  createHistoryContent,
+  type HistoryTextEdgeAnalyser,
+} from "./history-content.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { readTurnFact } from "../run/store/store.js";
@@ -20,7 +22,6 @@ import type {
   OpenedProjection,
   Problem,
   SessionHistorySnapshot,
-  SessionHistoryValue,
   SessionHistoryRow,
 } from "./projection-port.js";
 import type { SubscriptionLifecycle } from "./subscription-lifecycle.js";
@@ -34,6 +35,7 @@ import {
   historyRow,
   type HistoryFact,
   type HistoryTurn,
+  type StoredHistoryValue,
 } from "./history-facts.js";
 
 interface HistoryRecords {
@@ -63,7 +65,7 @@ interface IndexedTurn {
 /** Outside its Session's newest 200 rows a fact keeps only order, identity and
  * where its value is read again, so retention follows the window (#514). */
 type IndexedFact = Omit<HistoryFact, "value"> & {
-  value?: SessionHistoryValue;
+  value?: StoredHistoryValue;
 };
 const WINDOW = 200;
 // Settlement changes only these stored values: delivery, disposition, or a running outcome.
@@ -149,7 +151,7 @@ export function createSessionHistory(deps: {
     available: deps.available,
     textEdges: deps.textEdges,
     readStored(runId, at) {
-      let value: SessionHistoryValue | undefined;
+      let value: StoredHistoryValue | undefined;
       if (at.kind === "event") {
         const event = deps.readEvent(runId, at.index);
         if ("code" in event) return event;
@@ -177,7 +179,7 @@ export function createSessionHistory(deps: {
       ),
     );
   }
-  function inputValue(turn: HistoryTurn, input: string): SessionHistoryValue {
+  function inputValue(turn: HistoryTurn, input: string): StoredHistoryValue {
     return turn.origin === "managed"
       ? { kind: "entry-prompt", content: input }
       : { kind: "message", role: "user", content: input };
@@ -186,7 +188,7 @@ export function createSessionHistory(deps: {
     runId: string,
     turn: IndexedTurn,
     index: number,
-  ): SessionHistoryValue | Problem {
+  ): StoredHistoryValue | Problem {
     const event = deps.readEvent(runId, index);
     if ("code" in event) return event;
     const fact = readTurnFact(event);
@@ -200,7 +202,7 @@ export function createSessionHistory(deps: {
     runId: string,
     run: RunHistory,
     fact: IndexedFact,
-  ): SessionHistoryValue | Problem {
+  ): StoredHistoryValue | Problem {
     const { turnId, kind, id } = readHistoryKey(fact.key);
     const turn = run.turns.get(turnId);
     if (turn === undefined) return missingFact;
@@ -599,7 +601,7 @@ export function createSessionHistory(deps: {
     turnId: string,
     session: string,
     key: string,
-    value: SessionHistoryValue,
+    value: StoredHistoryValue,
   ): void {
     const run = runs.get(runId);
     const turn = run?.turns.get(turnId);

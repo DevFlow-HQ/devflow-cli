@@ -17,6 +17,8 @@ import {
   press,
   resizeWorkbench,
   runOf,
+  historyText,
+  serveHistoryText,
 } from "./run-workbench-fixture.js";
 
 function row(id: string, value: SessionHistoryValue): SessionHistoryRow {
@@ -272,28 +274,40 @@ test("m10-audit-ctrl-o-one-row: sanitized code-point collapse and resize decide 
 
 for (const kind of ["turn-diff", "tool"] as const) {
   test(`m10-audit-ctrl-o-one-row: capped ${kind} opens complete inspection, consumes Ctrl+O, and leaves no remembered row`, async () => {
+    // Application delivers ten names and the count; every supplied patch reads
+    // back only through the detail reference.
     const files = Array.from({ length: 300 }, (_, index) => ({
       path: `file-${index}.ts`,
-      patch: { kind: "unified" as const, content: `+PATCH_${index}` },
+      patch: `+PATCH_${index}`,
     }));
+    const patches = files.map((file) => `\n\n${file.path}\n${file.patch}`);
+    const delivered = {
+      files: files.slice(0, 10).map(({ path }) => ({ path })),
+      fileCount: files.length,
+      detail: historyText("patch-detail"),
+      filesDetail: historyText("patch-files"),
+    };
     const value: SessionHistoryValue =
       kind === "turn-diff"
-        ? {
-            kind,
-            files,
-            content: files
-              .map((file) => `${file.path}\n${file.patch.content}`)
-              .join("\n"),
-          }
+        ? { kind, content: "Turn diff", ...delivered }
         : {
             kind,
             tool: "file-change",
             input: "requested",
-            files,
             outcome: { kind: "completed" },
+            ...delivered,
           };
     const original = [thought("older"), thought("opened")];
     const wb = await mount(original, 100, 40);
+    serveHistoryText(wb.control, {
+      "patch-detail": [
+        kind === "turn-diff"
+          ? "Turn diff\n\nSupplied file patches"
+          : "Input\nrequested",
+        ...patches,
+      ].join(""),
+      "patch-files": files.map((file) => `${file.path}\n`).join(""),
+    });
     await press(wb.t, wb.renderer, "o", { ctrl: true });
     assert.match(wb.t.captureCharFrame(), /opened body/);
     wb.control.setHistory(history([...original, row("patch", value)]));

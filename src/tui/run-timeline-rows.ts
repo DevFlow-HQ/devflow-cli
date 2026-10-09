@@ -300,7 +300,9 @@ function previewInspection(value: SessionHistoryValue): Openable | undefined {
       return undefined;
   }
 }
-/** Formats only supplied patch data. Requested inputs never create an inspection. */
+/** A supplied call patch or cut Turn diff opens its complete text through the
+ * delivered detail reference; a compact Turn diff opens inline. Requested inputs
+ * never create an inspection. */
 function fileInspection(value: SessionHistoryValue): Openable | undefined {
   if (
     (value.kind === "turn-diff" ||
@@ -312,28 +314,9 @@ function fileInspection(value: SessionHistoryValue): Openable | undefined {
       historyContent: value.detail,
       historyFiles: value.filesDetail,
     };
-  if (value.kind === "turn-diff")
-    return { label: "Turn diff", content: value.content, format: "diff" };
-  if (
-    value.kind !== "tool" ||
-    !value.files?.some((file) => file.patch !== undefined)
-  )
-    return undefined;
-  const content = value.files
-    .map((file) => {
-      const patch = file.patch;
-      if (patch === undefined) return `${file.path}\nNo patch supplied`;
-      if (patch.kind === "unified") return `${file.path}\n${patch.content}`;
-      const hunks = patch.hunks
-        .map(
-          (hunk) =>
-            `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n${hunk.lines.join("\n")}`,
-        )
-        .join("\n");
-      return `${file.path}\n${patch.hunks.length === 0 ? "No patch hunks supplied" : hunks}`;
-    })
-    .join("\n\n");
-  return { label: "Supplied call patches", content, format: "diff" };
+  return value.kind === "turn-diff"
+    ? { label: "Turn diff", content: value.content, format: "diff" }
+    : undefined;
 }
 
 function attachDividers(rows: readonly TimelineRow[]): TimelineRow[] {

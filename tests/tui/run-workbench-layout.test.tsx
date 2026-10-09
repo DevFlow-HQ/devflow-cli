@@ -225,6 +225,51 @@ test("m10-audit-row-layout-once: the 150th older transcript page lays out only 2
   assert.deepEqual(laidOut, [], "retained entries reuse their prior width");
 });
 
+test("m10-followup-dead-history-code: resizing the transcript reader across many widths keeps at most two layouts per entry", async () => {
+  const laidOut: number[] = [];
+  const wb = await mountWorkbench(
+    transcriptRun(),
+    100,
+    26,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    (event) => {
+      if (event.kind === "transcript") laidOut.push(event.width);
+    },
+  );
+  wb.control.setTranscript("", {
+    found: true,
+    type: "transcript-page",
+    entries: Array.from({ length: 3 }, (_, i) => ({
+      id: `entry-${i}`,
+      session: "s",
+      role: "assistant" as const,
+      content: `ENTRY_${i}`,
+    })),
+  });
+  await openTranscriptDetails(wb);
+  assert.equal(laidOut.length, 3);
+  const opened = laidOut[0];
+  for (let width = 99; width >= 80; width--) {
+    resizeWorkbench(wb.t, wb.renderer, width, 26);
+    await wb.t.renderOnce();
+  }
+  laidOut.length = 0;
+  resizeWorkbench(wb.t, wb.renderer, 81, 26);
+  await wb.t.renderOnce();
+  assert.deepEqual(laidOut, [], "the previous width stays retained");
+  resizeWorkbench(wb.t, wb.renderer, 100, 26);
+  await wb.t.renderOnce();
+  assert.deepEqual(
+    laidOut,
+    [opened, opened, opened],
+    "older widths were evicted, so each entry lays out again",
+  );
+  assert.match(wb.t.captureCharFrame(), /ENTRY_2/);
+});
+
 test("m10-audit-row-layout-once: a supplied 2 MB diff reuses retained widths, releases evicted layouts and keeps complete content through modal keys and resize", async () => {
   const layouts: number[] = [];
   const wb = await mountWorkbench(

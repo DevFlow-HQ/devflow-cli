@@ -26,6 +26,8 @@ import {
   INSPECTIONS,
   previewPreferences,
   hexRgb,
+  historyText,
+  serveHistoryText,
 } from "./run-workbench-fixture.js";
 
 test("the details panel shows the observed Harness, executable, version, and model, and the header no longer does (#194 story 35)", async () => {
@@ -955,7 +957,9 @@ test("m10-session-history: per-call structured patches inspect supplied coordina
   });
   const wb = await mountWorkbench(run, 80, 24);
   const page = (
-    files?: Extract<SessionHistoryRow["value"], { kind: "tool" }>["files"],
+    supplied: Partial<
+      Extract<SessionHistoryRow["value"], { kind: "tool" }>
+    > = {},
   ): SessionHistorySnapshot => ({
     family: "session-history",
     runId: run.runId,
@@ -975,7 +979,7 @@ test("m10-session-history: per-call structured patches inspect supplied coordina
               tool: "file-change",
               input: "requested.ts",
               outcome: { kind: "unconfirmed" },
-              ...(files === undefined ? {} : { files }),
+              ...supplied,
             },
           },
         ],
@@ -1003,18 +1007,19 @@ test("m10-session-history: per-call structured patches inspect supplied coordina
     ...Array.from({ length: 1700 }, () => "+supplied large per-call content"),
     "+PER_CALL_LAST",
   ];
+  // Application delivers the call's supplied patch only through its detail text.
+  serveHistoryText(wb.control, {
+    "call-detail": [
+      "Input\nrequested.ts\n\nobserved.ts\n@@ -7,1 +11,1701 @@\n",
+      ...lines.map((line) => `${line}\n`),
+    ].join(""),
+  });
   wb.control.setHistory(
-    page([
-      {
-        path: "observed.ts",
-        patch: {
-          kind: "structured",
-          hunks: [
-            { oldStart: 7, oldLines: 1, newStart: 11, newLines: 1701, lines },
-          ],
-        },
-      },
-    ]),
+    page({
+      files: [{ path: "observed.ts" }],
+      fileCount: 1,
+      detail: historyText("call-detail"),
+    }),
   );
   await wb.t.renderOnce();
   assert.match(wb.t.captureCharFrame(), /observed.ts/);
