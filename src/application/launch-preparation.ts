@@ -3,7 +3,11 @@ import type { Budgets } from "../bundle/bundle.js";
 import type { Catalog, CatalogEntry } from "../catalog/catalog.js";
 import type { AuthoredManifest, Platform } from "../workflow/workflow.js";
 import type { ProcessAdapter } from "../process/process.js";
-import { assessPreflight, bundleSnapshotCorrupt } from "./preflight.js";
+import {
+  assessPreflight,
+  bundleSnapshotCorrupt,
+  compositionIsCorrupt,
+} from "./preflight.js";
 import { selectPlatform } from "./select-platform.js";
 import type { ApplicationHarnessRegistration } from "./harness-registry.js";
 import type { ApplicationHarnessQualification } from "./harness-registry.js";
@@ -152,13 +156,7 @@ export function createLaunchPreparation(
     // A pinned Snapshot that no longer composes is corrupt, the same class as
     // missing/invalid bytes: a single hard-stop `bundle` finding, not a fault the
     // remaining checks accumulate atop (a corrupt routing cannot be assessed).
-    if (
-      inspected.inspection.composition.some(
-        (finding) =>
-          finding.severity === "error" &&
-          finding.code !== "harness-input-reserved",
-      )
-    ) {
+    if (compositionIsCorrupt(inspected.inspection.composition)) {
       findings.push(bundleSnapshotCorrupt(entry.digest));
       return { findings };
     }

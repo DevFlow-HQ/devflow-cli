@@ -406,7 +406,7 @@ test("valid Launch inputs of every type pin to the created Run and are visible i
 
 // --- Composition re-check (corrupted pinned Snapshot) ----------------------
 
-test("a Snapshot failing the Composition re-check is refused as corrupted, no Run", (t) => {
+test("m10-audit-application-duplicates: Preflight refuses corrupt composition without creating a Run", (t) => {
   const f = fixture(t, workspace());
 
   // Build a valid command Bundle, then repack it with a manifest that is shape-

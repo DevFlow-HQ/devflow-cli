@@ -10,6 +10,7 @@
   The ledger replays receipts without saving again; failed saves are not-applied with no effects.
 - Windows fallback notices are live launch evidence retained per Run for this Application lifetime (#363), across tracking replacement and Projection reopen.
   A fresh Application learns a notice only from a new fallback launch; the notice is not persisted Run truth.
+  `RunNotices` snapshots all Run notices together and clears them together on deletion (#450).
 - Every canonical Run write goes through `observedOwner`, whose getter reads the refreshed `record`. It intercepts `selectHarness`, `selectModelChoice`,
   `changeModelChoice`, `writeState`, `publishAttempt`, `recordMaterializationConflict`, `recordGateAnswer`, `recordPendingGate`, `admitTurn`,
   every `appendTurnEvent`, and `settleTurn`, pushing after commit; Turn appends coalesce and no-op receipts push nothing.

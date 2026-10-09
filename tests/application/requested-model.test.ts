@@ -2197,7 +2197,7 @@ test("[change-model-choice] suggested names remain open and the qualified lock s
   });
 });
 
-test("[change-model-choice] failed preference save keeps the Run change and notice across reopen; replay preserves a newer preference", async (t) => {
+test("m10-audit-application-duplicates: preference save notices survive reopen and replay and clear on recovery", async (t) => {
   const { wired, digest, home } = wireDeclaring(t, LISTED, REPORTED);
   const runId = seedChoiceRun(wired, digest);
   const database = new Database(join(home, "catalog.db"));
@@ -2937,7 +2937,7 @@ test("[live-model-change] a live change the Turn ends before answering applies f
   await wired.shutdown();
 });
 
-test("[live-model-change] a later Turn's refused request restores the choice its Session kept, with a notice", async (t) => {
+test("m10-audit-application-duplicates: a refused later-Turn model restores the Session choice with a retained notice", async (t) => {
   const live = await liveChangeRun(
     t,
     {},
@@ -2986,6 +2986,15 @@ test("[live-model-change] a later Turn's refused request restores the choice its
   assert.equal(
     wired.catalog.getPreference("last-model-choice:claude-code"),
     JSON.stringify({ model: "alpha", effort: "high" }),
+  );
+  const recovered = await changeChoice(wired, "after-refusal", {
+    runId,
+    effort: "low",
+  });
+  assert.equal(recovered.outcome.status, "applied");
+  assert.equal(
+    readRun(wired.projectionPort, runId).modelChoiceNotice,
+    undefined,
   );
   await wired.shutdown();
 });

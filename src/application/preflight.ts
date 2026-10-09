@@ -277,11 +277,17 @@ function observedHarnessCheck(
 // 1. The pinned Snapshot must still compose. A launch re-checks it because a Run
 // pins a Snapshot (ADR 0021); a failing re-check means corrupted installed bytes.
 // The Problem carries no routing vocabulary — the findings inform it, unprinted.
-function checkComposition(request: PreflightRequest): Problem | undefined {
-  return request.composition.some(
+export function compositionIsCorrupt(
+  findings: readonly CompositionFinding[],
+): boolean {
+  return findings.some(
     (finding) =>
       finding.severity === "error" && finding.code !== "harness-input-reserved",
-  )
+  );
+}
+
+function checkComposition(request: PreflightRequest): Problem | undefined {
+  return compositionIsCorrupt(request.composition)
     ? bundleSnapshotCorrupt(request.digest)
     : undefined;
 }

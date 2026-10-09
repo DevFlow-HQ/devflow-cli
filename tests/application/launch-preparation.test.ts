@@ -352,7 +352,7 @@ test("an unapproved Workspace is a not-ready workspace finding", async (t) => {
   assert.equal(finding?.correction, "workspace");
 });
 
-test("a corrupted pinned Snapshot is a single not-ready bundle finding", async (t) => {
+test("m10-audit-application-duplicates: corrupt composition is a single launch preparation Bundle finding", async (t) => {
   const f = fixture(t);
   approve(f);
   // Install shape-valid bytes that no longer compose (a Step requires nothing binds).

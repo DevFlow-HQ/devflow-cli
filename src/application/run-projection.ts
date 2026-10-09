@@ -1,3 +1,4 @@
+import type { RunNoticeSnapshot } from "./run-notices.js";
 import { readAgentCallEvent, readTurnFact } from "../run/store/store.js";
 import { readSteerEvent, readToolCallEvent } from "../run/store/store.js";
 import { createHash } from "node:crypto";
@@ -103,9 +104,7 @@ export interface RunSteerCapability {
  *  read never fences the executing owner; otherwise the join acquires a
  *  short-lived owner and closes it. */
 export interface RunReadContext {
-  readonly windowsCleanupFallback?: boolean;
-  readonly preferenceNotice?: string;
-  readonly modelChoiceNotice?: string;
+  readonly notices?: RunNoticeSnapshot;
   readonly modelChoicePreparation?: boolean;
   readonly modelChoiceQualification?: ApplicationHarnessQualification;
   readonly facts?: RunFacts; // present for a Run launched in this process
@@ -298,18 +297,7 @@ function runResult(
         launchedAt: record.createdAt,
         state: derivedRun.state,
         problem: context.problem,
-        ...(context.preferenceNotice === undefined
-          ? {}
-          : { preferenceNotice: context.preferenceNotice }),
-        ...(context.modelChoiceNotice === undefined
-          ? {}
-          : { modelChoiceNotice: context.modelChoiceNotice }),
-        ...(context.windowsCleanupFallback
-          ? {
-              windowsCleanupNotice:
-                "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.",
-            }
-          : {}),
+        ...context.notices,
         liveness: runLiveness(listing),
         progress: derivedRun.statuses,
         position: derivedRun.position,

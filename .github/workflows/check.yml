@@ -195,6 +195,15 @@ jobs:
           bun run test --
           -t '^m10-audit-history-index(:|$)'
           tests/application/history-index.test.ts
+      - name: m10-audit-application-duplicates
+        run: >-
+          bun run test --
+          -t '^m10-audit-application-duplicates(:|$)'
+          tests/application/history-index.test.ts
+          tests/application/run-projection.test.ts
+          tests/application/requested-model.test.ts
+          tests/application/launch-preparation.test.ts
+          tests/application/preflight.test.ts
       - name: m10-audit-run-scoped-fanout
         run: >-
           bun run test --

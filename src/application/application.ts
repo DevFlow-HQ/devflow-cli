@@ -1,3 +1,4 @@
+import { RunNotices } from "./run-notices.js";
 import { createWorkspacePathSearch } from "./workspace-paths.js";
 import { mergeHarnessInputRules } from "./harness-registry.js";
 export { mergeHarnessInputRules } from "./harness-registry.js";
@@ -503,11 +504,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // (cancel-run and process signals abort it), the settlement promise a cancel
   // awaits, and the streams watching it (#98).
   const runs = new Map<string, TrackedRun>();
-  const windowsCleanupFallbacks = new Set<string>();
-  const preferenceNotices = new Map<string, string>();
-  // A refused Model choice the Run reverted from, per Run (#348): live evidence
-  // like the preference notice, never Run truth.
-  const modelChoiceNotices = new Map<string, string>();
+  const runNotices = new RunNotices();
   // Live changes awaiting their Harness's answer, per Run (#348). Each settles
   // once, synchronously, so its Run write lands before the next Turn starts.
   const pendingModelChanges = new Map<
@@ -561,12 +558,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
               ? runNotFound(runId)
               : runStoreDamaged(runId),
         };
-      if (liveElsewhere(runId) !== undefined)
-        return { found: false, problem: runLiveElsewhere(runId) };
-      const held = runs.get(runId)?.owner;
-      const owner = held ?? runGroup.acquireRun(runId);
-      if (owner === undefined)
-        return { found: false, problem: runStoreDamaged(runId) };
+      const acquired = acquireForRead(runId);
+      if (!acquired.ok) return { found: false, problem: acquired.problem };
+      const { owner, transient } = acquired;
       try {
         return {
           found: true,
@@ -581,7 +575,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       } catch {
         return { found: false, problem: runStoreDamaged(runId) };
       } finally {
-        if (held === undefined) owner.close();
+        if (transient) owner.close();
       }
     },
   });
@@ -690,8 +684,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // Push the current Run snapshot to every observer watching this Run. Called
   // after each publication (via the wrapped owner) while the Run is live.
   function observeWindowsCleanupFallback(runId: string): void {
-    if (windowsCleanupFallbacks.has(runId)) return;
-    windowsCleanupFallbacks.add(runId);
+    if (!runNotices.observeWindowsCleanupFallback(runId)) return;
     pushRunUpdate(runId);
   }
 
@@ -727,25 +720,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const tracking = runs.get(runId);
     const observers = runObservers.get(runId);
     if (observers !== undefined && observers.size > 0) {
-      const snapshot = runSnapshot(
-        runProjection,
-        runId,
-        tracking === undefined
-          ? {
-              liveOwner: readOwner,
-              modelChoicePreparation: modelChoicePreparations.has(runId),
-              modelChoiceQualification: runModelQualification(runId),
-              preferenceNotice: preferenceNotices.get(runId),
-              modelChoiceNotice: modelChoiceNotices.get(runId),
-              windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
-            }
+      const snapshot = runSnapshot(runProjection, runId, {
+        liveOwner: readOwner,
+        modelChoicePreparation: modelChoicePreparations.has(runId),
+        modelChoiceQualification: runModelQualification(runId),
+        notices: runNotices.snapshot(runId),
+        ...(tracking === undefined
+          ? {}
           : {
-              liveOwner: readOwner,
-              modelChoicePreparation: modelChoicePreparations.has(runId),
-              modelChoiceQualification: runModelQualification(runId),
-              preferenceNotice: preferenceNotices.get(runId),
-              modelChoiceNotice: modelChoiceNotices.get(runId),
-              windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
               facts: {
                 routing: tracking.routing,
                 name: tracking.name,
@@ -761,8 +743,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
               ...(tracking.steer !== undefined
                 ? { steer: tracking.steer }
                 : {}),
-            },
-      );
+            }),
+      });
       for (const observer of observers) {
         observer.push({ kind: "durable", snapshot });
       }
@@ -1040,7 +1022,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         defaults: qualification.defaults,
       });
       if (preferenceNotice !== undefined)
-        preferenceNotices.set(runId, preferenceNotice);
+        runNotices.setPreference(runId, preferenceNotice);
       if (preselection === undefined)
         return {
           ...modelChoiceRequired(
@@ -1700,23 +1682,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
     }
     if (prepareModelChoice && read?.ok) modelChoicePreparations.add(runId);
     const tracking = runs.get(runId);
-    const snapshot = runSnapshot(
-      runProjection,
-      runId,
-      tracking === undefined
-        ? {
-            modelChoicePreparation: modelChoicePreparations.has(runId),
-            modelChoiceQualification: runModelQualification(runId),
-            preferenceNotice: preferenceNotices.get(runId),
-            modelChoiceNotice: modelChoiceNotices.get(runId),
-            windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
-          }
+    const snapshot = runSnapshot(runProjection, runId, {
+      modelChoicePreparation: modelChoicePreparations.has(runId),
+      modelChoiceQualification: runModelQualification(runId),
+      notices: runNotices.snapshot(runId),
+      ...(tracking === undefined
+        ? {}
         : {
-            modelChoicePreparation: modelChoicePreparations.has(runId),
-            modelChoiceQualification: runModelQualification(runId),
-            preferenceNotice: preferenceNotices.get(runId),
-            modelChoiceNotice: modelChoiceNotices.get(runId),
-            windowsCleanupFallback: windowsCleanupFallbacks.has(runId),
             facts: {
               routing: tracking.routing,
               name: tracking.name,
@@ -1730,8 +1702,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
             state: tracking.state,
             problem: tracking.problem,
             ...(tracking.steer !== undefined ? { steer: tracking.steer } : {}),
-          },
-    );
+          }),
+    });
     // Every existing Run joins its Run-scoped observer set, even while rested: an
     // Operation may drive it later, and opening a Projection promises future
     // updates for the Projection's lifetime (ADR 0024).
@@ -1882,7 +1854,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
             selectedHarness,
             created.record.modelChoice,
           );
-          if (notice !== undefined) preferenceNotices.set(runId, notice);
+          if (notice !== undefined) runNotices.setPreference(runId, notice);
         }
         runs.set(runId, {
           digest: entry.digest,
@@ -3689,8 +3661,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     choice: ModelChoice,
   ): void {
     const notice = saveLastModelChoice(catalog, harness, choice);
-    if (notice === undefined) preferenceNotices.delete(runId);
-    else preferenceNotices.set(runId, notice);
+    runNotices.setPreference(runId, notice);
   }
 
   /** Write a resolved change to the Run, then the last-choice preference, and
@@ -3707,7 +3678,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     if (!written.ok)
       return { status: "not-applied", problem: runLiveElsewhere(runId) };
     saveRunModelChoice(runId, harness, result.choice);
-    modelChoiceNotices.delete(runId);
+    runNotices.setModelChoice(runId, undefined);
     pushRunUpdate(runId, owner);
     return { status: "applied", modelChoiceChange: result };
   }
@@ -3737,7 +3708,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       return;
     if (!observedOwner(owner, runId).changeModelChoice(change.kept).ok) return;
     saveRunModelChoice(runId, harness, change.kept);
-    modelChoiceNotices.set(
+    runNotices.setModelChoice(
       runId,
       modelChoiceRefusalExplanation(
         harnessInputRegistrations.get(harness)?.choice.name ?? harness,
@@ -3960,14 +3931,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     pushRunClosed(runId);
     pushRunCollectionUpdates();
     runs.delete(runId);
-    windowsCleanupFallbacks.delete(runId);
-    preferenceNotices.delete(runId);
-    modelChoiceNotices.delete(runId);
+    runNotices.delete(runId);
     modelChoicePreparations.delete(runId);
     return { status: "applied" };
   }
 
-  // Acquire an owner for a read (`readResource`/`readTranscript`): read through
+  // Acquire an owner for history and Resource reads: read through
   // the live in-process owner when one exists (so the read never fences it), else
   // acquire-and-close a rested Run, else refuse a Run live in another process
   // (acquiring would bump its fencing epoch and abort it). `transient` says the

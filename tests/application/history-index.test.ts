@@ -376,7 +376,7 @@ test("m10-audit-history-index: duplicate facts and another Session's writes do n
   assert.deepEqual(await pending, { value: undefined, done: true });
 });
 
-test("m10-audit-history-index: reopening after external ownership refreshes canonical facts and refuses a foreign live owner", async (t) => {
+test("m10-audit-application-duplicates: history names a foreign live owner and refreshes after it rests", async (t) => {
   const run = await openLiveRun(t);
   t.after(run.finish);
   admit(run.owner);
@@ -415,6 +415,7 @@ test("m10-audit-history-index: reopening after external ownership refreshes cano
   t.after(foreign.close);
   assert.ok(!foreign.snapshot.result.found);
   assert.equal(foreign.snapshot.result.problem.code, "run-live-elsewhere");
+  assert.equal(foreign.snapshot.result.problem.details?.ownerPid, "2000");
   admit(owner, "external");
   owner.appendTurnEvent({
     turnId: "external",

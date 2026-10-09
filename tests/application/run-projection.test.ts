@@ -1388,7 +1388,7 @@ test("an earlier iteration's unusable Session leaves resume available; the curre
   assert.match(refused.reason, /"impl-1\.0:implement" Session/);
 });
 
-test("Windows cleanup fallback is published once per Run and retained on reopen", async (t) => {
+test("m10-audit-application-duplicates: Windows fallback is retained once per Run through reopen and delete", async (t) => {
   let reportFallback: (() => void) | undefined;
   let ready!: () => void;
   let finish!: () => void;
@@ -1453,6 +1453,28 @@ test("Windows cleanup fallback is published once per Run and retained on reopen"
     result.run.windowsCleanupNotice,
     "Secant will use its usual Windows cleanup. Some tool processes may continue after you stop or close it.",
   );
+  const other = f.runGroup.createRun({
+    operationId: "notice-free-run",
+    bundleSnapshotDigest: digest,
+    launch: {},
+    at: new Date(),
+  });
+  const otherResult = runResult(f.app, other.runId);
+  assert.ok(otherResult.found);
+  assert.equal(otherResult.run.windowsCleanupNotice, undefined);
+  const deleted = f.app.projectionPort.submit({
+    operationId: "notice-delete",
+    operation: "delete-run",
+    input: { runId: launch.runId },
+  });
+  assert.ok(deleted.admitted);
+  assert.equal((await settled(f.app, "notice-delete")).status, "applied");
+  const gone = runResult(f.app, launch.runId);
+  assert.ok(!gone.found);
+  assert.equal(gone.problem.code, "run-not-found");
+  const retained = runResult(f.app, other.runId);
+  assert.ok(retained.found);
+  assert.equal(retained.run.windowsCleanupNotice, undefined);
 });
 
 test("declined elicitation history retains the server, message and URL with remediation", (t) => {
