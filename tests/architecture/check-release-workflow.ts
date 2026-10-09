@@ -207,6 +207,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-optional-native-facts",
   "m10-audit-embedded-ripgrep-release",
   "m10-audit-claude-token-stdin",
+  "m10-audit-turn-event-redaction",
   "m10-audit-store-permissions",
   "m12-focused-check-scenarios",
   "m12-test-interface-ownership",

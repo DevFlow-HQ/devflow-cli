@@ -36,8 +36,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `close` is idempotent and returns the same report. Claude retirement retains incomplete cleanup until final exit; failure survives recovery and preserves Turn truth.
 - Codex MCP Turn metadata is nested under `x-codex-turn-metadata` (#370), as an object or JSON string. Helpers keep their own ids and only
   their immediate parent; their inherited token remains authoritative. MCP approval input includes the opaque tool arguments, not only the caption.
-- Secrets Secant itself introduces are redacted from failures and diagnostics. Excluding raw protocol, private reasoning, and duplicate transcript
-  content is Interface design, not generic secret redaction — a `HarnessFailure` still preserves all useful Harness-originated diagnostics and its cause.
+- The shared Turn-event producer redacts every event and completed result content before publication or retention. It owns command delta accumulation
+  and redacts before the 30,000-character tail cut; an unfinished secret prefix survives that cut for the next delta. Message previews redact accumulated
+  text, never individual deltas. Only exact registered Secant secrets are replaced; user look-alikes stay exact, and old Run bytes are never rewritten.
+  Failures and diagnostics keep their existing redaction. Excluding raw protocol, private reasoning, and duplicate transcript content is Interface design;
+  a `HarnessFailure` still preserves useful Harness-originated diagnostics and its cause.
   One private registry (`secrets.ts`) owns it: a minter registers a secret when it hands it out, and nothing registers through the Interface. A secret
   stays registered for the whole Secant invocation, so a cause translated after its bridge closes still redacts it; the cost is one short token per
   Session. The Seam's `redactSecrets` keeps a cause an Error with its name and bounded cause chain; it returns secret-free values unchanged. Redactor

@@ -5,9 +5,9 @@
 // down (M11's Detailed diagnostics may translate late) still redacts it. The
 // cost is one short token per Session for the life of the process.
 //
-// One redaction mechanism serves both outputs: the Seam's shape-preserving
-// `redactSecrets` (a failure cause stays an Error on a `HarnessFailure`) and the
-// safe cause translator's `redactText`, applied to every string before any cut.
+// The Turn-event producer uses `redactText` before publication and tail cuts.
+// Failures keep the Seam's shape-preserving `redactSecrets` (a cause stays an Error
+// on a `HarnessFailure`) and the safe cause translator's redaction before cuts.
 
 /** Each registered secret and its placeholder, kept for the invocation. */
 const registrations = new Map<string, string>();
@@ -40,6 +40,24 @@ export function redactText(text: string): string {
     out = out.split(secret).join(placeholder);
   }
   return out;
+}
+
+/** Longest trailing prefix that another delta could complete into a secret. */
+export function secretPrefixLength(text: string): number {
+  let longest = 0;
+  for (const secret of registrations.keys()) {
+    for (
+      let length = Math.min(secret.length - 1, text.length);
+      length > longest;
+      length -= 1
+    ) {
+      if (text.endsWith(secret.slice(0, length))) {
+        longest = length;
+        break;
+      }
+    }
+  }
+  return longest;
 }
 
 /** Scrub a failure cause before it crosses the Seam. Inspect the same bounded

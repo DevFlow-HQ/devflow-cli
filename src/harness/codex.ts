@@ -1,4 +1,3 @@
-import { retainCommandOutput, type ToolCall } from "./harness.js";
 import {
   PreparationOwner,
   type InitialPreparation,
@@ -2063,11 +2062,11 @@ class CodexTurn implements HarnessTurn {
           this.emit({
             kind: "elicitation-declined",
             harness: "codex",
-            server: redactText(notification.server),
-            message: redactText(notification.message),
+            server: notification.server,
+            message: notification.message,
             ...(notification.url === undefined
               ? {}
-              : { url: redactText(notification.url) }),
+              : { url: notification.url }),
           });
         void this.connection
           .respondToServerRequest(
@@ -2151,15 +2150,9 @@ class CodexTurn implements HarnessTurn {
       }
       case "command-output": {
         const key = JSON.stringify([notification.turnId, notification.itemId]);
-        const call = this.commandCalls.get(key);
-        if (call === undefined || call.outcome.kind !== "running") return;
-        const output = retainCommandOutput({
-          text: (call.output?.text ?? "") + notification.delta,
-          ...(call.output?.secantDropped ? { secantDropped: true } : {}),
-        });
-        const next = { ...call, output, outcome: { kind: "running" as const } };
-        this.commandCalls.set(key, next);
-        this.emit({ kind: "tool-preview", call: next });
+        const callId = this.toolIds.get(key);
+        if (callId !== undefined)
+          this.producer.emitCommandOutput(notification.delta, callId);
         return;
       }
       case "preview":
@@ -2202,23 +2195,6 @@ class CodexTurn implements HarnessTurn {
               this.toolIds.set(key, callId);
             }
             const call = { ...notification.event.call, callId };
-            if (call.tool === "command") {
-              if (call.outcome.kind === "running") {
-                if (
-                  !this.commandCalls.has(key) &&
-                  !this.settledCommands.has(key)
-                )
-                  this.commandCalls.set(
-                    key,
-                    call.output === undefined
-                      ? call
-                      : { ...call, output: retainCommandOutput(call.output) },
-                  );
-              } else {
-                this.commandCalls.delete(key);
-                this.settledCommands.add(key);
-              }
-            }
             this.emit({ ...notification.event, call });
           } else this.emit(notification.event);
         }
@@ -2466,7 +2442,7 @@ class CodexTurn implements HarnessTurn {
       shape: {
         kind: "approval",
         tool: notification.tool,
-        input: redactText(input),
+        input,
         decisions: [...APPROVAL_DECISIONS],
       },
     };
@@ -2627,7 +2603,7 @@ class CodexTurn implements HarnessTurn {
           kind: "completed",
           detail: {
             ...(this.finalContent !== undefined
-              ? { finalContent: this.finalContent }
+              ? this.producer.redact({ finalContent: this.finalContent })
               : {}),
             effectiveModel: this.model,
             session: { state: "open" },
@@ -2677,13 +2653,9 @@ class CodexTurn implements HarnessTurn {
     );
   }
 
-  private readonly commandCalls = new Map<string, ToolCall>();
-  private readonly settledCommands = new Set<string>();
   private readonly toolIds = new Map<string, string>();
 
   private emit(event: TurnEvent): void {
-    if (event.kind === "activity")
-      event = { ...event, description: redactText(event.description) };
     this.producer.emit(event);
   }
 

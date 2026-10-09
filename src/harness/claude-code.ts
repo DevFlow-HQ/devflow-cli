@@ -2095,11 +2095,9 @@ class ClaudeCodeTurn implements HarnessTurn {
     this.producer.emit({
       kind: "elicitation-declined",
       harness: HARNESS_NAME,
-      server: redactText(frame.request.mcp_server_name ?? "unknown"),
-      message: redactText(frame.request.message ?? ""),
-      ...(frame.request.url === undefined
-        ? {}
-        : { url: redactText(frame.request.url) }),
+      server: frame.request.mcp_server_name ?? "unknown",
+      message: frame.request.message ?? "",
+      ...(frame.request.url === undefined ? {} : { url: frame.request.url }),
     });
     if (!this.elicitations.has(id) || this.producer.sealed || this.interrupting)
       return;
@@ -2601,7 +2599,9 @@ class ClaudeCodeTurn implements HarnessTurn {
       this.settle({
         kind: "completed",
         detail: {
-          ...(finalContent !== undefined ? { finalContent } : {}),
+          ...(finalContent !== undefined
+            ? this.producer.redact({ finalContent })
+            : {}),
           effectiveModel: this.session.model(),
           session: { state: "open" },
           ...(usage !== undefined ? { usage } : {}),

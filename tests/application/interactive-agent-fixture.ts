@@ -109,6 +109,7 @@ export async function launchInteractive(
   },
   routing?: readonly unknown[],
   harness: HarnessChoice["id"] = "claude-code",
+  requestedModel = "fake-model",
 ): Promise<{ wired: Wiring; runId: string; run: RunView; home: string }> {
   // A resolvable executable so Preflight's Harness discovery passes; the fake
   // Adapter is what actually runs, never this path.
@@ -202,7 +203,7 @@ export async function launchInteractive(
       trustDigest: entry.digest,
       harness,
       // The fake selects no model, so any Model choice is admitted.
-      requestedModel: "fake-model",
+      requestedModel,
     },
   });
   assert.ok(admission.admitted, JSON.stringify(admission));

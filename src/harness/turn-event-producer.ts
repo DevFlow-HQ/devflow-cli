@@ -1,4 +1,5 @@
 import { retainCommandOutput } from "./harness.js";
+import { redactText, secretPrefixLength } from "./secrets.js";
 import type {
   TurnEvent,
   ToolCall,
@@ -7,6 +8,8 @@ import type {
 } from "./harness.js";
 
 export class TurnEventProducer {
+  private readonly messageText = new Map<string, string>();
+  private readonly commandText = new Map<string, CommandText>();
   private readonly listeners = new Set<TurnEventListener>();
   private readonly events: TurnEvent[] = [];
   private readonly previews = new Map<
@@ -40,6 +43,19 @@ export class TurnEventProducer {
   }
   emit(event: TurnEvent): void {
     if (this.closed) return;
+    if (event.kind === "tool-call") {
+      if (event.call.outcome.kind !== "running")
+        this.commandText.delete(event.call.callId);
+      else if (
+        event.call.output !== undefined &&
+        !this.commandText.has(event.call.callId)
+      )
+        this.commandText.set(
+          event.call.callId,
+          new CommandText(event.call.output),
+        );
+    }
+    event = this.redact(event);
     if (event.kind === "assistant-content") this.clearPreview(event.messageId);
     if (event.kind === "message-preview") {
       const previous = this.previews.get(event.messageId);
@@ -165,13 +181,52 @@ export class TurnEventProducer {
     this.events.push(event);
     for (const listener of this.listeners) listener(event);
   }
+  redact<T extends object>(value: T): T {
+    const safe = structuredClone(value);
+    const visit = (object: object): void => {
+      for (const [key, field] of Object.entries(object)) {
+        if (typeof field === "string")
+          Reflect.set(object, key, redactText(field));
+        else if (typeof field === "object" && field !== null) visit(field);
+      }
+    };
+    visit(safe);
+    return safe;
+  }
+
   emitPreview(delta: string, messageId?: string): void {
     if (this.closed || messageId === undefined) return;
-    const previous = this.previews.get(messageId);
+    const content = (this.messageText.get(messageId) ?? "") + delta;
+    this.messageText.set(messageId, content);
     this.emit({
       kind: "message-preview",
       messageId,
-      content: (previous?.content ?? "") + delta,
+      content,
+    });
+  }
+
+  emitCommandOutput(delta: string, callId: string): void {
+    if (this.closed) return;
+    const call =
+      this.toolPreviews.get(callId)?.call ?? this.calls.get(callId)?.call;
+    if (
+      call === undefined ||
+      call.tool !== "command" ||
+      call.outcome.kind !== "running"
+    )
+      return;
+    let text = this.commandText.get(callId);
+    if (text === undefined) {
+      text = new CommandText(call.output ?? { text: "" });
+      this.commandText.set(callId, text);
+    }
+    this.emit({
+      kind: "tool-preview",
+      call: {
+        ...call,
+        outcome: { kind: "running" },
+        output: text.append(delta),
+      },
     });
   }
 
@@ -181,6 +236,7 @@ export class TurnEventProducer {
       if (messageId !== undefined && messageId !== id) continue;
       this.events.splice(this.events.indexOf(event), 1);
       this.previews.delete(id);
+      this.messageText.delete(id);
     }
   }
   emitThoughtPreview(content: string, summaryId: string): void {
@@ -238,6 +294,8 @@ export class TurnEventProducer {
   seal(): void {
     this.closed = true;
     this.listeners.clear();
+    this.messageText.clear();
+    this.commandText.clear();
   }
 }
 
@@ -247,4 +305,30 @@ export function createTurnEventProducerForTest(): Pick<
   "subscribe" | "emit" | "settlePreview" | "seal"
 > {
   return new TurnEventProducer();
+}
+
+// Keep only the redacted tail plus a suffix that may complete a registered secret
+// on the next delta. That suffix must survive even when the visible tail is cut.
+class CommandText {
+  private tail: NonNullable<ToolCall["output"]> = { text: "" };
+  private pending = "";
+  constructor(output: NonNullable<ToolCall["output"]>) {
+    this.tail = { ...output, text: "" };
+    this.append(output.text);
+  }
+  append(delta: string): NonNullable<ToolCall["output"]> {
+    const text = redactText(this.tail.text + this.pending + delta);
+    const length = secretPrefixLength(text);
+    this.pending = text.slice(text.length - length);
+    this.tail = retainCommandOutput({
+      ...this.tail,
+      text: text.slice(0, text.length - length),
+    });
+    const output = retainCommandOutput({
+      ...this.tail,
+      text: this.tail.text + this.pending,
+    });
+    if (output.secantDropped) this.tail = { ...this.tail, secantDropped: true };
+    return output;
+  }
 }

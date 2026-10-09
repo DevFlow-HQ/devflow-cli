@@ -114,7 +114,8 @@ export function scriptedCodexFacts(
           const request = envelope.parse(
             JSON.parse(new TextDecoder().decode(bytes)),
           );
-          if (request.id === undefined) return [];
+          if (request.id === undefined || request.method === undefined)
+            return [];
           const reply = replies.get(request.method ?? "");
           assert.ok(reply, `reply for ${request.method}`);
           const frames: z.infer<typeof envelope>[] = [

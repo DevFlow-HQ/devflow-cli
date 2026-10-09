@@ -271,6 +271,12 @@ jobs:
           bun run test --
           -t '^m10-audit-claude-token-stdin(:|$)'
           tests/harness/claude-code-mcp-stdin.test.ts
+      - name: m10-audit-turn-event-redaction
+        run: >-
+          bun run test --
+          -t '^m10-audit-turn-event-redaction(:|$)'
+          tests/harness/turn-event-redaction.test.ts
+          tests/application/turn-event-redaction.test.ts
       - name: m10-audit-store-permissions
         run: >-
           bun run test --
