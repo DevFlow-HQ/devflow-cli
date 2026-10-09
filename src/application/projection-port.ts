@@ -1881,7 +1881,16 @@ export interface WorkspacePathQuery {
   readonly query: string;
   /** Stable for one open @ token. Abort disposes its listing; edits reuse it. */
   readonly signal?: AbortSignal;
+  /** Bounded partial matches; only the latest query for a token receives updates.
+   * The returned Promise supplies settlement. Observer errors do not fail listing. */
+  readonly onProgress?: (progress: WorkspacePathProgress) => void;
 }
+export type WorkspacePathProgress = Extract<
+  WorkspacePathSearch,
+  { status: "available" }
+> & {
+  readonly indexing: true;
+};
 export type WorkspacePathSearch =
   | {
       readonly status: "available";

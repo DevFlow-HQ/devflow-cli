@@ -90,6 +90,8 @@
   Run authorization, Trust ordering, owners and abort stay in `createApplication`. Shutdown ends pending ledger waits and subscriptions before Run cleanup.
   An observation-ended receipt has unknown effects and never replaces ledger truth; a later settlement remains readable (#448).
 
+- Workspace path progress has one latest-query observer per token; the Promise alone settles it. Callback failures cannot fail listing (#485).
+  Check its combined token/shutdown signal even while buffered helper output drains.
 - ripgrep 15.1.0's `--no-require-git` disables linked-worktree `commondir` lookup. Use it only outside Git; native Git rules keep their precedence (#484).
 
 ## Tests

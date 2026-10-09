@@ -4038,6 +4038,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           workspacePath: read.run.workspacePath,
           query: input.query,
           signal: input.signal,
+          onProgress: input.onProgress,
         });
       } catch (cause) {
         return { status: "unavailable", cause };

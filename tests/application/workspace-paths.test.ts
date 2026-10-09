@@ -4,6 +4,7 @@ import type {
 } from "../../src/application/projection-port.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import assert from "node:assert/strict";
+import { EventEmitter, once } from "node:events";
 import {
   writeFileSync,
   readFileSync,
@@ -16,6 +17,7 @@ import { createHash } from "node:crypto";
 import {
   createFakeProcess,
   type FakeProcessScript,
+  type FakeOwnedProcessDelivery,
 } from "../process/fake-adapter.js";
 import type { ApplicationDependencies } from "../../src/application/application.js";
 import type { OwnedProcessOptions } from "../../src/process/process.js";
@@ -269,7 +271,7 @@ test("m10-audit-run-keyed-workspace-paths: absent Run support reports search una
   );
 });
 
-test("m10-workspace-mentions: bounded distinct file/folder candidates preserve ordinary ranking", async (t) => {
+test("m10-workspace-mentions: bounded distinct file/folder candidates use fuzzysort ranking", async (t) => {
   const { runId, port } = fixture(t, [
     "alpha\0alpha-long\0src/alpha.ts\0z-a-l-p-h-a\0alpha\0",
     Array.from(
@@ -851,3 +853,375 @@ test("m10-audit-compose-mention-offsets: ./ has empty-query visibility and ranki
     },
   );
 });
+
+test("m10-audit-progressive-workspace-matches: usable partial results grow, re-rank the same token and settle", async (t) => {
+  let delivery: FakeOwnedProcessDelivery | undefined;
+  const { runId, port, launches, waitForLaunch } = fixture(t, [], {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            {
+              kind: "terminal",
+              trigger: "automatic",
+              close: { kind: "exited", status: 0 },
+            },
+          ],
+          onStart: (value) => {
+            delivery = value;
+          },
+        },
+      ],
+    },
+  });
+  const signal = new AbortController().signal;
+  const updates: WorkspacePathSearch[] = [];
+  const events = new EventEmitter();
+  const pending = port.searchWorkspacePaths({
+    runId,
+    query: "",
+    signal,
+    onProgress: (value) => {
+      updates.push(value);
+      events.emit("progress", value);
+    },
+  });
+  try {
+    assert.deepEqual(updates, [
+      { status: "available", candidates: [], indexing: true },
+    ]);
+    const first = once(events, "progress", {
+      signal: AbortSignal.timeout(2000),
+    });
+    await waitForLaunch;
+    assert.ok(delivery);
+    delivery.stdout(Buffer.from("src/alpha.ts\0"));
+    await first;
+    assert.deepEqual(updates.at(-1), {
+      status: "available",
+      candidates: [{ path: "src", kind: "folder" }],
+      indexing: true,
+    });
+    const current: WorkspacePathSearch[] = [];
+    const reranked = port.searchWorkspacePaths({
+      runId,
+      query: "beta",
+      signal,
+      onProgress: (value) => {
+        current.push(value);
+        events.emit("rerank", value);
+      },
+    });
+    assert.deepEqual(current.at(-1), {
+      status: "available",
+      candidates: [],
+      indexing: true,
+    });
+    const growth = once(events, "rerank", {
+      signal: AbortSignal.timeout(2000),
+    });
+    delivery.stdout(Buffer.from("src/beta.ts\0"));
+    await growth;
+    assert.deepEqual(current.at(-1), {
+      status: "available",
+      candidates: [{ path: "src/beta.ts", kind: "file" }],
+      indexing: true,
+    });
+    assert.equal(updates.length, 2);
+    assert.equal(launches.length, 1);
+    delivery.finish();
+    assert.deepEqual(await reranked, {
+      status: "available",
+      candidates: [{ path: "src/beta.ts", kind: "file" }],
+    });
+    assert.deepEqual(await pending, {
+      status: "available",
+      candidates: [{ path: "src", kind: "folder" }],
+    });
+  } finally {
+    delivery?.finish();
+  }
+});
+
+test("m10-audit-progressive-workspace-matches: settled token edits never restart the indexing status", async (t) => {
+  const { port, runId, launches } = fixture(t, ["alpha.ts\0"]);
+  const signal = new AbortController().signal;
+  await port.searchWorkspacePaths({ runId, query: "alpha", signal });
+  const updates: WorkspacePathSearch[] = [];
+  await port.searchWorkspacePaths({
+    runId,
+    query: "a",
+    signal,
+    onProgress: (value) => updates.push(value),
+  });
+  assert.deepEqual(updates, []);
+  assert.equal(launches.length, 1);
+});
+
+test("m10-audit-progressive-workspace-matches: fuzzysort scores replace path tiers, retain weak matches and deterministically break ties", async (t) => {
+  const weak = "a" + "x".repeat(100) + "b" + "x".repeat(100) + "c";
+  const { port, runId } = fixture(t, [
+    "ablong\0z/ab\0x/ab\0abzz\0xxx/abxxxxxx\0xxxxxxxx/ab\0" + weak + "\0",
+  ]);
+  const signal = new AbortController().signal;
+  const result = await port.searchWorkspacePaths({
+    runId,
+    query: "ab",
+    signal,
+  });
+  assert.equal(result.status, "available");
+  if (result.status === "available")
+    assert.deepEqual(
+      result.candidates.map((c) => c.path),
+      ["abzz", "x/ab", "z/ab", "ablong", "xxxxxxxx/ab", "xxx/abxxxxxx", weak],
+    );
+  assert.deepEqual(
+    await port.searchWorkspacePaths({ runId, query: "abc", signal }),
+    { status: "available", candidates: [{ path: weak, kind: "file" }] },
+  );
+});
+
+test("m10-audit-progressive-workspace-matches: ranking ties at the ten-candidate cutoff ignore listing order and duplicates", async (t) => {
+  const listed =
+    Array.from(
+      { length: 16 },
+      (_, i) => `file-${String(15 - i).padStart(2, "0")}\0`,
+    ).join("") + "file-00\0";
+  const { port, runId } = fixture(t, [listed]);
+  const result = await port.searchWorkspacePaths({ runId, query: "file" });
+  assert.equal(result.status, "available");
+  if (result.status === "available")
+    assert.deepEqual(
+      result.candidates.map((c) => c.path),
+      [
+        "file-00",
+        "file-01",
+        "file-02",
+        "file-03",
+        "file-04",
+        "file-05",
+        "file-06",
+        "file-07",
+        "file-08",
+        "file-09",
+      ],
+    );
+});
+
+test("m10-audit-progressive-workspace-matches: a failed listing settles unavailable after usable partial matches", async (t) => {
+  let delivery: FakeOwnedProcessDelivery | undefined;
+  const { port, runId, waitForLaunch } = fixture(t, [], {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            {
+              kind: "terminal",
+              trigger: "automatic",
+              close: { kind: "exited", status: 3 },
+            },
+          ],
+          onStart: (value) => {
+            delivery = value;
+          },
+        },
+      ],
+    },
+  });
+  const events = new EventEmitter();
+  const pending = port.searchWorkspacePaths({
+    runId,
+    query: "a",
+    onProgress: (value) => {
+      if (value.candidates.length) events.emit("progress", value);
+    },
+  });
+  try {
+    await waitForLaunch;
+    assert.ok(delivery);
+    const progress = once(events, "progress", {
+      signal: AbortSignal.timeout(2000),
+    });
+    delivery.stdout(Buffer.from("alpha.ts\0"));
+    assert.deepEqual((await progress)[0], {
+      status: "available",
+      candidates: [{ path: "alpha.ts", kind: "file" }],
+      indexing: true,
+    });
+    delivery.finish();
+    assertUnavailable(await pending);
+  } finally {
+    delivery?.finish();
+  }
+});
+
+test("m10-audit-progressive-workspace-matches: observer exceptions cannot fail listing or its settled result", async (t) => {
+  const { port, runId } = fixture(t, ["alpha.ts\0"]);
+  assert.deepEqual(
+    await port.searchWorkspacePaths({
+      runId,
+      query: "alpha",
+      onProgress: () => {
+        throw new Error("observer failure");
+      },
+    }),
+    { status: "available", candidates: [{ path: "alpha.ts", kind: "file" }] },
+  );
+});
+
+test("m10-audit-progressive-workspace-matches: crossing the raw file cap publishes retained matches and the exact cap notice before settlement", async (t) => {
+  const listed =
+    "visible.ts\0" +
+    Array.from({ length: 100000 }, (_, i) => `.hidden/file-${i}\0`).join("");
+  const { port, runId } = fixture(t, [listed]);
+  const updates: WorkspacePathSearch[] = [];
+  await port.searchWorkspacePaths({
+    runId,
+    query: "visible",
+    onProgress: (value) => updates.push(value),
+  });
+  assert.deepEqual(updates.at(-1), {
+    status: "available",
+    candidates: [{ path: "visible.ts", kind: "file" }],
+    indexing: true,
+    notice: "Large Workspace: only the first 100,000 files are searchable",
+  });
+});
+
+test("m10-audit-progressive-workspace-matches: bare @ orders only top-level entries and ./ never opts into hidden paths", async (t) => {
+  const { port, runId, launches } = fixture(t, [
+    "z.ts\0src/nested.ts\0docs/readme.md\0a.ts\0.hidden/file.ts\0src/.config/settings\0.secret\0",
+  ]);
+  const signal = new AbortController().signal;
+  const expected = {
+    status: "available",
+    candidates: [
+      { path: "docs", kind: "folder" },
+      { path: "src", kind: "folder" },
+      { path: "a.ts", kind: "file" },
+      { path: "z.ts", kind: "file" },
+    ],
+  };
+  for (const query of ["", "./"])
+    assert.deepEqual(
+      await port.searchWorkspacePaths({ runId, query, signal }),
+      expected,
+    );
+  assert.deepEqual(
+    await port.searchWorkspacePaths({ runId, query: "src/.config", signal }),
+    {
+      status: "available",
+      candidates: [
+        { path: "src/.config", kind: "folder" },
+        { path: "src/.config/settings", kind: "file" },
+      ],
+    },
+  );
+  assert.equal(launches.length, 1);
+});
+
+test("m10-audit-progressive-workspace-matches: aborting a usable partial result stops the helper and suppresses further updates", async (t) => {
+  const controller = new AbortController();
+  const { port, runId } = fixture(t, [], {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            { kind: "stdout", bytes: Buffer.from("alpha.ts\0") },
+            {
+              kind: "terminal",
+              trigger: "interrupt",
+              expectedGracefulMs: 1000,
+              interruption: {
+                close: { kind: "signal", signal: "SIGTERM" },
+                escalated: true,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  const updates: WorkspacePathSearch[] = [];
+  const result = await port.searchWorkspacePaths({
+    runId,
+    query: "alpha",
+    signal: controller.signal,
+    onProgress: (value) => {
+      updates.push(value);
+      if (value.candidates.length > 0) controller.abort();
+    },
+  });
+  assertUnavailable(result);
+  if (result.status === "unavailable")
+    assert.equal(result.cause, controller.signal.reason);
+  assert.deepEqual(updates, [
+    { status: "available", candidates: [], indexing: true },
+    {
+      status: "available",
+      candidates: [{ path: "alpha.ts", kind: "file" }],
+      indexing: true,
+    },
+  ]);
+});
+
+for (const withSignal of [false, true]) {
+  test(`m10-audit-progressive-workspace-matches: Application shutdown suppresses cap progress while draining buffered output, caller signal=${withSignal}`, async (t) => {
+    const updates: WorkspacePathSearch[] = [];
+    let shutdownStarted = false;
+    let closing: Promise<void> | undefined;
+    let stop = () => {};
+    const { port, runId, app } = fixture(t, [], {
+      onSpawn: () => {
+        shutdownStarted = true;
+        stop();
+      },
+      script: {
+        ownedProcesses: [
+          {
+            kind: "launched",
+            emissions: [
+              {
+                kind: "stdout",
+                bytes: Buffer.from(
+                  "visible.ts\0" +
+                    Array.from(
+                      { length: 100000 },
+                      (_, i) => `.hidden/file-${i}\0`,
+                    ).join(""),
+                ),
+              },
+              {
+                kind: "terminal",
+                trigger: "interrupt",
+                expectedGracefulMs: 1000,
+                interruption: {
+                  close: { kind: "signal", signal: "SIGTERM" },
+                  escalated: true,
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    stop = () => {
+      closing = app.shutdown();
+    };
+    const result = await port.searchWorkspacePaths({
+      runId,
+      query: "visible",
+      ...(withSignal ? { signal: new AbortController().signal } : {}),
+      onProgress: (value) => {
+        if (shutdownStarted) updates.push(value);
+      },
+    });
+    await closing;
+    assertUnavailable(result);
+    assert.equal(shutdownStarted, true);
+    assert.deepEqual(updates, []);
+  });
+}

@@ -1072,8 +1072,53 @@ export function RunWorkbench(props: {
       const candidates = mentions.candidates();
       const result = mentions.result();
       const notice = result?.status === "available" ? result.notice : undefined;
-      const compactNotice = notice !== undefined && budget < 2;
-      const capAction =
+      const indexing = result !== undefined && "indexing" in result;
+      const statuses = [
+        ...(notice === undefined ? [] : [notice]),
+        ...(indexing && candidates.length > 0
+          ? ["Still indexing Workspace…"]
+          : []),
+      ];
+      // A selectable path, or the empty-result explanation, owns the first row.
+      const statusBudget = Math.min(statuses.length, Math.max(0, budget - 1));
+      const listBudget = Math.max(0, budget - statusBudget);
+      const start = Math.max(0, mentions.selection() - listBudget + 1);
+      const lines: NonNullable<PromptModel["commands"]>[number][] = candidates
+        .slice(start, start + listBudget)
+        .map((candidate) => ({
+          kind: "candidate",
+          text: clip(
+            `${candidate === mentions.active() ? "› " : "  "}@${candidate.path}${candidate.kind === "folder" ? "/" : ""} · ${candidate.kind}`,
+            innerW(),
+          ),
+        }));
+      if (lines.length === 0 && budget > 0)
+        lines.push({
+          kind: "status",
+          text: clip(
+            result?.status === "unavailable"
+              ? "Path search unavailable · enter sends text"
+              : indexing
+                ? "Still indexing Workspace…"
+                : result === undefined
+                  ? "Searching Workspace paths…"
+                  : "No path suggestions · enter sends text",
+            innerW(),
+          ),
+        });
+      lines.push(
+        ...statuses.slice(0, statusBudget).map((line) => ({
+          kind: "status" as const,
+          text: clip(line, innerW()),
+        })),
+      );
+      const compact =
+        statusBudget < statuses.length
+          ? notice !== undefined
+            ? "100k cap"
+            : "indexing"
+          : undefined;
+      const sendAction =
         prompt.send.kind === "steer"
           ? prompt.send.offer.available
             ? "↵ steer"
@@ -1081,66 +1126,47 @@ export function RunWorkbench(props: {
           : prompt.send.kind === "none"
             ? ""
             : "↵ send";
-      const listBudget = Math.max(
-        0,
-        budget - (notice === undefined || compactNotice ? 0 : 1),
-      );
-      const start = Math.max(0, mentions.selection() - listBudget + 1);
-      const lines = candidates
-        .slice(start, start + listBudget)
-        .map((candidate) =>
-          clip(
-            `${candidate === mentions.active() ? "› " : "  "}@${candidate.path}${candidate.kind === "folder" ? "/" : ""} · ${candidate.kind}`,
-            innerW(),
-          ),
-        );
-      if (notice !== undefined && !compactNotice) {
-        if (candidates.length === 0)
-          lines.push(clip("No path suggestions · enter sends text", innerW()));
-        lines.push(clip(notice, innerW()));
-      }
       return {
         ...model,
         hint:
           budget === 0
             ? promptHint(prompt)
-            : compactNotice
+            : compact !== undefined
               ? {
                   kind: "lines",
                   tone: "muted",
                   lines: [
                     clip(
                       candidates.length === 0
-                        ? `100k cap ${capAction} · esc`
-                        : "100k cap ↑↓ ↵/tab esc",
+                        ? `${compact} ${sendAction} · esc`
+                        : `${compact} ↑↓ ↵/tab esc`,
                       innerW(),
                     ),
                   ],
                 }
-              : model.hint,
-        commands:
-          budget === 0
-            ? []
-            : lines.length > 0
-              ? lines
-              : [
-                  clip(
-                    result?.status === "unavailable"
-                      ? "Path search unavailable · enter sends text"
-                      : result === undefined
-                        ? "Searching Workspace paths…"
-                        : "No path suggestions · enter sends text",
-                    innerW(),
-                  ),
-                ],
+              : result !== undefined && candidates.length === 0
+                ? {
+                    kind: "lines",
+                    tone: "muted",
+                    lines: [clip(`${sendAction} · esc`, innerW())],
+                  }
+                : model.hint,
+        commands: budget === 0 ? [] : lines,
       };
     }
+
     return {
       ...model,
       commands:
         list.length === 0
           ? []
-          : [...list, clip("↑/↓ select · enter/tab run · esc close", innerW())],
+          : [
+              ...list.map((text) => ({ kind: "candidate" as const, text })),
+              {
+                kind: "status",
+                text: clip("↑/↓ select · enter/tab run · esc close", innerW()),
+              },
+            ],
     };
   };
 
@@ -1527,7 +1553,8 @@ export function RunWorkbench(props: {
       promptFieldFocused() &&
       !slashOpen() &&
       commands.knownSlash(draft()) === undefined,
-    selectionVisible: () => completionVisible(),
+    selectionVisible: () =>
+      (promptModel()?.commands ?? []).some((row) => row.kind === "candidate"),
     search: (input) => view.searchWorkspacePaths(input),
   });
   const invokeSlash = (id?: string) => {
@@ -2313,7 +2340,11 @@ export function RunWorkbench(props: {
                         draft={draft}
                         onInput={drafts.input}
                         focused={promptFieldFocused}
-                        slashOpen={() => slashVisible() || mentionsVisible()}
+                        slashOpen={() =>
+                          slashVisible() ||
+                          (mentionsVisible() &&
+                            mentions.candidates().length > 0)
+                        }
                         onCaret={setCaret}
                         replacement={mentions.replacement}
                         onReplacement={mentions.replaced}

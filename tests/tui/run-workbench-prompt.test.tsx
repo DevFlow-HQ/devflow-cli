@@ -2648,6 +2648,7 @@ for (const change of [
     assert.match(wb.t.captureCharFrame(), /↵\/tab insert/);
     assert.equal(pending[0]?.input.runId, "run-1");
     assert.deepEqual(Object.keys(pending[0]?.input ?? {}).sort(), [
+      "onProgress",
       "query",
       "runId",
       "signal",
@@ -3548,3 +3549,300 @@ for (const cue of ["@", "@my"]) {
     assert.equal(wb.control.sends[0]?.text, "before\t\t @file.ts");
   });
 }
+
+test("m10-audit-progressive-workspace-matches: bare @ selects usable growing paths and clears indexing at settlement", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+  );
+  let query: WorkspacePathQuery | undefined;
+  let finish: (result: WorkspacePathSearch) => void = () => {};
+  wb.control.view.searchWorkspacePaths = (input) => {
+    query = input;
+    input.onProgress?.({
+      status: "available",
+      candidates: [
+        { path: "src", kind: "folder" },
+        { path: "readme.md", kind: "file" },
+      ],
+      indexing: true,
+    });
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  };
+  await type(wb.t, "@");
+  await mentionFrame(wb, /Still indexing Workspace…/);
+  assert.match(wb.t.captureCharFrame(), /› @src\/ · folder/);
+  await press(wb.t, wb.renderer, "down");
+  assert.match(wb.t.captureCharFrame(), /› @readme.md/);
+  query?.onProgress?.({
+    status: "available",
+    candidates: [
+      { path: "docs", kind: "folder" },
+      { path: "src", kind: "folder" },
+      { path: "readme.md", kind: "file" },
+    ],
+    indexing: true,
+  });
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /› @readme.md/);
+  finish({
+    status: "available",
+    candidates: [
+      { path: "docs", kind: "folder" },
+      { path: "src", kind: "folder" },
+      { path: "readme.md", kind: "file" },
+    ],
+  });
+  await until(() => {
+    void wb.t.renderOnce();
+    return !wb.t.captureCharFrame().includes("Still indexing");
+  });
+  await press(wb.t, wb.renderer, "tab");
+  await type(wb.t, " done");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.sends[0]?.text, "@readme.md done");
+});
+
+for (const change of [
+  "query",
+  "token",
+  "Run",
+  "caret-leaves",
+  "request",
+  "gate",
+  "escape",
+]) {
+  test(`m10-audit-progressive-workspace-matches: stale partial and terminal updates cannot survive ${change}`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    const pending: {
+      input: WorkspacePathQuery;
+      resolve: (result: WorkspacePathSearch) => void;
+    }[] = [];
+    wb.control.view.searchWorkspacePaths = (input) =>
+      new Promise((resolve) => {
+        pending.push({ input, resolve });
+        input.onProgress?.({
+          status: "available",
+          candidates: [{ path: "initial.ts", kind: "file" }],
+          indexing: true,
+        });
+      });
+    await type(wb.t, "@old");
+    await mentionFrame(wb, /› @initial.ts/);
+    if (change === "query") await type(wb.t, "new");
+    if (change === "token") await type(wb.t, " @old");
+    if (change === "Run")
+      wb.control.setSnapshot(
+        snapshotOf(
+          interactiveRunOf({ runId: "run-2", actionOffers: [SEND_OFFER] }),
+        ),
+      );
+    if (change === "caret-leaves") wb.t.mockInput.pressKey("HOME");
+    if (change === "request") wb.control.setLive(requestOverlay());
+    if (change === "gate") wb.control.setSnapshot(snapshotOf(freeTextRunOf()));
+    if (change === "escape") await press(wb.t, wb.renderer, "escape");
+    await wb.t.renderOnce();
+    if (["query", "token", "Run"].includes(change))
+      await until(() => pending.length === 2);
+    assert.equal(pending[0]?.input.signal?.aborted, change !== "query");
+    pending[0]?.input.onProgress?.({
+      status: "available",
+      candidates: [{ path: "obsolete-partial.ts", kind: "file" }],
+      indexing: true,
+    });
+    pending[0]?.resolve({
+      status: "available",
+      candidates: [{ path: "obsolete-final.ts", kind: "file" }],
+    });
+    await wb.t.renderOnce();
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /obsolete-/);
+    if (pending[1]) {
+      pending[1].resolve({
+        status: "available",
+        candidates: [{ path: "current.ts", kind: "file" }],
+      });
+      await mentionFrame(wb, /› @current.ts/);
+      pending[1].input.onProgress?.({
+        status: "available",
+        candidates: [{ path: "obsolete-after-final.ts", kind: "file" }],
+        indexing: true,
+      });
+      await wb.t.renderOnce();
+      assert.match(wb.t.captureCharFrame(), /› @current.ts/);
+      assert.doesNotMatch(wb.t.captureCharFrame(), /obsolete-|Still indexing/);
+    }
+  });
+}
+
+for (const appearance of ["dark", "light"] as const) {
+  for (const [width, height] of [
+    [24, 9],
+    [24, 10],
+    [80, 16],
+    [120, 24],
+    [121, 24],
+    [160, 40],
+  ]) {
+    test(`m10-audit-progressive-workspace-matches: ${appearance} progress and cap preserve layout, focus and paused history at ${width}x${height}`, async () => {
+      const preferences = {
+        ...inertPreferencesView(),
+        snapshot: () => ({
+          family: "preferences" as const,
+          preferences: { theme: "everforest", appearance },
+          supportedThemes: ["everforest"],
+          actionOffers: [],
+        }),
+      };
+      const wb = await mountWorkbench(
+        interactiveRunOf({ actionOffers: [SEND_OFFER], timeline: events(80) }),
+        width,
+        height,
+        undefined,
+        false,
+        undefined,
+        preferences,
+      );
+      let query: WorkspacePathQuery | undefined;
+      const longPath = "folder/" + "large-file-name-".repeat(30) + ".ts";
+      const partial = {
+        status: "available" as const,
+        candidates: [
+          { path: "folder", kind: "folder" as const },
+          { path: longPath, kind: "file" as const },
+        ],
+        indexing: true as const,
+        notice:
+          "Large Workspace: only the first 100,000 files are searchable" as const,
+      };
+      wb.control.view.searchWorkspacePaths = (input) => {
+        query = input;
+        input.onProgress?.(partial);
+        return new Promise(() => {});
+      };
+      await type(wb.t, "@folder");
+      await until(() => query !== undefined);
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      assert.match(frame, /> @folder/);
+      if (height >= 10) assert.match(frame, /› @folder\/|› @folder…/);
+      else assert.doesNotMatch(frame, /100k cap|Still indexing|› @folder/);
+      if (width >= 80) {
+        assert.match(frame, /Still indexing Workspace…/);
+        assert.match(
+          frame,
+          /Large Workspace: only the first 100,000 files are searchable/,
+        );
+        const spans = wb.t.captureSpans().lines.flatMap((line) => line.spans);
+        const candidate = spans.find((span) =>
+          span.text.includes("› @folder/"),
+        );
+        const status = spans.find((span) =>
+          span.text.includes("Still indexing Workspace"),
+        );
+        const cap = spans.find((span) =>
+          span.text.includes("Large Workspace:"),
+        );
+        assert.ok(candidate && status && cap);
+        assert.notDeepEqual(status.fg, candidate.fg);
+        assert.deepEqual(cap.fg, status.fg);
+      }
+      noOverflow(frame, width);
+      await press(wb.t, wb.renderer, "pageup");
+      assert.match(wb.t.captureCharFrame(), /Paused|Jump to latest/);
+      const anchor = wb.t.captureCharFrame().split("\n")[1];
+      wb.control.setRun(
+        interactiveRunOf({ actionOffers: [SEND_OFFER], timeline: events(85) }),
+      );
+      query?.onProgress?.({
+        ...partial,
+        candidates: [...partial.candidates, { path: "new.ts", kind: "file" }],
+      });
+      await wb.t.renderOnce();
+      assert.equal(wb.t.captureCharFrame().split("\n")[1], anchor);
+      resizeWorkbench(wb.t, wb.renderer, 121, 24);
+      await mentionFrame(wb, /› @folder\//);
+      await press(wb.t, wb.renderer, "down");
+      assert.match(wb.t.captureCharFrame(), /› @folder\/large-file-name-/);
+      resizeWorkbench(wb.t, wb.renderer, 120, 24);
+      await wb.t.renderOnce();
+      noOverflow(wb.t.captureCharFrame(), 120);
+      assert.match(wb.t.captureCharFrame(), /Paused|Jump to latest/);
+      await press(wb.t, wb.renderer, "tab");
+      await type(wb.t, " done");
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(wb.control.sends[0]?.text, "@" + longPath + " done");
+    });
+  }
+}
+
+for (const outcome of ["pending", "failure"] as const) {
+  test(`m10-audit-progressive-workspace-matches: an empty ${outcome} result leaves the typed path sendable`, async () => {
+    const wb = await mountWorkbench(
+      interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+    );
+    wb.control.view.searchWorkspacePaths = (input) => {
+      input.onProgress?.({
+        status: "available",
+        candidates: [],
+        indexing: true,
+      });
+      return outcome === "failure"
+        ? Promise.resolve({
+            status: "unavailable",
+            cause: new Error("search failed"),
+          })
+        : new Promise(() => {});
+    };
+    await type(wb.t, "@manual/path#L2-4");
+    await mentionFrame(
+      wb,
+      outcome === "failure"
+        ? /Path search unavailable/
+        : /Still indexing Workspace/,
+    );
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /does not exist|No path suggestions/,
+    );
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(wb.control.sends[0]?.text, "@manual/path#L2-4");
+  });
+}
+
+test("m10-audit-progressive-workspace-matches: Renderer disposal aborts its token before late progress and settlement", async () => {
+  const wb = await mountWorkbench(
+    interactiveRunOf({ actionOffers: [SEND_OFFER] }),
+  );
+  let query: WorkspacePathQuery | undefined;
+  let finish: (result: WorkspacePathSearch) => void = () => {};
+  wb.control.view.searchWorkspacePaths = (input) => {
+    query = input;
+    input.onProgress?.({
+      status: "available",
+      candidates: [{ path: "file.ts", kind: "file" }],
+      indexing: true,
+    });
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  };
+  await type(wb.t, "@file");
+  await mentionFrame(wb, /› @file.ts/);
+  wb.t.renderer.destroy();
+  assert.equal(query?.signal?.aborted, true);
+  query?.onProgress?.({
+    status: "available",
+    candidates: [{ path: "obsolete.ts", kind: "file" }],
+    indexing: true,
+  });
+  finish({
+    status: "available",
+    candidates: [{ path: "obsolete.ts", kind: "file" }],
+  });
+  await Promise.resolve();
+  assert.deepEqual(wb.control.sends, []);
+});

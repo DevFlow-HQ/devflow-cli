@@ -48,6 +48,12 @@ interface FakeSyncCommandScript {
     SpawnSyncResult | ((options: SpawnSyncOptions) => SpawnSyncResult);
 }
 
+export interface FakeOwnedProcessDelivery {
+  stdout(bytes: Uint8Array): void;
+  stderr(bytes: Uint8Array): void;
+  finish(): void;
+}
+
 export type FakeOwnedProcessEmission =
   | { readonly kind: "stdout"; readonly bytes: Uint8Array }
   | { readonly kind: "stderr"; readonly bytes: Uint8Array }
@@ -82,6 +88,7 @@ type FakeOwnedProcessScript =
         { kind: "stdout" | "stderr" }
       >[];
       readonly emissions: readonly FakeOwnedProcessEmission[];
+      readonly onStart?: (delivery: FakeOwnedProcessDelivery) => void;
     };
 
 export interface FakeProcessScript {
@@ -381,6 +388,7 @@ class FakeProcessAdapter implements ProcessAdapter {
               ],
         ),
       entry.stdinReplies,
+      entry.onStart,
     );
     this.report([
       {
@@ -438,6 +446,7 @@ class FakeOwnedProcess implements OwnedProcess {
       FakeOwnedProcessEmission,
       { kind: "stdout" | "stderr" }
     >[],
+    private readonly onStart?: (delivery: FakeOwnedProcessDelivery) => void,
   ) {
     let terminal:
       | Extract<FakeOwnedProcessEmission, { readonly kind: "terminal" }>
@@ -468,7 +477,18 @@ class FakeOwnedProcess implements OwnedProcess {
 
   /** Settles an automatic terminal once the spawn has been reported. */
   start(): void {
-    if (this.terminal.trigger === "automatic") this.settle(this.terminal.close);
+    if (this.onStart !== undefined) {
+      this.onStart({
+        stdout: (bytes) => this.stdoutStream.emit(bytes),
+        stderr: (bytes) => this.stderrStream.emit(bytes),
+        finish: () => {
+          if (this.terminal.trigger !== "automatic")
+            throw new Error("Controlled finish requires an automatic terminal");
+          this.settle(this.terminal.close);
+        },
+      });
+    } else if (this.terminal.trigger === "automatic")
+      this.settle(this.terminal.close);
   }
 
   writeStdin(bytes: Uint8Array): Promise<void> {

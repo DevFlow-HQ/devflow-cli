@@ -1,3 +1,4 @@
+import fuzzysort from "fuzzysort";
 import { dirname, isAbsolute, join } from "node:path";
 import { lstat } from "node:fs/promises";
 import type { ProcessAdapter } from "../process/process.js";
@@ -13,9 +14,14 @@ import {
 
 const FILE_CAP = 100_000;
 const HELPER_STOP_MS = 1000;
+type ListedCandidate = {
+  readonly candidate: WorkspacePathCandidate;
+  readonly prepared: ReturnType<typeof fuzzysort.prepare>;
+};
 type Listing = {
-  readonly candidates: readonly WorkspacePathCandidate[];
-  readonly capped: boolean;
+  readonly candidates: Map<string, ListedCandidate>;
+  capped: boolean;
+  indexing: boolean;
 };
 
 /** The token signal owns one listing; query edits only rank its retained paths. */
@@ -34,7 +40,14 @@ export function createWorkspacePathSearch(deps: {
         : workspacePathHelper(source);
   const tokens = new WeakMap<
     AbortSignal,
-    { runId: string; workspacePath: string; listing: Promise<Listing> }
+    {
+      runId: string;
+      workspacePath: string;
+      listing: Promise<Listing>;
+      partial: Listing;
+      signal: AbortSignal;
+      notify?: () => void;
+    }
   >();
   const active = new Map<AbortController, Promise<Listing>>();
   return {
@@ -74,14 +87,24 @@ export function createWorkspacePathSearch(deps: {
           input.signal === undefined
             ? controller.signal
             : AbortSignal.any([input.signal, controller.signal]);
-        const listing = list(input.workspacePath, signal).finally(() =>
-          active.delete(controller),
-        );
+        const partial: Listing = {
+          candidates: new Map(),
+          capped: false,
+          indexing: true,
+        };
+        const listing = list(input.workspacePath, signal, partial, () =>
+          token?.notify?.(),
+        ).finally(() => {
+          partial.indexing = false;
+          active.delete(controller);
+        });
         active.set(controller, listing);
         token = {
           runId: input.runId,
           workspacePath: input.workspacePath,
           listing,
+          partial,
+          signal,
         };
         if (input.signal !== undefined) {
           const signal = input.signal;
@@ -91,18 +114,31 @@ export function createWorkspacePathSearch(deps: {
           });
         }
       }
-      const listing = await token.listing;
-      input.signal?.throwIfAborted();
-      return {
-        status: "available",
-        candidates: matches(listing.candidates, input.query),
-        ...(listing.capped
-          ? {
-              notice:
-                "Large Workspace: only the first 100,000 files are searchable" as const,
-            }
-          : {}),
+      const notify = () => {
+        if (
+          !token.partial.indexing ||
+          token.signal.aborted ||
+          input.onProgress === undefined
+        )
+          return;
+        try {
+          input.onProgress({
+            ...snapshot(token.partial, input.query),
+            indexing: true,
+          });
+        } catch {
+          /* A presentation observer cannot fail the owned listing. */
+        }
       };
+      token.notify = notify;
+      notify();
+      try {
+        const listing = await token.listing;
+        input.signal?.throwIfAborted();
+        return snapshot(listing, input.query);
+      } finally {
+        if (token.notify === notify) token.notify = undefined;
+      }
     } catch (cause) {
       return { status: "unavailable", cause };
     }
@@ -110,7 +146,9 @@ export function createWorkspacePathSearch(deps: {
 
   async function list(
     workspacePath: string,
-    signal?: AbortSignal,
+    signal: AbortSignal,
+    listing: Listing,
+    notify: () => void,
   ): Promise<Listing> {
     if (helper === undefined)
       throw new Error("Embedded Workspace path helper unavailable");
@@ -159,7 +197,13 @@ export function createWorkspacePathSearch(deps: {
       timedOut = true;
       abort();
     }, 30_000);
-    const files = new Set<string>();
+    let progressTimer: ReturnType<typeof setTimeout> | undefined;
+    const changed = () => {
+      progressTimer ??= setTimeout(() => {
+        progressTimer = undefined;
+        if (!signal.aborted) notify();
+      }, 50);
+    };
     let fileCount = 0;
     let capped = false;
     let tail = "";
@@ -180,14 +224,17 @@ export function createWorkspacePathSearch(deps: {
               fileCount++;
               if (fileCount > FILE_CAP) {
                 capped = true;
+                listing.capped = true;
+                notify();
                 // Keep draining while Process observes the helper's stop.
                 abort();
                 break;
               }
               const path = normalized(text.slice(start, end));
-              if (path !== undefined) files.add(path);
+              if (path !== undefined) addCandidates(listing.candidates, path);
               start = end + 1;
             }
+            changed();
             tail = capped ? "" : text.slice(start);
             if (tail.length > 4096)
               throw new Error("Workspace path exceeds its bound");
@@ -218,9 +265,10 @@ export function createWorkspacePathSearch(deps: {
         )
       )
         throw new Error("Workspace path helper failed");
-      return { candidates: candidatesFromFiles(files), capped };
+      return listing;
     } finally {
       clearTimeout(deadline);
+      clearTimeout(progressTimer);
       signal?.removeEventListener("abort", abort);
       await stop();
       await close;
@@ -266,71 +314,90 @@ function normalized(raw: string): string | undefined {
     return;
   return path;
 }
-function candidatesFromFiles(
-  files: ReadonlySet<string>,
-): readonly WorkspacePathCandidate[] {
-  const candidates = new Map<string, WorkspacePathCandidate>();
-  for (const path of files) {
-    for (
-      let slash = path.indexOf("/");
-      slash !== -1;
-      slash = path.indexOf("/", slash + 1)
-    ) {
-      const folder = path.slice(0, slash);
-      candidates.set(folder, { path: folder, kind: "folder" });
-    }
-    candidates.set(path, { path, kind: "file" });
+function addCandidates(
+  candidates: Map<string, ListedCandidate>,
+  path: string,
+): void {
+  for (
+    let slash = path.indexOf("/");
+    slash !== -1;
+    slash = path.indexOf("/", slash + 1)
+  ) {
+    const folder = path.slice(0, slash);
+    addCandidate(candidates, folder, "folder");
   }
-  return [...candidates.values()];
+  addCandidate(candidates, path, "file");
+}
+function addCandidate(
+  candidates: Map<string, ListedCandidate>,
+  path: string,
+  kind: WorkspacePathCandidate["kind"],
+): void {
+  if (candidates.has(path)) return;
+  // Raw targets enter fuzzysort's global cache. Prepared targets belong to this token.
+  candidates.set(path, {
+    candidate: { path, kind },
+    prepared: fuzzysort.prepare(path),
+  });
+}
+function snapshot(
+  listing: Listing,
+  query: string,
+): Extract<WorkspacePathSearch, { status: "available" }> {
+  return {
+    status: "available",
+    candidates: matches([...listing.candidates.values()], query),
+    ...(listing.capped
+      ? {
+          notice:
+            "Large Workspace: only the first 100,000 files are searchable" as const,
+        }
+      : {}),
+  };
 }
 function matches(
-  candidates: readonly WorkspacePathCandidate[],
+  candidates: readonly ListedCandidate[],
   rawQuery: string,
 ): WorkspacePathCandidate[] {
   const query = rawQuery.toLowerCase().replace(/^\.\//, "").replace(/\/$/, "");
   const dots = query.split("/").filter((part) => part.startsWith("."));
-  return candidates
-    .filter(
-      (candidate) =>
-        !candidate.path
-          .split("/")
-          .some(
-            (part) =>
-              part.startsWith(".") &&
-              !dots.some(
-                (dot) =>
-                  part.toLowerCase().startsWith(dot) ||
-                  dot.startsWith(part.toLowerCase()),
-              ),
-          ),
-    )
-    .filter((candidate) => query !== "" || !candidate.path.includes("/"))
-    .map((candidate) => ({
-      candidate,
-      rank: rank(candidate.path.toLowerCase(), query),
-    }))
-    .filter((row) => row.rank !== undefined)
-    .sort((a, b) =>
-      query === ""
-        ? Number(a.candidate.kind === "file") -
+  const visible = candidates.filter(
+    (candidate) =>
+      !candidate.candidate.path
+        .split("/")
+        .some(
+          (part) =>
+            part.startsWith(".") &&
+            !dots.some(
+              (dot) =>
+                part.toLowerCase().startsWith(dot) ||
+                dot.startsWith(part.toLowerCase()),
+            ),
+        ),
+  );
+  if (query === "")
+    return visible
+      .filter((candidate) => !candidate.candidate.path.includes("/"))
+      .sort(
+        (a, b) =>
+          Number(a.candidate.kind === "file") -
             Number(b.candidate.kind === "file") ||
-          compare(a.candidate.path, b.candidate.path)
-        : (a.rank ?? 0) - (b.rank ?? 0) ||
           compare(a.candidate.path, b.candidate.path),
+      )
+      .slice(0, 10)
+      .map((row) => row.candidate);
+  // Rank all matches before truncation so ties at the cutoff stay deterministic.
+  return [...fuzzysort.go(query, visible, { key: "prepared" })]
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.obj.candidate.path.length - b.obj.candidate.path.length ||
+        compare(a.obj.candidate.path, b.obj.candidate.path),
     )
     .slice(0, 10)
-    .map((row) => row.candidate);
+    .map((row) => row.obj.candidate);
 }
+
 function compare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-// Final fuzzysort ranking is the next finder slice (#485).
-function rank(path: string, query: string): number | undefined {
-  if (path === query) return 0;
-  if (path.startsWith(query)) return 1;
-  const filename = path.slice(path.lastIndexOf("/") + 1);
-  if (filename.includes(query)) return 2;
-  let index = 0;
-  for (const char of path) if (char === query[index]) index++;
-  return index === query.length ? 3 : undefined;
 }

@@ -9,6 +9,7 @@ import type {
   ProjectionPort,
   WorkspacePathCandidate,
   WorkspacePathSearch,
+  WorkspacePathProgress,
 } from "../application/projection-port.js";
 import type { RendererKeyEvent } from "./renderer/renderer.js";
 
@@ -30,7 +31,7 @@ export function createWorkspaceMentions(input: {
   const [dismissed, setDismissed] = createSignal<string>();
   const [reply, setReply] = createSignal<{
     key: string;
-    result: WorkspacePathSearch;
+    result: WorkspacePathSearch | WorkspacePathProgress;
   }>();
   const [selection, setSelection] = createSignal(0);
   const [replacement, setReplacement] = createSignal<MentionReplacement>();
@@ -72,9 +73,28 @@ export function createWorkspaceMentions(input: {
     setSelection(0);
     if (value === undefined || controller === undefined) return;
     let disposed = false;
+    let settled = false;
     onCleanup(() => {
       disposed = true;
     });
+    const receive = (result: WorkspacePathSearch | WorkspacePathProgress) => {
+      if (disposed || settled) return;
+      const selected = active();
+      const index =
+        result.status === "available" && selected !== undefined
+          ? result.candidates.findIndex(
+              (candidate) =>
+                candidate.path === selected.path &&
+                candidate.kind === selected.kind,
+            )
+          : -1;
+      setReply({ key: value.key, result });
+      setSelection((previous) =>
+        index >= 0
+          ? index
+          : Math.max(0, Math.min(previous, candidates().length - 1)),
+      );
+    };
     // Coalesce typing bursts; query cleanup discards replies, never the token list.
     const timer = setTimeout(() => {
       void input
@@ -82,17 +102,16 @@ export function createWorkspaceMentions(input: {
           runId: value.runId,
           query: value.query,
           signal: controller.signal,
+          onProgress: receive,
         })
         .then(
           (result) => {
-            if (!disposed) setReply({ key: value.key, result });
+            receive(result);
+            settled = true;
           },
           (cause) => {
-            if (!disposed)
-              setReply({
-                key: value.key,
-                result: { status: "unavailable", cause },
-              });
+            receive({ status: "unavailable", cause });
+            settled = true;
           },
         );
     }, 75);

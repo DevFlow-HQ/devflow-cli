@@ -67,7 +67,10 @@ export interface PromptModel {
   /** Saved old-target text and its explicit palette recovery route. */
   readonly recovery: readonly string[];
   readonly hint: PromptHint;
-  readonly commands?: readonly string[];
+  readonly commands?: readonly {
+    readonly kind: "candidate" | "status";
+    readonly text: string;
+  }[];
 }
 
 export function promptHeight(model: PromptModel): number {
@@ -153,8 +156,12 @@ export function PromptControl(props: {
       </box>
       <For each={props.model().commands}>
         {(line) => (
-          <text fg={theme.text} flexShrink={0} wrapMode="none">
-            {line}
+          <text
+            fg={line.kind === "status" ? theme.textMuted : theme.text}
+            flexShrink={0}
+            wrapMode="none"
+          >
+            {line.text}
           </text>
         )}
       </For>
