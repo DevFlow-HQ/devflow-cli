@@ -1,0 +1,1 @@
+CREATE INDEX `turn_event_turn_kind` ON `turn_event` (`turn_id`,`kind`);

@@ -416,7 +416,7 @@ test("m10-session-history: missing Run and Session are typed Problems; a known e
   }
   const empty = openHistory({
     t,
-    port: run.port,
+    port: run.reopen(),
     runId: run.runId,
     session: "empty",
   });
@@ -454,7 +454,15 @@ test("m10-session-history: a slow history observer closes alone; healthy FIFO pu
   });
   await reader.next();
   for (let index = 0; index < 3; index++) {
-    run.owner.writeState("running");
+    run.owner.appendTurnEvent({
+      turnId: "turn",
+      kind: "assistant-content",
+      payload: JSON.stringify({
+        messageId: `changed-${index}`,
+        content: `Changed ${index}`,
+      }),
+      at: new Date(),
+    });
     const update = await reader.next();
     assert.ok(update.value?.kind === "durable");
     assert.ok(update.value.snapshot.result.found);
@@ -477,7 +485,7 @@ test("m10-session-history: a slow history observer closes alone; healthy FIFO pu
     session: "s",
   });
   assert.ok(reopened.snapshot.result.found);
-  assert.equal(reopened.snapshot.result.history.rows.length, 2);
+  assert.equal(reopened.snapshot.result.history.rows.length, 5);
   await run.finish();
 });
 

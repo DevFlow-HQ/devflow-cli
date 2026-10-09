@@ -546,6 +546,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // tracking, so it receives future updates for its whole lifetime (#134 A1).
   const runObservers = new Map<string, Set<UpdateStream>>();
   const history = createSessionHistory({
+    observedOwner: (runId) => {
+      const tracking = runs.get(runId);
+      return tracking !== undefined && !tracking.done
+        ? tracking.owner
+        : undefined;
+    },
     subscriptions,
     schedule:
       deps.scheduleHistoryPreview ??
@@ -859,17 +865,26 @@ export function createApplication(deps: ApplicationDependencies): Application {
       },
       appendTurnEvent(event) {
         const receipt = owner.appendTurnEvent(history.append(runId, event));
-        if (receipt.ok) pushRunUpdate(runId);
+        if (receipt.ok) {
+          history.appended(runId, receipt.event);
+          pushRunUpdate(runId);
+        }
         return receipt;
       },
       settleTurn(request) {
         const receipt = owner.settleTurn(request);
-        if (receipt.ok) pushRunUpdate(runId);
+        if (receipt.ok) {
+          history.settled(runId, request);
+          pushRunUpdate(runId);
+        }
         return receipt;
       },
       selectHarness(selectedHarness) {
         const result = owner.selectHarness(selectedHarness);
-        if (result.outcome === "selected") pushRunUpdate(runId);
+        if (result.outcome === "selected") {
+          history.selectedHarness(runId, selectedHarness);
+          pushRunUpdate(runId);
+        }
         return result;
       },
       selectModelChoice(choice) {
@@ -921,10 +936,14 @@ export function createApplication(deps: ApplicationDependencies): Application {
         return result;
       },
       admitTurn(request) {
+        history.prepare(runId);
         const result = owner.admitTurn(request);
         // A durable Turn admission makes the Turn live (#290): push it so an open
         // client sees the Turn's controls at once, not only when the Turn ends.
-        if (result.ok) pushRunUpdate(runId);
+        if (result.ok) {
+          history.admitted(runId, request);
+          pushRunUpdate(runId);
+        }
         return result;
       },
       recordPendingGate(request) {

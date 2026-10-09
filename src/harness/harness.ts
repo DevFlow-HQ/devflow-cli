@@ -10,6 +10,7 @@
 // private. It knows nothing of Routing, Step kind, retry budget, or Run policy,
 // all of which live above the Seam.
 
+import type { CommandOutput, ToolCall, TurnDiff } from "./stored-turn-facts.js";
 import type { ProcessAdapter } from "../process/process.js";
 
 // ---------------------------------------------------------------------------
@@ -381,40 +382,9 @@ type AnswerSource = "human" | "client-policy";
 // only coalesced, replaceable entries.
 // ---------------------------------------------------------------------------
 
-/** Supplied patch bytes or supplied hunk data, never reconstructed file content. */
-type FilePatch =
-  | { readonly kind: "unified"; readonly content: string }
-  | {
-      readonly kind: "structured";
-      readonly hunks: readonly {
-        readonly oldStart: number;
-        readonly oldLines: number;
-        readonly newStart: number;
-        readonly newLines: number;
-        readonly lines: readonly string[];
-      }[];
-    };
-
-interface FileChange {
-  readonly path: string;
-  readonly kind?: "create" | "update" | "delete";
-  readonly patch?: FilePatch;
-  readonly additions?: number;
-  readonly removals?: number;
-}
-
-/** Cumulative supplied diff without a call association. One value per Secant Turn. */
-export interface TurnDiff {
-  readonly content: string;
-  readonly files: readonly FileChange[];
-}
+export type { ToolCall, TurnDiff } from "./stored-turn-facts.js";
 
 /** Retained command text, independent of native omissions and display collapse. */
-interface CommandOutput {
-  readonly text: string;
-  readonly secantDropped?: true;
-  readonly incomplete?: true;
-}
 /** The normalized tail budget applies before observations reach any consumer. */
 export function retainCommandOutput(output: CommandOutput): CommandOutput {
   return output.text.length <= 30_000
@@ -424,33 +394,6 @@ export function retainCommandOutput(output: CommandOutput): CommandOutput {
         text: output.text.slice(-30_000),
         secantDropped: true,
       };
-}
-
-/** One observed call. Native correlation stays private; identity is scoped to a Turn. */
-export interface ToolCall {
-  readonly callId: string;
-  readonly parentCallId?: string;
-  readonly tool:
-    | "read"
-    | "search"
-    | "command"
-    | "file-change"
-    | "web"
-    | "mcp"
-    | "subagent"
-    | "other";
-  readonly input: string;
-  readonly cwd?: string;
-  readonly output?: CommandOutput;
-  readonly exitCode?: number;
-  readonly nativeOmission?: string;
-  readonly count?: { readonly value: number; readonly unit: string };
-  readonly files?: readonly FileChange[];
-  readonly outcome:
-    | { readonly kind: "running" }
-    | { readonly kind: "completed" }
-    | { readonly kind: "failed"; readonly error?: string }
-    | { readonly kind: "declined"; readonly reason?: string };
 }
 
 /** Semantic Session facts observed during native initialization. The native id
@@ -1072,3 +1015,5 @@ export type { SafeCause } from "./safe-cause.js";
 // than copying their retention and initial-acquisition implementations.
 export { createTurnEventProducerForTest } from "./turn-event-producer.js";
 export { createPreparationOwnerForTest } from "./preparation-owner.js";
+
+export { turnFactSchemas, type TurnFact } from "./stored-turn-facts.js";

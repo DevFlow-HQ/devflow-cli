@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import type { TestContext } from "node:test";
 import type { ProjectionPort } from "../../src/application/projection-port.js";
-import type { TurnEvent } from "../../src/harness/harness.js";
+import {
+  createTurnEventProducerForTest,
+  type TurnEvent,
+} from "../../src/harness/harness.js";
+import { readTurnFact } from "../../src/run/store/store.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import type { RequestChannel } from "../../src/run/execution/execution.js";
 import type { RunOwner } from "../../src/run/store/store.js";
@@ -44,6 +48,7 @@ export interface LiveRun {
 export async function openLiveRun(
   t: TestContext,
   options: {
+    onHistoryRead?: () => void;
     scheduleHistoryPreview?: (
       callback: () => void,
       delayMs: number,
@@ -54,7 +59,36 @@ export async function openLiveRun(
   t.after(() => catalog.close());
   const workspace = realpathSync.native(makeTempDir("secant-lag-ws-"));
   const storeHome = makeTempDir("secant-lag-store-");
-  const runGroup = openRunGroup(storeHome, workspace);
+  const rawGroup = openRunGroup(storeHome, workspace);
+  const runGroup = {
+    ...rawGroup,
+    acquireRun(...args: Parameters<typeof rawGroup.acquireRun>) {
+      const owner = rawGroup.acquireRun(...args);
+      if (owner === undefined) return undefined;
+      return {
+        ...owner,
+        get record() {
+          return owner.record;
+        },
+        turns() {
+          options.onHistoryRead?.();
+          return owner.turns();
+        },
+        turnEvents() {
+          options.onHistoryRead?.();
+          return owner.turnEvents();
+        },
+        transcript() {
+          options.onHistoryRead?.();
+          return owner.transcript();
+        },
+        harnessSessions() {
+          options.onHistoryRead?.();
+          return owner.harnessSessions();
+        },
+      };
+    },
+  };
   t.after(() => runGroup.close());
   let release!: () => void;
   const released = new Promise<void>((resolve) => {
@@ -83,7 +117,90 @@ export async function openLiveRun(
     runExecution: async ({ owner, requestChannel }) => {
       owner.writeState("running");
       assert.ok(requestChannel);
-      started({ owner, channel: requestChannel });
+      // Drive the production normalized-event retention policy, just as a Harness does.
+      // Direct test Store writes bypass that policy unless this shared seam composes it.
+      type ProducerState = {
+        producer: ReturnType<typeof createTurnEventProducerForTest>;
+        request?: Parameters<RunOwner["appendTurnEvent"]>[0];
+        receipt?: ReturnType<RunOwner["appendTurnEvent"]>;
+        session?: string;
+      };
+      const producers = new Map<string, ProducerState>();
+      function producerFor(turnId: string) {
+        const entry = producers.get(turnId);
+        if (entry !== undefined) return entry;
+        const state: ProducerState = {
+          producer: createTurnEventProducerForTest(),
+        };
+        state.producer.subscribe((event) => {
+          if (event.kind === "tool-preview" && state.session !== undefined)
+            requestChannel!.observe({
+              tool: { turnId, session: state.session, call: event.call },
+            });
+          else if (
+            (event.kind === "tool-call" || event.kind === "tool-partial") &&
+            state.request !== undefined
+          )
+            state.receipt = owner.appendTurnEvent({
+              ...state.request,
+              payload: JSON.stringify(event.call),
+            });
+        });
+        producers.set(turnId, state);
+        return state;
+      }
+      const normalizedOwner: RunOwner = {
+        ...owner,
+        get record() {
+          return owner.record;
+        },
+        appendTurnEvent(request) {
+          const fact = readTurnFact(request);
+          if (
+            (fact?.kind !== "tool-call" && fact?.kind !== "tool-partial") ||
+            fact.data.tool !== "command"
+          )
+            return owner.appendTurnEvent(request);
+          const entry = producerFor(request.turnId);
+          entry.request = request;
+          entry.receipt = undefined;
+          if (
+            fact.kind === "tool-partial" &&
+            fact.data.output?.incomplete === true &&
+            fact.data.outcome.kind === "running"
+          )
+            entry.producer.emit({
+              kind: "tool-partial",
+              call: {
+                ...fact.data,
+                outcome: { kind: "running" },
+                output: { ...fact.data.output, incomplete: true },
+              },
+            });
+          else entry.producer.emit({ kind: "tool-call", call: fact.data });
+          entry.request = undefined;
+          return entry.receipt ?? { ok: true };
+        },
+      };
+      const normalizedChannel: RequestChannel = {
+        ...requestChannel,
+        observe(observation) {
+          if (
+            observation.tool === undefined ||
+            observation.tool.call.tool !== "command"
+          ) {
+            requestChannel!.observe(observation);
+            return;
+          }
+          const entry = producerFor(observation.tool.turnId);
+          entry.session = observation.tool.session;
+          entry.producer.emit({
+            kind: "tool-preview",
+            call: { ...observation.tool.call, outcome: { kind: "running" } },
+          });
+        },
+      };
+      started({ owner: normalizedOwner, channel: normalizedChannel });
       await released;
       owner.writeState("succeeded");
       return { outcome: "succeeded" };

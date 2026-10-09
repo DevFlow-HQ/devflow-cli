@@ -1,4 +1,5 @@
 import {
+  index,
   integer,
   primaryKey,
   sqliteTable,
@@ -184,13 +185,17 @@ export const turns = sqliteTable("turn", {
 // One normalized durable Turn event (#116), append-only. `kind` is a Crucible Turn
 // event kind (`assistant-content`, `tool-call`, `session`, `model`, …) and
 // `payload` its JSON detail. Ephemeral Harness Requests are not stored here.
-export const turnEvents = sqliteTable("turn_event", {
-  seq: integer("seq").primaryKey(),
-  turn_id: text("turn_id").notNull(),
-  kind: text("kind").notNull(),
-  payload: text("payload").notNull(),
-  // Conversation position, allocated under the owner fence. Legacy positions
-  // survive migration so retained cursors keep their meaning.
-  transcript_seq: integer("transcript_seq").unique(),
-  at: text("at").notNull(),
-});
+export const turnEvents = sqliteTable(
+  "turn_event",
+  {
+    seq: integer("seq").primaryKey(),
+    turn_id: text("turn_id").notNull(),
+    kind: text("kind").notNull(),
+    payload: text("payload").notNull(),
+    // Conversation position, allocated under the owner fence. Legacy positions
+    // survive migration so retained cursors keep their meaning.
+    transcript_seq: integer("transcript_seq").unique(),
+    at: text("at").notNull(),
+  },
+  (table) => [index("turn_event_turn_kind").on(table.turn_id, table.kind)],
+);

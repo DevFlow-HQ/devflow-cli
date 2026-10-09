@@ -1591,14 +1591,13 @@ for (const url of ["https://example.com/setup", undefined]) {
       }),
       { ok: true },
     );
-    assert.deepEqual(
+    assert.ok(
       owner.appendTurnEvent({
         turnId: "turn-1",
         kind: "elicitation-declined",
         payload: JSON.stringify(evidence),
         at: new Date(),
-      }),
-      { ok: true },
+      }).ok,
     );
     assert.deepEqual(owner.writeState("succeeded"), { ok: true });
     owner.close();

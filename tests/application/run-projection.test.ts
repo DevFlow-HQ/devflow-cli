@@ -1031,23 +1031,21 @@ test("timeline detail keeps 160 characters and caps 161 at an explicit 160-chara
     }),
     { ok: true },
   );
-  assert.deepEqual(
+  assert.ok(
     owner.appendTurnEvent({
       turnId: "turn-1",
       kind: "assistant-content",
       payload: JSON.stringify({ content: "x".repeat(160) }),
       at: new Date("2026-09-22T10:00:02.000Z"),
-    }),
-    { ok: true },
+    }).ok,
   );
-  assert.deepEqual(
+  assert.ok(
     owner.appendTurnEvent({
       turnId: "turn-1",
       kind: "assistant-content",
       payload: JSON.stringify({ content: "y".repeat(161) }),
       at: new Date("2026-09-22T10:00:03.000Z"),
-    }),
-    { ok: true },
+    }).ok,
   );
 
   const result = runResult(f.app, created.runId);
@@ -1491,14 +1489,13 @@ test("declined elicitation history retains the server, message and URL with reme
     message: "Please finish setup",
     url: "https://example.com/setup",
   };
-  assert.deepEqual(
+  assert.ok(
     owner.appendTurnEvent({
       turnId: "t",
       kind: "elicitation-declined",
       payload: JSON.stringify(elicitation),
       at: new Date(),
-    }),
-    { ok: true },
+    }).ok,
   );
   const result = runResult(f.app, created.runId);
   assert.ok(result.found);

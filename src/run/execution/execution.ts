@@ -59,7 +59,6 @@ export {
   heldAgentCall,
   interactiveEndLegality,
   latestAgentCall,
-  readAgentCallEvent,
 } from "./interactive-completion.js";
 
 export {

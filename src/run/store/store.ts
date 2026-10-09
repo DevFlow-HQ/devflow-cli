@@ -417,13 +417,15 @@ export interface AppendTurnEventRequest {
   readonly turnId: string;
   readonly kind: string;
   readonly payload: string; // JSON
+  readonly historyOrder?: number;
   readonly at: Date;
 }
 
 /** Refuse an unrecordable observation without changing the live Turn outcome.
  *  Keep the original cause for callers and use only safeCause in diagnostics. */
 export type AppendTurnEventResult =
-  | WriteResult
+  | { readonly ok: true; readonly event?: TurnEventRecord }
+  | { readonly ok: false; readonly reason: "fenced" }
   | {
       readonly ok: false;
       readonly reason: "unrecordable";
@@ -1385,7 +1387,8 @@ export function openRunGroup(
 }
 
 export {
+  readTurnFact,
+  readAgentCallEvent,
   readSteerEvent,
   readToolCallEvent,
-  readTurnDiffEvent,
 } from "./turn-records.js";

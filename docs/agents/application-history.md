@@ -37,11 +37,14 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
 
 ## History order and identity
 
-- `observedOwner.appendTurnEvent` passes each append through `history.append` before the fenced Store write, then pushes only after a successful receipt.
+- `observedOwner.appendTurnEvent` passes first-appearance metadata through `history.append` before the fenced Store write, then indexes its committed receipt.
+  The per-Run index initializes once per observed owner; previews read no Store facts, and repeated chunks derive no page. Unchanged pages publish nothing.
+  A rested reopen or changed owner refreshes canonical facts before index reuse, preserving the live-elsewhere refusal.
   `history.append` stamps the first `historyOrder` for an identified message, Thought, tool, diff, Steer, Agent call, or Request event.
   Previews share that first-appearance order with their settled fact. Execution never stamps it independently.
 - Each `session-history` subscription mints its own opaque row `id` and `position`; retained rows keep them across preview replacement and settlement.
-  Reopening creates new identities. They are presentation identities, never native call ids, Store keys, or retained transcript entry ids.
+  Reopening creates new identities and a fresh eviction cutoff. Cutoffs belong to subscriptions, so a settled preview cannot permanently hide stored rows
+  from a later open. They are presentation identities, never native call ids, Store keys, or retained transcript entry ids.
 
 - Migrated legacy input precedes event write order; its authoritative assistant copy follows the events, before the Turn result.
   Legacy per-Turn message positions never compare directly with Run-wide event indexes.

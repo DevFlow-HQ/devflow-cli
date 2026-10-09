@@ -13,11 +13,7 @@ import {
 } from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
-import {
-  retainCommandOutput,
-  type ToolCall,
-  type TurnDiff,
-} from "../../harness/harness.js";
+import { turnFactSchemas, type TurnFact } from "../../harness/harness.js";
 import { harnessSessions, turnEvents, turns } from "./run-schema.js";
 import type {
   AdmitTurnRequest,
@@ -67,148 +63,123 @@ const harnessSessionRow = z.object({
 });
 // Only qualified settled messages and delivered Steers are conversation rows.
 // Unknown or unqualified metadata remains absent.
-const filePatch = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("unified"), content: z.string() }),
-  z.object({
-    kind: z.literal("structured"),
-    hunks: z.array(
-      z.object({
-        oldStart: z.number().int().nonnegative(),
-        oldLines: z.number().int().nonnegative(),
-        newStart: z.number().int().nonnegative(),
-        newLines: z.number().int().nonnegative(),
-        lines: z.array(z.string()),
-      }),
-    ),
-  }),
-]);
-const fileChange = z.object({
-  path: z.string().min(1),
-  kind: z.enum(["create", "update", "delete"]).optional(),
-  patch: filePatch.optional(),
-  additions: z.number().int().nonnegative().optional(),
-  removals: z.number().int().nonnegative().optional(),
-});
-const turnDiff = z.object({
-  content: z.string(),
-  files: z.array(fileChange),
-  historyOrder: z.number().int().nonnegative().optional(),
-});
-/** Only validated Secant-shaped supplied facts cross the persisted ingress. */
-export function readTurnDiffEvent(
+/** Decode persisted normalized facts once at the Store ingress. Unknown legacy facts remain unqualified. */
+export function readTurnFact(
   event: Pick<TurnEventRecord, "kind" | "payload">,
-): (TurnDiff & { readonly historyOrder?: number }) | undefined {
-  if (event.kind !== "turn-diff") return undefined;
+): TurnFact | undefined {
   try {
-    const parsed = turnDiff.safeParse(JSON.parse(event.payload));
-    return parsed.success ? parsed.data : undefined;
+    const data: unknown = JSON.parse(event.payload);
+    switch (event.kind) {
+      case "assistant-content": {
+        const parsed = turnFactSchemas["assistant-content"].safeParse(data);
+        return parsed.success
+          ? { kind: "assistant-content", data: parsed.data }
+          : undefined;
+      }
+      case "thought": {
+        const parsed = turnFactSchemas["thought"].safeParse(data);
+        return parsed.success
+          ? { kind: "thought", data: parsed.data }
+          : undefined;
+      }
+      case "turn-diff": {
+        const parsed = turnFactSchemas["turn-diff"].safeParse(data);
+        return parsed.success
+          ? { kind: "turn-diff", data: parsed.data }
+          : undefined;
+      }
+      case "tool-call": {
+        const parsed = turnFactSchemas["tool-call"].safeParse(data);
+        return parsed.success
+          ? { kind: "tool-call", data: parsed.data }
+          : undefined;
+      }
+      case "tool-partial": {
+        const parsed = turnFactSchemas["tool-partial"].safeParse(data);
+        return parsed.success
+          ? { kind: "tool-partial", data: parsed.data }
+          : undefined;
+      }
+      case "steer": {
+        const parsed = turnFactSchemas["steer"].safeParse(data);
+        return parsed.success
+          ? { kind: "steer", data: parsed.data }
+          : undefined;
+      }
+      case "model": {
+        const parsed = turnFactSchemas["model"].safeParse(data);
+        return parsed.success
+          ? { kind: "model", data: parsed.data }
+          : undefined;
+      }
+      case "agent-call": {
+        const parsed = turnFactSchemas["agent-call"].safeParse(data);
+        return parsed.success
+          ? { kind: "agent-call", data: parsed.data }
+          : undefined;
+      }
+      case "agent-call-expired": {
+        const parsed = turnFactSchemas["agent-call-expired"].safeParse(data);
+        return parsed.success
+          ? { kind: "agent-call-expired", data: parsed.data }
+          : undefined;
+      }
+      case "tool-activity": {
+        const parsed = turnFactSchemas["tool-activity"].safeParse(data);
+        return parsed.success
+          ? { kind: "tool-activity", data: parsed.data }
+          : undefined;
+      }
+      case "request-raised": {
+        const parsed = turnFactSchemas["request-raised"].safeParse(data);
+        return parsed.success
+          ? { kind: "request-raised", data: parsed.data }
+          : undefined;
+      }
+      case "request-answered": {
+        const parsed = turnFactSchemas["request-answered"].safeParse(data);
+        return parsed.success
+          ? { kind: "request-answered", data: parsed.data }
+          : undefined;
+      }
+      case "request-expired": {
+        const parsed = turnFactSchemas["request-expired"].safeParse(data);
+        return parsed.success
+          ? { kind: "request-expired", data: parsed.data }
+          : undefined;
+      }
+      case "elicitation-declined": {
+        const parsed = turnFactSchemas["elicitation-declined"].safeParse(data);
+        return parsed.success
+          ? { kind: "elicitation-declined", data: parsed.data }
+          : undefined;
+      }
+    }
   } catch {
     return undefined;
   }
+  return undefined;
 }
-const toolCall = z.object({
-  callId: z.string().min(1),
-  parentCallId: z.string().optional(),
-  tool: z.enum([
-    "read",
-    "search",
-    "command",
-    "file-change",
-    "web",
-    "mcp",
-    "subagent",
-    "other",
-  ]),
-  input: z.string(),
-  files: z.array(fileChange).optional(),
-  cwd: z.string().optional(),
-  exitCode: z.number().int().optional(),
-  nativeOmission: z.string().optional(),
-  output: z
-    .object({
-      text: z.string(),
-      secantDropped: z.literal(true).optional(),
-      incomplete: z.literal(true).optional(),
-    })
-    .transform(retainCommandOutput)
-    .optional(),
-  count: z
-    .object({ value: z.number().nonnegative(), unit: z.string() })
-    .optional(),
-  outcome: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("running") }),
-    z.object({ kind: z.literal("completed") }),
-    z.object({ kind: z.literal("failed"), error: z.string().optional() }),
-    z.object({ kind: z.literal("declined"), reason: z.string().optional() }),
-  ]),
-  historyOrder: z.number().int().nonnegative().optional(),
-});
-/** Tolerant persisted ingress. Legacy activity is never promoted to identified outcomes. */
 export function readToolCallEvent(
   event: Pick<TurnEventRecord, "kind" | "payload">,
-): (ToolCall & { readonly historyOrder?: number }) | undefined {
-  if (event.kind !== "tool-call" && event.kind !== "tool-partial")
-    return undefined;
-  try {
-    const parsed = toolCall.safeParse(JSON.parse(event.payload));
-    return parsed.success &&
-      (event.kind !== "tool-partial" ||
-        (parsed.data.outcome.kind === "running" &&
-          parsed.data.output?.incomplete === true))
-      ? parsed.data
-      : undefined;
-  } catch {
-    return undefined;
-  }
+) {
+  const fact = readTurnFact(event);
+  return fact?.kind === "tool-call" || fact?.kind === "tool-partial"
+    ? fact.data
+    : undefined;
 }
-const assistantMessage = z.object({
-  messageId: z.string().min(1),
-  historyOrder: z.number().int().nonnegative().optional(),
-  content: z.string(),
-  incomplete: z.literal(true).optional(),
-  parentActivity: z.string().optional(),
-});
-const thoughtSummary = z.object({
-  summaryId: z.string().min(1),
-  content: z.string(),
-  historyOrder: z.number().int().nonnegative().optional(),
-  incomplete: z.literal(true).optional(),
-  durationMs: z.number().finite().nonnegative().optional(),
-});
-const deliveredSteer = z.object({
-  steerId: z.string().min(1),
-  historyOrder: z.number().int().nonnegative().optional(),
-  text: z.string(),
-  sentAt: z.string(),
-  settlement: z.object({
-    kind: z.literal("delivered"),
-    delivery: z.enum(["within-turn", "after-boundary", "re-delivered"]),
-  }),
-});
-const steerEvent = deliveredSteer.extend({
-  sentAt: z.iso.datetime(),
-  settlement: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("waiting") }),
-    deliveredSteer.shape.settlement,
-    z.object({
-      kind: z.literal("dropped"),
-      reason: z.enum(["interrupt", "loss"]),
-    }),
-  ]),
-});
-
 export function readSteerEvent(
   event: Pick<TurnEventRecord, "kind" | "payload">,
 ) {
-  if (event.kind !== "steer") return undefined;
-  try {
-    const parsed = steerEvent.safeParse(JSON.parse(event.payload));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
+  const fact = readTurnFact(event);
+  return fact?.kind === "steer" ? fact.data : undefined;
 }
-
+export function readAgentCallEvent(
+  event: Pick<TurnEventRecord, "kind" | "payload">,
+) {
+  const fact = readTurnFact(event);
+  return fact?.kind === "agent-call" ? fact.data : undefined;
+}
 const messagePayload = z.object({
   role: z.string(),
   content: z.string().optional(),
@@ -303,11 +274,15 @@ export function admitTurn(
 export function appendTurnEvent(
   db: SQLiteBunDatabase,
   request: AppendTurnEventRequest,
-): void {
-  let payload = request.payload;
+): TurnEventRecord | undefined {
+  const fact = readTurnFact(request);
+  let payload =
+    fact === undefined || request.historyOrder === undefined
+      ? request.payload
+      : JSON.stringify({ ...fact.data, historyOrder: request.historyOrder });
   let transcriptSeq: number | undefined;
   if (request.kind === "turn-diff") {
-    const diff = turnDiff.parse(JSON.parse(payload));
+    const diff = turnFactSchemas["turn-diff"].parse(JSON.parse(payload));
     const duplicate = db
       .select({ seq: turnEvents.seq })
       .from(turnEvents)
@@ -321,7 +296,7 @@ export function appendTurnEvent(
     if (duplicate !== undefined) return;
     payload = JSON.stringify(diff);
   } else if (request.kind === "thought") {
-    const thought = thoughtSummary.parse(JSON.parse(payload));
+    const thought = turnFactSchemas.thought.parse(JSON.parse(payload));
     const duplicate = db
       .select({ seq: turnEvents.seq })
       .from(turnEvents)
@@ -336,7 +311,7 @@ export function appendTurnEvent(
     if (duplicate !== undefined) return;
     payload = JSON.stringify(thought);
   } else if (request.kind === "tool-call" || request.kind === "tool-partial") {
-    const call = toolCall.parse(JSON.parse(payload));
+    const call = turnFactSchemas["tool-call"].parse(JSON.parse(payload));
     const previous = db
       .select({ payload: turnEvents.payload, kind: turnEvents.kind })
       .from(turnEvents)
@@ -374,8 +349,14 @@ export function appendTurnEvent(
         : { historyOrder: previous[0].call.historyOrder }),
     });
   } else if (request.kind === "assistant-content") {
-    const message = assistantMessage.safeParse(JSON.parse(payload));
-    if (message.success && message.data.parentActivity === undefined) {
+    const message = turnFactSchemas["assistant-content"].safeParse(
+      JSON.parse(payload),
+    );
+    if (
+      message.success &&
+      message.data.messageId !== undefined &&
+      message.data.parentActivity === undefined
+    ) {
       // The same native message can be repeated. Its first settled fact wins.
       const duplicate = db
         .select({ seq: turnEvents.seq })
@@ -398,7 +379,7 @@ export function appendTurnEvent(
       transcriptSeq = nextConversationPosition(db);
     }
   } else if (request.kind === "steer") {
-    const steer = steerEvent.parse(JSON.parse(payload));
+    const steer = turnFactSchemas.steer.parse(JSON.parse(payload));
     payload = JSON.stringify(steer);
     if (steer.settlement.kind === "delivered") {
       const duplicate = db
@@ -428,7 +409,8 @@ export function appendTurnEvent(
       transcriptSeq = nextConversationPosition(db);
     }
   }
-  db.insert(turnEvents)
+  const row = db
+    .insert(turnEvents)
     .values({
       turn_id: request.turnId,
       kind: request.kind,
@@ -436,7 +418,14 @@ export function appendTurnEvent(
       transcript_seq: transcriptSeq ?? null,
       at: request.at.toISOString(),
     })
-    .run();
+    .returning()
+    .get();
+  return {
+    turnId: row.turn_id,
+    kind: row.kind,
+    payload: row.payload,
+    at: row.at,
+  };
 }
 
 // Settle a Turn: immutable once settled, so the update fires only while the
@@ -651,17 +640,16 @@ const conversationColumns = {
   input: turns.input,
   at: turnEvents.at,
 };
+const transcriptRow = z.object({
+  seq: z.number(),
+  session: z.string(),
+  turnId: z.string(),
+  payload: z.string(),
+  input: z.string(),
+  at: z.string(),
+});
 function transcriptRecord(row: unknown): TranscriptEntryRecord {
-  const parsed = z
-    .object({
-      seq: z.number(),
-      session: z.string(),
-      turnId: z.string(),
-      payload: z.string(),
-      input: z.string(),
-      at: z.string(),
-    })
-    .parse(row);
+  const parsed = transcriptRow.parse(row);
   const { content, ...metadata } = messagePayload.parse(
     JSON.parse(parsed.payload),
   );

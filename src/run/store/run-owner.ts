@@ -1206,8 +1206,17 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     },
     appendTurnEvent(request) {
       try {
-        const appended = guardedWrite((tx) => appendTurnEvent(tx, request));
-        return toWriteResult(appended);
+        const appended = guardedTransaction((tx) =>
+          appendTurnEvent(tx, request),
+        );
+        return appended.kind === "fenced"
+          ? { ok: false, reason: "fenced" }
+          : {
+              ok: true,
+              ...(appended.value === undefined
+                ? {}
+                : { event: appended.value }),
+            };
       } catch (cause) {
         // Drizzle's wrapper includes SQL parameters, which contain Turn content.
         // Retain the original database fault rather than that query wrapper.

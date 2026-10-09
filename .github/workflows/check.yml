@@ -176,6 +176,11 @@ jobs:
           tests/composition/wiring.test.ts
       - name: m10-previous-release-conversation
         run: bun run test -- -t '^m10-previous-release-conversation(:|$)' tests/run/store/conversation-migration.test.ts
+      - name: m10-audit-history-index
+        run: >-
+          bun run test --
+          -t '^m10-audit-history-index(:|$)'
+          tests/application/history-index.test.ts
       - name: m10-audit-legacy-turn-order
         run: >-
           bun run test --

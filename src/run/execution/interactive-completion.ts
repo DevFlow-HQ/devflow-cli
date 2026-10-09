@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { readAgentCallEvent } from "../store/store.js";
 import {
   agentCompletionCalls,
   flattenSteps,
@@ -7,11 +7,7 @@ import {
   type RoutingNode,
   type Step,
 } from "../../workflow/workflow.js";
-import type {
-  AttemptLogEntry,
-  RunOwner,
-  TurnEventRecord,
-} from "../store/store.js";
+import type { AttemptLogEntry, RunOwner } from "../store/store.js";
 import { decodeAttemptId } from "./attempt-id.js";
 
 type InteractiveEndControl =
@@ -122,31 +118,6 @@ function consecutiveAgentContinues(
     count = entry.endedBy === "agent" ? count + 1 : 0;
   }
   return count;
-}
-
-const agentCallSchema = z.object({
-  callId: z.string(),
-  id: z.string(),
-  reason: z
-    .string()
-    .max(400)
-    .refine((reason) => reason.trim().length > 0),
-  answer: z.discriminatedUnion("outcome", [
-    z.object({ outcome: z.literal("accepted") }),
-    z.object({ outcome: z.literal("held-for-review") }),
-    z.object({ outcome: z.literal("refused"), reason: z.string() }),
-  ]),
-});
-
-/** Tolerantly read normalized call history, never Harness protocol frames. */
-export function readAgentCallEvent(event: TurnEventRecord) {
-  if (event.kind !== "agent-call") return undefined;
-  try {
-    const parsed = agentCallSchema.safeParse(JSON.parse(event.payload));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /** Only the latest call of the latest Turn can settle an open Attempt, so an

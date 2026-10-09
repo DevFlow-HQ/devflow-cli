@@ -1,9 +1,9 @@
+import { readAgentCallEvent, readTurnFact } from "../run/store/store.js";
 import { readSteerEvent, readToolCallEvent } from "../run/store/store.js";
 import { createHash } from "node:crypto";
 import { modelChoiceOffer } from "./model-choice.js";
 import type { ApplicationHarnessQualification } from "./harness-registry.js";
 import { deriveRun, type IterationMark } from "./run-progress.js";
-import { z } from "zod";
 import type { Catalog, CatalogEntry } from "../catalog/catalog.js";
 import { inspectBundle, type Budgets } from "../bundle/bundle.js";
 import { selectInstalledEntry } from "./entry-selection.js";
@@ -34,7 +34,6 @@ import {
   heldAgentCall,
   interactiveEndLegality,
   latestAgentCall,
-  readAgentCallEvent,
   interactiveStepTarget,
 } from "../run/execution/execution.js";
 import type {
@@ -986,38 +985,30 @@ function timelineDetail(text: string): string {
   return `${flat.slice(0, contentLimit)} ${RUN_TIMELINE_TRUNCATION_MARKER}`;
 }
 
-const effectiveModelEventSchema = z.object({
-  model: z.string().min(1),
-  effort: z.string().min(1).optional(),
-});
-
-const declinedElicitationSchema = z.object({
-  harness: z.enum(["codex", "claude-code"]),
-  server: z.string(),
-  message: z.string(),
-  url: z.string().optional(),
-});
-
 /** The turn-event timeline entries for one Turn's normalized durable events. */
 function turnEventEntry(
   event: TurnEventRecord,
   turn?: TurnRecord,
 ): RunTimelineEvent | undefined {
+  const fact = readTurnFact(event);
   if (event.kind === "elicitation-declined") {
-    let payload: unknown;
-    try {
-      payload = JSON.parse(event.payload);
-    } catch {
+    if (
+      fact?.kind !== "elicitation-declined" ||
+      fact.data.harness === undefined ||
+      fact.data.server === undefined
+    )
       return undefined;
-    }
-    const parsed = declinedElicitationSchema.safeParse(payload);
-    if (!parsed.success) return undefined;
-    const { harness, server, message, url } = parsed.data;
+    const { harness, server, message, url } = fact.data;
     const name = harness === "codex" ? "Codex" : "Claude Code";
     return {
       at: event.at,
       event: "elicitation-declined",
-      elicitation: parsed.data,
+      elicitation: {
+        harness,
+        server,
+        message,
+        ...(url === undefined ? {} : { url }),
+      },
       detail: timelineDetail(
         `Secant cannot show this elicitation. Finish setup in ${name} directly before continuing. Declined from ${server}: ${message}${url === undefined ? "" : ` · ${url}`}`,
       ),
@@ -1027,15 +1018,8 @@ function turnEventEntry(
   // The effective model and effort a Turn's Harness reported (#345), copied as
   // stored; a malformed payload projects nothing rather than a guess.
   if (event.kind === "model") {
-    let payload: unknown;
-    try {
-      payload = JSON.parse(event.payload);
-    } catch {
-      return undefined;
-    }
-    const parsed = effectiveModelEventSchema.safeParse(payload);
-    if (!parsed.success) return undefined;
-    const { model, effort } = parsed.data;
+    if (fact?.kind !== "model") return undefined;
+    const { model, effort } = fact.data;
     return {
       at: event.at,
       event: "effective-model",
@@ -1082,7 +1066,8 @@ function turnEventEntry(
     };
   }
   if (event.kind === "assistant-content") {
-    const content = safeField(event.payload, "content");
+    const content =
+      fact?.kind === "assistant-content" ? fact.data.content : undefined;
     return {
       at: event.at,
       event: "assistant-content",
@@ -1099,8 +1084,9 @@ function turnEventEntry(
     };
   }
   if (event.kind === "tool-activity") {
-    const tool = safeField(event.payload, "tool") ?? "tool";
-    const phase = safeField(event.payload, "phase") ?? "";
+    const tool =
+      fact?.kind === "tool-activity" ? (fact.data.tool ?? "tool") : "tool";
+    const phase = fact?.kind === "tool-activity" ? (fact.data.phase ?? "") : "";
     return {
       at: event.at,
       event: "tool-activity",
@@ -1111,8 +1097,10 @@ function turnEventEntry(
   // and serialized input; the answer names who answered and the decision; the
   // expiry names the request. Durable history — the request itself is never stored.
   if (event.kind === "request-raised") {
-    const tool = safeField(event.payload, "tool") ?? "tool";
-    const input = safeField(event.payload, "input") ?? "";
+    const tool =
+      fact?.kind === "request-raised" ? (fact.data.tool ?? "tool") : "tool";
+    const input =
+      fact?.kind === "request-raised" ? (fact.data.input ?? "") : "";
     return {
       at: event.at,
       event: "request-raised",
@@ -1120,8 +1108,9 @@ function turnEventEntry(
     };
   }
   if (event.kind === "request-answered") {
-    const by = safeField(event.payload, "by");
-    const decision = safeField(event.payload, "decision");
+    const by = fact?.kind === "request-answered" ? fact.data.by : undefined;
+    const decision =
+      fact?.kind === "request-answered" ? fact.data.decision : undefined;
     const who =
       by === "client-policy"
         ? "answered by client policy"
@@ -1135,26 +1124,13 @@ function turnEventEntry(
     };
   }
   if (event.kind === "request-expired") {
-    const requestId = safeField(event.payload, "requestId");
+    const requestId =
+      fact?.kind === "request-expired" ? fact.data.requestId : undefined;
     return {
       at: event.at,
       event: "request-expired",
       ...(requestId !== undefined ? { detail: requestId } : {}),
     };
-  }
-  return undefined;
-}
-
-/** Read one string field from a JSON payload, or undefined on any parse fault. */
-function safeField(payload: string, field: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(payload);
-    if (parsed !== null && typeof parsed === "object") {
-      const value = (parsed as Record<string, unknown>)[field];
-      if (typeof value === "string") return value;
-    }
-  } catch {
-    // A malformed payload contributes no detail rather than throwing the read.
   }
   return undefined;
 }

@@ -84,6 +84,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   reads each readable Run's owner before restoring registration, so a live owner survives corruption and the following reconciliation decides its fate.
 
 - Turn-event append faults keep the original driver cause plus a safe diagnostic. Drizzle query parameters and JSON syntax-error text can contain Turn content.
+  Successful append receipts include only a newly stored event; dedup no-ops omit it. Application indexes that canonical payload after commit (#435).
 
 ## Tests
 
