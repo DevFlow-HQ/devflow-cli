@@ -170,6 +170,7 @@ const TEST_COMMAND = /\bbun\s+run\s+test(?:\s|$)/;
 export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-history-latest-delivery",
   "m10-audit-history-tool-content",
+  "m10-audit-history-bounded-content",
   "m10-audit-history-index",
   "m10-audit-application-duplicates",
   "m10-audit-conversation-order",

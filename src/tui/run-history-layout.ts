@@ -59,6 +59,7 @@ function collapsedOutput(output: string, width: number) {
   };
 }
 
+/** A row's drawn text, then any trailing content notice (loading, retry, more). */
 function rowText(
   row: TimelineRow,
   expanded: boolean,
@@ -70,6 +71,22 @@ function rowText(
   /** The text before a trailing content notice, when one is drawn. */
   readonly beforeNotice?: ScreenedText;
 } {
+  const body = rowBody(row, expanded, width, reducedMotion, humanPanel);
+  if (!row.contentNotice) return body;
+  return {
+    text: `${body.text}\n${row.contentNotice}`,
+    hasDetail: body.hasDetail,
+    beforeNotice: { text: body.text },
+  };
+}
+
+function rowBody(
+  row: TimelineRow,
+  expanded: boolean,
+  width: number,
+  reducedMotion: boolean,
+  humanPanel: boolean,
+): ScreenedText & { readonly hasDetail: boolean } {
   const prefix =
     row.value?.kind === "tool" && row.value.outcome.kind === "running"
       ? `  ${reducedMotion ? "[.]" : "|"} `
@@ -91,8 +108,13 @@ function rowText(
       hasDetail: body.length > 0,
     };
   }
-  if (row.inspection !== undefined)
-    return { ...screenText(`${prefix}▸ ${row.text}`), hasDetail: true };
+  if (row.inspection !== undefined) {
+    const label = screenText(`${prefix}▸ ${row.text}`);
+    return {
+      ...(row.oneLine ? clipScreened(label, width) : label),
+      hasDetail: true,
+    };
+  }
   if (row.output !== undefined) {
     const output = screenText(row.output.text).text;
     const heading = screenText(row.text).text;
@@ -104,12 +126,10 @@ function rowText(
       : row.output.incomplete
         ? "potentially incomplete"
         : "final";
-    const body = `${prefix}${heading}\n  ${expanded ? "▾" : "▸"} Output · ${label}${output === "" ? " · empty" : ""}${row.output.reference && !expanded ? " · more retained output, expand" : preview.hidden === "" ? "" : ` · ${preview.hidden}`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${output === "" ? "" : `\n${preview.text}`}`;
     return {
       // A bounded preview can be complete while retained output is not.
       hasDetail: collapsed.hidden !== "" || row.output.reference !== undefined,
-      text: row.contentNotice ? `${body}\n${row.contentNotice}` : body,
-      ...(row.contentNotice ? { beforeNotice: { text: body } } : {}),
+      text: `${prefix}${heading}\n  ${expanded ? "▾" : "▸"} Output · ${label}${output === "" ? " · empty" : ""}${row.output.reference && !expanded ? " · more retained output, expand" : preview.hidden === "" ? "" : ` · ${preview.hidden}`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${output === "" ? "" : `\n${preview.text}`}`,
     };
   }
   if (row.thought === undefined)

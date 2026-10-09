@@ -1,4 +1,5 @@
 import type {
+  HistoryTextReference,
   RunLiveOverlay,
   RunTimelineEvent,
   RunView,
@@ -250,7 +251,7 @@ function historyTimelineRows(
       preview: row.source === "preview",
       text: historyLabel(row.value, row.source === "preview"),
       fileSpans: historyFileSpans(row.value, row.source === "preview"),
-      inspection: fileInspection(row.value),
+      inspection: fileInspection(row.value) ?? previewInspection(row.value),
       ...(row.value.kind === "agent-call" ? { oneLine: true } : {}),
       ...(row.value.kind === "tool" && row.value.output !== undefined
         ? { output: { ...row.value.output, live: row.source === "preview" } }
@@ -261,6 +262,43 @@ function historyTimelineRows(
       dividers,
     };
   });
+}
+/** The retained text a row reads in place: fully shown messages and Steers always,
+ * Thoughts, Entry prompts and command output only while expanded. */
+export function rowContentReference(
+  row: TimelineRow,
+  expanded: boolean,
+): HistoryTextReference | undefined {
+  const value = row.value;
+  if (value?.kind === "message" || value?.kind === "steer")
+    return value.reference;
+  if (!expanded) return undefined;
+  if (row.output !== undefined) return row.output.reference;
+  return value?.kind === "thought" || value?.kind === "entry-prompt"
+    ? value.reference
+    : undefined;
+}
+/** A cut Agent call, Request, activity or Turn result opens its complete text (#490). */
+function previewInspection(value: SessionHistoryValue): Openable | undefined {
+  switch (value.kind) {
+    case "agent-call":
+    case "request":
+    case "activity":
+    case "turn-result":
+      return value.detail === undefined
+        ? undefined
+        : {
+            label: {
+              "agent-call": "Agent call",
+              request: "Harness Request",
+              activity: "Activity",
+              "turn-result": "Turn result",
+            }[value.kind],
+            historyContent: value.detail,
+          };
+    default:
+      return undefined;
+  }
 }
 /** Formats only supplied patch data. Requested inputs never create an inspection. */
 function fileInspection(value: SessionHistoryValue): Openable | undefined {

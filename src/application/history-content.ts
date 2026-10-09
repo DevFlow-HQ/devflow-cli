@@ -7,7 +7,8 @@ import {
 } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import type { HistoryFact } from "./history-facts.js";
+import { encodedStringBytes, fitEncoded } from "./encoded-json.js";
+import type { HistoryFact, StoredAt } from "./history-facts.js";
 import type {
   HistoryContentItem,
   HistoryContentRead,
@@ -22,12 +23,25 @@ import type {
 const TEXT_SIZE = 4095;
 const ITEM_SIZE = 8;
 const ACTIVE_LIMIT = 32;
-const PREVIEW_SIZE = 512;
-type ToolContent = Extract<SessionHistoryValue, { kind: "tool" | "turn-diff" }>;
+// Private inline thresholds as [UTF-16 units, encoded bytes]. With references and
+// headers, each projected row stays under 18 KiB, so a complete 200-row page plus
+// one later preview per row stays inside the 8 MiB encoded allowance (#490).
+type Limit = readonly [units: number, bytes: number];
+const PREVIEW: Limit = [512, 1024];
+const PATH: Limit = [128, 256];
+const CONTENT: Limit = [TEXT_SIZE, 12 * 1024];
+const fits = (text: string | undefined, [units, bytes]: Limit) =>
+  text === undefined ||
+  (text.length <= units && encodedStringBytes(text) <= bytes);
+function preview(text: string, [units, bytes]: Limit = PREVIEW): string {
+  return fitEncoded(text, units, bytes);
+}
+type Content = SessionHistoryValue;
 const addressSchema = z.object({
   version: z.string(),
   scope: z.string(),
   field: z.enum([
+    "content",
     "detail",
     "file-list",
     "output",
@@ -51,16 +65,17 @@ const cursorSchema = z.object({
 type Version = {
   readonly id: string;
   readonly runId: string;
-  readonly previews: Map<string, ToolContent>;
+  readonly previews: Map<string, Content>;
 } & (
-  | { readonly source: "stored"; readonly eventIndex: number }
-  | { readonly source: "preview"; readonly live: ToolContent }
+  | { readonly source: "stored"; readonly at: StoredAt }
+  // Live previews and derived values without a stored coordinate.
+  | { readonly source: "held"; readonly value: Content }
 );
 interface Read {
   readonly version: Version;
   readonly reference: string;
   readonly scope: string;
-  readonly value: ToolContent;
+  readonly value: Content;
   readonly releaseSignal?: () => void;
 }
 const missing = (code = "history-content-stale"): HistoryContentRead => ({
@@ -76,14 +91,14 @@ const missing = (code = "history-content-stale"): HistoryContentRead => ({
 /** References retain stored coordinates, never cached stored bodies. Live versions
  * survive only as current deliveries or bounded explicitly released traversals. */
 export function createHistoryContent(deps: {
-  readStored(runId: string, index: number): ToolContent | Problem;
+  readStored(runId: string, at: StoredAt): Content | Problem;
   available(runId: string): true | Problem;
   readonly textEdges?: HistoryTextEdgeAnalyser;
 }) {
   const key = randomBytes(32);
   const versions = new Map<string, Version>();
   const storedVersions = new Map<string, Version>();
-  const values = new WeakMap<ToolContent, Version>();
+  const values = new WeakMap<Content, Version>();
   const reads = new Map<string, Read>();
   function seal(value: object): string {
     const iv = randomBytes(12);
@@ -138,28 +153,92 @@ export function createHistoryContent(deps: {
     reads.delete(readId);
     read?.releaseSignal?.();
   }
-  function preview(value: string, limit = PREVIEW_SIZE): string {
-    return value.length <= limit ? value : value.slice(0, limit - 1) + "…";
-  }
-  function filesPreview(
-    files: readonly SessionFileChange[],
-    version: Version,
-    scope: string,
-    cached?: readonly SessionFileChange[],
-  ): readonly SessionFileChange[] {
-    return files
-      .slice(0, 10)
-      .map(({ patch: _patch, pathContent: _ref, ...file }, index) => ({
-        ...file,
-        path: preview(file.path, 128),
-        ...(file.path.length > 128
-          ? {
-              pathContent:
-                cached?.[index]?.pathContent ??
-                text(version, "path", { scope, file: index }),
-            }
-          : {}),
-      }));
+  /** One pass decides and builds: every variable-length field is fitted here, so
+   * a field cannot be shown unbounded or cut without its reference. Undefined
+   * when nothing was cut, so a compact value stays the identical inline object. */
+  function bounded(value: Content): Content | undefined {
+    let cut = false;
+    const take = (text: string, limit: Limit = PREVIEW) => {
+      const shown = preview(text, limit);
+      if (shown !== text) cut = true;
+      return shown;
+    };
+    const optional = (text: string | undefined) =>
+      text === undefined ? undefined : take(text);
+    const files = (all: readonly SessionFileChange[]) => {
+      if (all.length > 10 || all.some((file) => file.patch !== undefined))
+        cut = true;
+      return all
+        .slice(0, 10)
+        .map(({ patch: _patch, pathContent: _ref, ...file }) => ({
+          ...file,
+          path: take(file.path, PATH),
+        }));
+    };
+    let shown: Content;
+    switch (value.kind) {
+      case "message":
+      case "thought":
+      case "entry-prompt":
+      case "steer":
+        shown = { ...value, content: take(value.content, CONTENT) };
+        break;
+      case "agent-call":
+        shown = {
+          ...value,
+          call: take(value.call),
+          reason: take(value.reason),
+          ...(value.refusal === undefined
+            ? {}
+            : { refusal: take(value.refusal) }),
+        };
+        break;
+      case "request":
+      case "activity":
+        shown = { ...value, description: take(value.description) };
+        break;
+      case "turn-result":
+        shown = {
+          ...value,
+          result: take(value.result),
+          ...(value.harness === undefined
+            ? {}
+            : { harness: take(value.harness) }),
+          ...(value.model === undefined ? {} : { model: take(value.model) }),
+        };
+        break;
+      case "turn-diff":
+        shown = {
+          ...value,
+          content: take(value.content),
+          files: files(value.files),
+        };
+        break;
+      case "tool":
+        shown = {
+          ...value,
+          ...(value.files === undefined ? {} : { files: files(value.files) }),
+          input: take(value.input),
+          cwd: optional(value.cwd),
+          nativeOmission: optional(value.nativeOmission),
+          count:
+            value.count === undefined
+              ? undefined
+              : { ...value.count, unit: take(value.count.unit) },
+          outcome:
+            value.outcome.kind === "failed"
+              ? { ...value.outcome, error: optional(value.outcome.error) }
+              : value.outcome.kind === "declined"
+                ? { ...value.outcome, reason: optional(value.outcome.reason) }
+                : value.outcome,
+          output:
+            value.output === undefined
+              ? undefined
+              : { ...value.output, text: take(value.output.text) },
+        };
+        break;
+    }
+    return cut ? shown : undefined;
   }
   function project(
     runId: string,
@@ -167,120 +246,142 @@ export function createHistoryContent(deps: {
     scope: string,
   ): SessionHistoryValue {
     const value = fact.value;
-    if (value.kind !== "tool" && value.kind !== "turn-diff") return value;
-    if (
-      value.kind === "tool" &&
-      value.input.length <= PREVIEW_SIZE &&
-      (value.cwd?.length ?? 0) <= PREVIEW_SIZE &&
-      (value.nativeOmission?.length ?? 0) <= PREVIEW_SIZE &&
-      (value.count?.unit.length ?? 0) <= PREVIEW_SIZE &&
-      (value.output?.text.length ?? 0) <= PREVIEW_SIZE &&
-      (value.outcome.kind !== "failed" ||
-        (value.outcome.error?.length ?? 0) <= PREVIEW_SIZE) &&
-      (value.outcome.kind !== "declined" ||
-        (value.outcome.reason?.length ?? 0) <= PREVIEW_SIZE) &&
-      (value.files?.length ?? 0) <= 10 &&
-      (value.files ?? []).every(
-        (file) => file.path.length <= 128 && file.patch === undefined,
-      )
-    )
-      return value;
+    const shown = bounded(value);
+    if (shown === undefined) return value;
     const known = values.get(value);
+    // A live preview may keep its stored start's coordinate; it still reads live.
+    const storedAt = fact.source === "stored" ? fact.stored : undefined;
     const storedKey =
-      fact.source === "stored" ? `${runId}:${fact.eventIndex}` : undefined;
+      storedAt === undefined
+        ? undefined
+        : `${runId}:${JSON.stringify(storedAt)}`;
     let version =
       known ?? (storedKey ? storedVersions.get(storedKey) : undefined);
     if (version === undefined || !versions.has(version.id)) {
       const base = {
         id: randomUUID(),
         runId,
-        previews: new Map<string, ToolContent>(),
+        previews: new Map<string, Content>(),
       };
-      if (fact.source === "stored") {
-        if (fact.eventIndex === undefined)
-          throw new Error("Stored tool content must name its retained event");
-        version = { ...base, source: "stored", eventIndex: fact.eventIndex };
+      if (storedAt !== undefined) {
+        version = { ...base, source: "stored", at: storedAt };
         storedVersions.set(storedKey!, version);
-      } else version = { ...base, source: "preview", live: value };
+      } else version = { ...base, source: "held", value };
       versions.set(version.id, version);
     }
     values.set(value, version);
     const cached = version.previews.get(scope);
     if (known && cached) return cached;
-    const detail = cached?.detail ?? text(version, "detail", { scope });
-    const fileFields =
-      value.files === undefined
-        ? {}
-        : {
-            files: filesPreview(value.files, version, scope, cached?.files),
-            fileCount: value.files.length,
-            filesReference:
-              cached?.filesReference ?? items(version, "files", { scope }),
-            filesDetail:
-              cached?.filesDetail ?? text(version, "file-list", { scope }),
-          };
-    let projected: ToolContent;
-    if (value.kind === "turn-diff")
-      projected = {
-        ...value,
-        content: preview(value.content),
-        ...fileFields,
-        detail,
-      };
-    else
-      projected = {
-        ...value,
-        ...fileFields,
-        input: preview(value.input),
-        cwd: value.cwd === undefined ? undefined : preview(value.cwd),
-        nativeOmission:
-          value.nativeOmission === undefined
-            ? undefined
-            : preview(value.nativeOmission),
-        count:
-          value.count === undefined
-            ? undefined
-            : { ...value.count, unit: preview(value.count.unit) },
-        outcome:
-          value.outcome.kind === "failed"
-            ? {
-                ...value.outcome,
-                error:
-                  value.outcome.error === undefined
-                    ? undefined
-                    : preview(value.outcome.error),
-              }
-            : value.outcome.kind === "declined"
-              ? {
-                  ...value.outcome,
-                  reason:
-                    value.outcome.reason === undefined
-                      ? undefined
-                      : preview(value.outcome.reason),
-                }
-              : value.outcome,
-        output:
-          value.output === undefined
-            ? undefined
-            : {
-                ...value.output,
-                text: preview(value.output.text),
-                ...(value.output.text.length > PREVIEW_SIZE
-                  ? {
-                      reference:
-                        cached?.kind === "tool" && cached.output?.reference
-                          ? cached.output.reference
-                          : text(version, "output", { scope }),
-                    }
-                  : {}),
-              },
-        detail,
-      };
+    const projected = withReferences(value, shown, version, scope, cached);
     if (cached && isDeepStrictEqual(cached, projected)) return cached;
     version.previews.set(scope, projected);
     return projected;
   }
-  function* detail(value: ToolContent): Generator<string> {
+  /** Reuses delivered references so an unchanged row keeps an identical value. */
+  function withReferences(
+    value: Content,
+    shown: Content,
+    version: Version,
+    scope: string,
+    cached: Content | undefined,
+  ): Content {
+    const detail =
+      (cached && "detail" in cached ? cached.detail : undefined) ??
+      text(version, "detail", { scope });
+    switch (shown.kind) {
+      case "message":
+      case "thought":
+      case "entry-prompt":
+      case "steer":
+        return {
+          ...shown,
+          reference:
+            (cached && "reference" in cached ? cached.reference : undefined) ??
+            text(version, "content", { scope }),
+        };
+      case "agent-call":
+      case "request":
+      case "activity":
+      case "turn-result":
+        return { ...shown, detail };
+    }
+    const tool =
+      cached?.kind === "tool" || cached?.kind === "turn-diff"
+        ? cached
+        : undefined;
+    const supplied =
+      value.kind === "tool" || value.kind === "turn-diff"
+        ? value.files
+        : undefined;
+    const fileFields =
+      supplied === undefined || shown.files === undefined
+        ? {}
+        : {
+            files: shown.files.map((file, index) =>
+              fits(supplied[index]!.path, PATH)
+                ? file
+                : {
+                    ...file,
+                    pathContent:
+                      tool?.files?.[index]?.pathContent ??
+                      text(version, "path", { scope, file: index }),
+                  },
+            ),
+            fileCount: supplied.length,
+            filesReference:
+              tool?.filesReference ?? items(version, "files", { scope }),
+            filesDetail:
+              tool?.filesDetail ?? text(version, "file-list", { scope }),
+          };
+    if (shown.kind === "turn-diff") return { ...shown, ...fileFields, detail };
+    const output =
+      value.kind === "tool" &&
+      shown.output !== undefined &&
+      !fits(value.output?.text, PREVIEW)
+        ? {
+            ...shown.output,
+            reference:
+              (tool?.kind === "tool" ? tool.output?.reference : undefined) ??
+              text(version, "output", { scope }),
+          }
+        : shown.output;
+    return { ...shown, ...fileFields, output, detail };
+  }
+  function* detail(value: Content): Generator<string> {
+    switch (value.kind) {
+      case "message":
+      case "thought":
+      case "entry-prompt":
+      case "steer":
+        yield value.content;
+        return;
+      case "request":
+      case "activity":
+        yield value.description;
+        return;
+      case "agent-call":
+        yield "Call\n";
+        yield value.call;
+        yield "\nReason\n";
+        yield value.reason;
+        if (value.refusal !== undefined) {
+          yield "\nRefusal\n";
+          yield value.refusal;
+        }
+        return;
+      case "turn-result":
+        yield "Result\n";
+        yield value.result;
+        if (value.harness !== undefined) {
+          yield "\nHarness\n";
+          yield value.harness;
+        }
+        if (value.model !== undefined) {
+          yield "\nModel\n";
+          yield value.model;
+        }
+        return;
+    }
     if (value.kind === "turn-diff") {
       yield value.content;
       if (!value.files.some((file) => file.patch !== undefined)) return;
@@ -334,19 +435,34 @@ export function createHistoryContent(deps: {
         }
     }
   }
-  function* textParts(value: ToolContent, address: Address): Generator<string> {
-    const file = value.files?.[address.file ?? -1];
+  const filesOf = (value: Content) =>
+    value.kind === "tool" || value.kind === "turn-diff"
+      ? value.files
+      : undefined;
+  function* textParts(value: Content, address: Address): Generator<string> {
+    const file = filesOf(value)?.[address.file ?? -1];
     const patch = file?.patch;
     const hunk =
       patch?.kind === "structured"
         ? patch.hunks[address.hunk ?? -1]
         : undefined;
     switch (address.field) {
+      case "content":
+        if (
+          value.kind === "message" ||
+          value.kind === "thought" ||
+          value.kind === "entry-prompt" ||
+          value.kind === "steer"
+        ) {
+          yield value.content;
+          return;
+        }
+        break;
       case "detail":
         yield* detail(value);
         return;
       case "file-list":
-        for (const file of value.files ?? []) {
+        for (const file of filesOf(value) ?? []) {
           if (file.kind !== undefined) yield `${file.kind} `;
           yield file.path;
           if (file.additions !== undefined) yield ` +${file.additions}`;
@@ -384,18 +500,19 @@ export function createHistoryContent(deps: {
     throw new Error("Mismatched content target");
   }
   function itemPage(
-    value: ToolContent,
+    value: Content,
     version: Version,
     address: Address,
     offset: number,
   ): { items: HistoryContentItem[]; more: boolean } {
-    const file = value.files?.[address.file ?? -1];
+    const files = filesOf(value);
+    const file = files?.[address.file ?? -1];
     const patch = file?.patch;
     const hunks = patch?.kind === "structured" ? patch.hunks : undefined;
     const hunk = hunks?.[address.hunk ?? -1];
-    if (address.field === "files" && value.files !== undefined)
+    if (address.field === "files" && files !== undefined)
       return {
-        items: value.files.slice(offset, offset + ITEM_SIZE).map((file, i) => ({
+        items: files.slice(offset, offset + ITEM_SIZE).map((file, i) => ({
           kind: "file",
           path: text(version, "path", {
             scope: address.scope,
@@ -423,7 +540,7 @@ export function createHistoryContent(deps: {
                     }),
                   },
         })),
-        more: offset + ITEM_SIZE < value.files.length,
+        more: offset + ITEM_SIZE < files.length,
       };
     if (address.field === "hunks" && hunks)
       return {
@@ -459,17 +576,11 @@ export function createHistoryContent(deps: {
   return {
     project,
     prune(current: readonly SessionHistoryValue[]): void {
-      const retained = new Set(
-        current.flatMap((value) =>
-          value.kind === "tool" || value.kind === "turn-diff"
-            ? [values.get(value)?.id]
-            : [],
-        ),
-      );
+      const retained = new Set(current.map((value) => values.get(value)?.id));
       for (const read of reads.values()) retained.add(read.version.id);
       for (const [id, version] of versions)
         if (!retained.has(id)) {
-          if (version.source === "preview") versions.delete(id);
+          if (version.source === "held") versions.delete(id);
           else version.previews.clear();
         }
     },
@@ -482,10 +593,7 @@ export function createHistoryContent(deps: {
       for (const [id, read] of reads)
         if (read.version.runId === runId) release(id);
       for (const [id, version] of versions)
-        if (
-          version.runId === runId &&
-          (deleted || version.source === "preview")
-        )
+        if (version.runId === runId && (deleted || version.source === "held"))
           versions.delete(id);
       if (deleted)
         for (const [id, version] of storedVersions)
@@ -523,9 +631,9 @@ export function createHistoryContent(deps: {
         } else {
           if (reads.size >= ACTIVE_LIMIT) return missing("history-read-limit");
           const value =
-            version.source === "preview"
-              ? version.live
-              : deps.readStored(version.runId, version.eventIndex);
+            version.source === "held"
+              ? version.value
+              : deps.readStored(version.runId, version.at);
           if (!value) return missing();
           if ("code" in value) return { found: false, problem: value };
           readId = randomUUID();

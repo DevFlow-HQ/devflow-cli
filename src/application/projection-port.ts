@@ -1328,6 +1328,8 @@ export type SessionHistoryValue =
   | {
       readonly kind: "thought";
       readonly content: string;
+      /** Present when `content` is a bounded preview of longer retained text. */
+      readonly reference?: HistoryTextReference;
       readonly incomplete?: true;
       readonly durationMs?: number;
     }
@@ -1335,12 +1337,18 @@ export type SessionHistoryValue =
       readonly kind: "message";
       readonly role: "user" | "assistant";
       readonly content: string;
+      readonly reference?: HistoryTextReference;
       readonly incomplete?: true;
     }
-  | { readonly kind: "entry-prompt"; readonly content: string }
+  | {
+      readonly kind: "entry-prompt";
+      readonly content: string;
+      readonly reference?: HistoryTextReference;
+    }
   | {
       readonly kind: "steer";
       readonly content: string;
+      readonly reference?: HistoryTextReference;
       readonly delivery:
         | "waiting"
         | "within-turn"
@@ -1356,6 +1364,8 @@ export type SessionHistoryValue =
       readonly reply: "accepted" | "held-for-review" | "refused";
       readonly refusal?: string;
       readonly disposition: "pending" | "completed" | "dropped";
+      /** Present when a field is a bounded preview: the complete call text. */
+      readonly detail?: HistoryTextReference;
     }
   | {
       readonly kind: "turn-result";
@@ -1364,9 +1374,18 @@ export type SessionHistoryValue =
       readonly harness?: string;
       readonly model?: string;
       readonly durationMs?: number;
+      readonly detail?: HistoryTextReference;
     }
-  | { readonly kind: "request"; readonly description: string }
-  | { readonly kind: "activity"; readonly description: string };
+  | {
+      readonly kind: "request";
+      readonly description: string;
+      readonly detail?: HistoryTextReference;
+    }
+  | {
+      readonly kind: "activity";
+      readonly description: string;
+      readonly detail?: HistoryTextReference;
+    };
 
 export interface RunSnapshot {
   readonly family: "run";

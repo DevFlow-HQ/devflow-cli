@@ -1,6 +1,6 @@
 import { screenHistoryPortion } from "./screen-text.js";
 import { createWorkspaceMentions } from "./workspace-mentions.js";
-import { createHistoryContentReader } from "./run-history-content.js";
+import { createHistoryContentReaders } from "./run-history-content.js";
 import { createHistoryLayout } from "./run-history-layout.js";
 import { useLayoutObserver } from "./layout-observer.js";
 import { useRenderer } from "@opentui/solid";
@@ -16,7 +16,6 @@ import {
   createMemo,
   mapArray,
   createSignal,
-  createRoot,
   untrack,
   For,
   Index,
@@ -100,6 +99,7 @@ import {
   buildTimelineRows,
   historyLabel,
   historyFileSpans,
+  rowContentReference,
   reportedMetadata,
   type TimelineRow,
 } from "./run-timeline-rows.js";
@@ -1649,145 +1649,56 @@ export function RunWorkbench(props: {
     }
     return visible;
   }
-  const [outputReaders, setOutputReaders] = createSignal<
-    ReadonlyMap<
-      string,
-      {
-        reference: string;
-        reader: ReturnType<typeof createHistoryContentReader>;
-        dispose: () => void;
-      }
-    >
-  >(new Map());
+  // Visible long messages and Steers read their content; Thoughts, Entry prompts
+  // and command output read only while expanded. Each shows one bounded portion.
+  const rowContent = createHistoryContentReaders(view, 8);
+  const pathContent = createHistoryContentReaders(view, 16);
   createEffect(() => {
     const visible = visibleHistoryKeys();
-    const wanted =
+    const expanded = expandedHistory();
+    rowContent.sync(
       inspection.inspecting() || transcript.reader()
         ? []
-        : timelineRows()
-            .filter(
-              (row) =>
-                visible.has(row.key) &&
-                expandedHistory().has(row.key) &&
-                row.output?.reference !== undefined,
+        : timelineRows().flatMap((row) => {
+            const reference = visible.has(row.key)
+              ? rowContentReference(row, expanded.has(row.key))
+              : undefined;
+            if (reference === undefined) return [];
+            // While following, a growing preview shows its newest portion.
+            const from =
+              row.preview && untrack(scroll).mode === "live"
+                ? ("last" as const)
+                : ("first" as const);
+            return [{ key: row.key, reference, from }];
+          }),
+    );
+  });
+  createEffect(() => {
+    const visible = visibleHistoryKeys();
+    pathContent.sync(
+      inspection.inspecting() || transcript.reader()
+        ? []
+        : timelineRows().flatMap((row) => {
+            const value = row.value;
+            if (
+              !visible.has(row.key) ||
+              (value?.kind !== "tool" && value?.kind !== "turn-diff")
             )
-            .slice(0, 8);
-    const previous = untrack(outputReaders);
-    const next = new Map(previous);
-    for (const [key, entry] of next)
-      if (
-        !wanted.some(
-          (row) =>
-            row.key === key && row.output?.reference?.id === entry.reference,
-        )
-      ) {
-        entry.dispose();
-        next.delete(key);
-      }
-    for (const row of wanted)
-      if (!next.has(row.key) && row.output?.reference) {
-        const reference = row.output.reference;
-        const entry = untrack(() =>
-          createRoot((dispose) => {
-            const reader = createHistoryContentReader(view);
-            reader.open(reference);
-            return { reference: reference.id, reader, dispose };
+              return [];
+            return (value.files ?? []).flatMap((file, index) =>
+              file.pathContent
+                ? [{ key: `${row.key}:${index}`, reference: file.pathContent }]
+                : [],
+            );
           }),
-        );
-        next.set(row.key, entry);
-      }
-    if (
-      next.size !== previous.size ||
-      [...next].some(([key, entry]) => previous.get(key) !== entry)
-    )
-      setOutputReaders(next);
-  });
-  onCleanup(() => {
-    for (const entry of outputReaders().values()) entry.dispose();
-  });
-  const [pathReaders, setPathReaders] = createSignal<
-    ReadonlyMap<
-      string,
-      {
-        row: string;
-        index: number;
-        reference: string;
-        reader: ReturnType<typeof createHistoryContentReader>;
-        dispose: () => void;
-      }
-    >
-  >(new Map());
-  createEffect(() => {
-    const visible = visibleHistoryKeys();
-    const wanted =
-      inspection.inspecting() || transcript.reader()
-        ? []
-        : timelineRows()
-            .flatMap((row) => {
-              const value = row.value;
-              if (
-                !visible.has(row.key) ||
-                (value?.kind !== "tool" && value?.kind !== "turn-diff")
-              )
-                return [];
-              return (value.files ?? []).flatMap((file, index) =>
-                file.pathContent
-                  ? [{ row: row.key, index, reference: file.pathContent }]
-                  : [],
-              );
-            })
-            .slice(0, 16);
-    const previous = untrack(pathReaders);
-    const next = new Map(previous);
-    for (const [key, entry] of next)
-      if (
-        !wanted.some(
-          (item) =>
-            item.row === entry.row &&
-            item.index === entry.index &&
-            item.reference.id === entry.reference,
-        )
-      ) {
-        entry.dispose();
-        next.delete(key);
-      }
-    for (const item of wanted) {
-      const key = `${item.row}:${item.index}`;
-      if (next.has(key)) continue;
-      next.set(
-        key,
-        untrack(() =>
-          createRoot((dispose) => {
-            const reader = createHistoryContentReader(view);
-            reader.open(item.reference);
-            return {
-              row: item.row,
-              index: item.index,
-              reference: item.reference.id,
-              reader,
-              dispose,
-            };
-          }),
-        ),
-      );
-    }
-    if (
-      next.size !== previous.size ||
-      [...next].some(([key, entry]) => previous.get(key) !== entry)
-    )
-      setPathReaders(next);
-  });
-  onCleanup(() => {
-    for (const entry of pathReaders().values()) entry.dispose();
+    );
   });
   const displayTimelineRows = createMemo(() =>
     timelineRows().map((row) => {
       const value = row.value;
       if (value?.kind === "tool" || value?.kind === "turn-diff") {
         const files = value.files?.map((file, index) => {
-          const read = pathReaders()
-            .get(`${row.key}:${index}`)
-            ?.reader.state().read;
+          const read = pathContent.get(`${row.key}:${index}`)?.state().read;
           return read?.found && read.type === "history-text"
             ? {
                 ...file,
@@ -1807,27 +1718,39 @@ export function RunWorkbench(props: {
           fileSpans: historyFileSpans(shown, row.preview ?? false),
         };
       }
-      const entry = outputReaders().get(row.key);
-      if (!entry || !row.output) return row;
-      const state = entry.reader.state();
+      const reader = rowContent.get(row.key);
+      if (!reader) return row;
+      const state = reader.state();
       const read = state.read;
-      return {
+      row = {
         ...row,
-        output: {
-          ...row.output,
-          text:
-            read?.found && read.type === "history-text"
-              ? screenHistoryPortion(read).text
-              : row.output.text,
-        },
         contentNotice: state.loading
           ? "Loading retained content…"
           : read?.found === false
             ? `Error [${read.problem.code}] · click to retry`
             : read?.found && read.next
-              ? "More retained output below"
+              ? row.output
+                ? "More retained output below"
+                : "More retained text below"
               : undefined,
       };
+      if (!read?.found || read.type !== "history-text") return row;
+      const portion = screenHistoryPortion(read).text;
+      if (row.output)
+        return { ...row, output: { ...row.output, text: portion } };
+      if (row.thought)
+        return { ...row, thought: { ...row.thought, content: portion } };
+      if (value?.kind === "entry-prompt")
+        return { ...row, value: { ...value, content: portion } };
+      if (value?.kind === "message" || value?.kind === "steer") {
+        const shown = { ...value, content: portion };
+        return {
+          ...row,
+          value: shown,
+          text: historyLabel(shown, row.preview ?? false),
+        };
+      }
+      return row;
     }),
   );
   const [spinnerFrame, setSpinnerFrame] = createSignal(0);
@@ -2004,14 +1927,13 @@ export function RunWorkbench(props: {
     const line = win().top + index;
     const row = rowAtLine(line);
     // Only the drawn Error notice retries; the rest of the row still toggles.
-    const outputRead =
-      row === undefined ? undefined : outputReaders().get(row.key)?.reader;
-    if (outputRead?.state().read?.found === false && !historyBlocked()) {
+    const contentRead = row === undefined ? undefined : rowContent.get(row.key);
+    if (contentRead?.state().read?.found === false && !historyBlocked()) {
       let rowTop = 0;
       for (const layout of timelineWrapped().rows) {
         if (layout.key === row?.key) {
           if (layout.noticeFrom >= 0 && line - rowTop >= layout.noticeFrom) {
-            outputRead.retry();
+            contentRead.retry();
             return;
           }
           break;
@@ -2062,42 +1984,42 @@ export function RunWorkbench(props: {
     openRowDetail(row);
   };
   const scrollBy = (action: TimelineAction) => {
-    const row = rowAtLine(
-      action === "down" || action === "pageDown"
-        ? win().top + win().visible - 1
-        : win().top,
-    );
-    const reader =
-      row === undefined ? undefined : outputReaders().get(row.key)?.reader;
-    if (
-      reader &&
-      (action === "down" ||
-        action === "pageDown" ||
-        action === "up" ||
-        action === "pageUp")
-    ) {
+    const down = action === "down" || action === "pageDown";
+    if (down || action === "up" || action === "pageUp") {
+      // A visible row whose drawn edge is in view and has another portion pages in
+      // place, anchored at its top. A page key can jump past an edge, so the edge
+      // need only be visible; loading and failed rows scroll as usual.
+      const shown = win();
+      const bottom = shown.top + shown.visible;
       const layouts = timelineWrapped().rows;
-      const index = layouts.findIndex((layout) => layout.key === row?.key);
-      const top = layouts
-        .slice(0, index)
-        .reduce((sum, layout) => sum + layout.height, 0);
-      const boundary =
-        action === "down" || action === "pageDown"
-          ? win().top + win().visible >= top + (layouts[index]?.height ?? 0)
-          : win().top <= top;
-      if (
-        boundary &&
-        reader.move(
-          action === "up" || action === "pageUp" ? "previous" : "next",
-        )
-      ) {
-        setScroll({
-          mode: "paused",
-          id: row?.key,
-          offset: 0,
-          prior: layouts.map((row) => row.key),
-        });
-        return;
+      const spans: { key: string; top: number; end: number }[] = [];
+      let top = 0;
+      for (const layout of layouts) {
+        const end = top + layout.height;
+        if (end > shown.top && top < bottom)
+          spans.push({ key: layout.key, top, end });
+        top = end;
+      }
+      if (!down) spans.reverse();
+      for (const span of spans) {
+        const reader = rowContent.get(span.key);
+        const read = reader?.state().read;
+        const edge = down ? span.end <= bottom : span.top >= shown.top;
+        if (
+          reader &&
+          edge &&
+          read?.found &&
+          read[down ? "next" : "previous"] !== undefined &&
+          reader.move(down ? "next" : "previous")
+        ) {
+          setScroll({
+            mode: "paused",
+            id: span.key,
+            offset: 0,
+            prior: layouts.map((row) => row.key),
+          });
+          return;
+        }
       }
     }
     setScroll((prev) =>

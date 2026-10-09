@@ -111,21 +111,27 @@ export function createSessionHistory(deps: {
   const content = createHistoryContent({
     available: deps.available,
     textEdges: deps.textEdges,
-    readStored(runId, index) {
-      const event = deps.readEvent(runId, index);
-      if ("code" in event) return event;
-      const fact = readTurnFact(event);
-      const turn = runs.get(runId)?.turns.get(event.turnId)?.record;
-      const value =
-        fact && turn ? storedHistoryValue(fact, turn, true) : undefined;
-      return value?.kind === "tool" || value?.kind === "turn-diff"
-        ? value
-        : {
-            code: "history-content-missing",
-            explanation: "The retained history fact is unavailable.",
-            remediation: "Retry the current row.",
-            possibleEffects: "none",
-          };
+    readStored(runId, at) {
+      let value: SessionHistoryValue | undefined;
+      if (at.kind === "event") {
+        const event = deps.readEvent(runId, at.index);
+        if ("code" in event) return event;
+        const fact = readTurnFact(event);
+        const turn = runs.get(runId)?.turns.get(event.turnId)?.record;
+        value = fact && turn ? storedHistoryValue(fact, turn, true) : undefined;
+      } else {
+        // Turn inputs and migrated messages are immutable canonical index facts.
+        const fact = runs.get(runId)?.facts.get(at.key);
+        value = fact?.source === "stored" ? fact.value : undefined;
+      }
+      return (
+        value ?? {
+          code: "history-content-missing",
+          explanation: "The retained history fact is unavailable.",
+          remediation: "Retry the current row.",
+          possibleEffects: "none",
+        }
+      );
     },
   });
   function pruneContent(): void {
@@ -150,7 +156,7 @@ export function createSessionHistory(deps: {
       previous.turn = fact.turn;
       previous.source = fact.source;
       previous.value = fact.value;
-      previous.eventIndex = fact.eventIndex ?? previous.eventIndex;
+      previous.stored = fact.stored ?? previous.stored;
       return;
     }
     const tail = page.at(-1);
@@ -221,7 +227,7 @@ export function createSessionHistory(deps: {
       order,
       source: "stored",
       value,
-      eventIndex: index,
+      stored: { kind: "event", index },
     });
     run.pending.delete(key);
   }
@@ -272,9 +278,10 @@ export function createSessionHistory(deps: {
       run.turns.set(record.turnId, turn);
       if (modern) putInput(run, record);
       else
-        for (const [i, entry] of entries.entries())
+        for (const [i, entry] of entries.entries()) {
+          const key = historyKey(record.turnId, "legacy", entry.seq);
           put(run, {
-            key: historyKey(record.turnId, "legacy", entry.seq),
+            key,
             turn: record,
             // The first migrated input precedes activity. All following
             // messages keep authoritative transcript order, including user rows.
@@ -288,7 +295,9 @@ export function createSessionHistory(deps: {
               role: entry.role === "user" ? "user" : "assistant",
               content: entry.content,
             },
+            stored: { kind: "fact", key },
           });
+        }
     }
     for (const [index, event] of records.events.entries())
       applyEvent(run, event, index);
@@ -312,11 +321,13 @@ export function createSessionHistory(deps: {
     return "found" in run ? undefined : run;
   }
   function putInput(run: RunHistory, turn: TurnRecord): void {
+    const key = historyKey(turn.turnId, "input");
     put(run, {
-      key: historyKey(turn.turnId, "input"),
+      key,
       turn,
       order: -1,
       source: "stored",
+      stored: { kind: "fact", key },
       value:
         turn.origin === "managed"
           ? { kind: "entry-prompt", content: turn.input }
@@ -679,7 +690,7 @@ export function createSessionHistory(deps: {
             turn: turn.record,
             order: turn.orders.get(key)!,
             source: "stored",
-            eventIndex: row?.eventIndex,
+            stored: row?.stored,
             value,
           });
         run.pending.delete(key);

@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createRoot, createSignal, onCleanup, untrack } from "solid-js";
 import type {
   HistoryContentRead,
   HistoryTextReference,
@@ -50,10 +50,18 @@ export function createHistoryContentReader(
   onCleanup(close);
   return {
     state,
-    open(reference: HistoryTextReference): void {
+    /** `last` follows a growing value: it reads the final portion after the first. */
+    open(
+      reference: HistoryTextReference,
+      from: "first" | "last" = "first",
+    ): void {
       close();
       selected = reference;
-      void load();
+      void load().then(() => {
+        const read = state().read;
+        if (from === "last" && selected === reference && read?.found)
+          if (read.last !== undefined) void load(read.last);
+      });
     },
     close,
     retry(): void {
@@ -78,6 +86,67 @@ export function createHistoryContentReader(
       if (cursor === undefined) return false;
       void load(cursor);
       return true;
+    },
+  };
+}
+
+type Reader = ReturnType<typeof createHistoryContentReader>;
+
+/** At most `limit` keyed readers, one per wanted reference. A reader is released
+ * when its key leaves the wanted set or names a different exact version. */
+export function createHistoryContentReaders(
+  deps: Pick<ProjectionPort, "readHistoryContent" | "releaseHistoryRead">,
+  limit: number,
+) {
+  type Entry = {
+    readonly reference: string;
+    readonly reader: Reader;
+    readonly dispose: () => void;
+  };
+  const [entries, setEntries] = createSignal<ReadonlyMap<string, Entry>>(
+    new Map(),
+  );
+  onCleanup(() => {
+    for (const entry of untrack(entries).values()) entry.dispose();
+  });
+  return {
+    get: (key: string): Reader | undefined => entries().get(key)?.reader,
+    sync(
+      wanted: readonly {
+        readonly key: string;
+        readonly reference: HistoryTextReference;
+        readonly from?: "first" | "last";
+      }[],
+    ): void {
+      const kept = wanted.slice(0, limit);
+      const previous = untrack(entries);
+      const next = new Map(previous);
+      for (const [key, entry] of next)
+        if (
+          !kept.some(
+            (item) => item.key === key && item.reference.id === entry.reference,
+          )
+        ) {
+          entry.dispose();
+          next.delete(key);
+        }
+      for (const item of kept)
+        if (!next.has(item.key))
+          next.set(
+            item.key,
+            untrack(() =>
+              createRoot((dispose) => {
+                const reader = createHistoryContentReader(deps);
+                reader.open(item.reference, item.from);
+                return { reference: item.reference.id, reader, dispose };
+              }),
+            ),
+          );
+      if (
+        next.size !== previous.size ||
+        [...next].some(([key, entry]) => previous.get(key) !== entry)
+      )
+        setEntries(next);
     },
   };
 }

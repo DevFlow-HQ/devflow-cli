@@ -1,3 +1,4 @@
+import { encodedJsonBytes } from "./encoded-json.js";
 import type {
   ObserverEnd,
   ProjectionSnapshot,
@@ -11,9 +12,10 @@ type DeliveredUpdate<S extends ProjectionSnapshot> = Exclude<
 >;
 
 // The bound on one opened subscription's unread backlog (#306), taken from T3 Code's
-// LiveStreamBudget (1,000 items, 8 MiB of serialized JSON). Payload is estimated
-// rather than serialized: the UTF-16 code units of its strings plus one unit per
-// other value and per key name, so measuring never allocates a copy or throws.
+// LiveStreamBudget (1,000 items, 8 MiB of serialized JSON). Session history counts
+// exact encoded UTF-8 JSON bytes without serializing (#490). Other families estimate:
+// the UTF-16 code units of strings plus one unit per other value and per key name,
+// so measuring never allocates a copy or throws.
 // Producer and consumers share one event loop, so a reading consumer drains its
 // backlog between producer turns; the bound is reached by an observer that stopped
 // reading, or by any observer within one synchronous burst past it — either way
@@ -28,8 +30,10 @@ const measured = new WeakMap<object, number>();
 /**
  * One opened Projection subscription. Session history retains the latest unread
  * page and later whole-row previews (#488); other families deliver FIFO (#306).
- * Its unread backlog is bounded by count and retained payload; an empty backlog always admits one
- * update, so an observer that is only between reads never loses a large snapshot.
+ * Its unread backlog is bounded by count and retained payload. Session history
+ * charges exact encoded UTF-8 JSON bytes, and its bounded rows always fit (#490),
+ * so it has no exception. Other families estimate units, and an empty backlog
+ * always admits one update, so an observer only between reads keeps a large one.
  * An update that would pass either bound ends the subscription `observer-lagged`.
  *
  * Ending (`end`) is the one terminal path: it releases the undelivered backlog,
@@ -58,10 +62,11 @@ export class UpdateStream<
       waiting({ value: update, done: false });
       return;
     }
-    if (
-      update.kind === "durable" &&
-      update.snapshot.family === "session-history"
-    ) {
+    const history =
+      update.kind === "history-preview" ||
+      (update.kind === "durable" &&
+        update.snapshot.family === "session-history");
+    if (update.kind === "durable" && history) {
       this.queue = [];
       this.retainedUnits = 0;
     } else if (update.kind === "history-preview") {
@@ -79,10 +84,11 @@ export class UpdateStream<
         return true;
       });
     }
-    const units = unitsOf(update);
+    const units = unitsOf(update, history);
     if (
       this.queue.length >= RETAINED_UPDATES ||
-      (this.queue.length > 0 && this.retainedUnits + units > RETAINED_UNITS)
+      ((history || this.queue.length > 0) &&
+        this.retainedUnits + units > RETAINED_UNITS)
     ) {
       this.end("observer-lagged");
       return;
@@ -150,16 +156,21 @@ export class UpdateStream<
   }
 }
 
-function unitsOf(update: DeliveredUpdate<ProjectionSnapshot>): number {
-  const payload =
-    update.kind === "durable"
+function unitsOf(
+  update: DeliveredUpdate<ProjectionSnapshot>,
+  history: boolean,
+): number {
+  // History charges the whole delivered update; pages are per-observer objects.
+  const payload = history
+    ? update
+    : update.kind === "durable"
       ? update.snapshot
       : update.kind === "history-preview"
         ? update
         : update.overlay;
   const cached = measured.get(payload);
   if (cached !== undefined) return cached;
-  const units = measure(payload);
+  const units = history ? encodedJsonBytes(payload) : measure(payload);
   measured.set(payload, units);
   return units;
 }

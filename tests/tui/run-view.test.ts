@@ -23,6 +23,7 @@ import { openCatalog } from "../../src/catalog/catalog.js";
 import { createApplication } from "../helpers/application.js";
 import { makeTempDir } from "../helpers/tempDir.js";
 import { openLiveRun, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
+import { readHistoryText } from "../application/history-content-fixture.js";
 
 class UpdateQueue<T> implements AsyncIterable<T> {
   private readonly values: T[] = [];
@@ -624,8 +625,36 @@ test("m10-audit-history-latest-delivery: the production history client reads who
       at: new Date(),
     }).ok,
   );
+  // The real Port can no longer lag one bounded history reader (#490), so the
+  // test ends the opened stream itself, as a transport closure would.
+  let interrupt: (() => void) | undefined;
+  const port: ProjectionPort = Object.create(run.port, {
+    openProjection: {
+      value: (selector: Parameters<ProjectionPort["openProjection"]>[0]) => {
+        const opened = run.port.openProjection(selector);
+        const closed = new Promise<IteratorResult<ProjectionUpdate>>(
+          (resolve) => {
+            interrupt = () =>
+              resolve({
+                done: false,
+                value: { kind: "closed", reason: "observer-lagged" },
+              });
+          },
+        );
+        const source = opened.updates[Symbol.asyncIterator]();
+        return {
+          ...opened,
+          updates: {
+            [Symbol.asyncIterator]: () => ({
+              next: () => Promise.race([source.next(), closed]),
+            }),
+          },
+        };
+      },
+    },
+  });
   const { history, dispose } = createRoot((dispose) => ({
-    history: createLiveRunWorkbenchView(run.port).openHistory(run.runId, "s"),
+    history: createLiveRunWorkbenchView(port).openHistory(run.runId, "s"),
     dispose,
   }));
   t.after(dispose);
@@ -679,20 +708,31 @@ test("m10-audit-history-latest-delivery: the production history client reads who
   assert.equal(rows[1]?.position, original.position);
   assert.equal(rows[1]?.source, "stored");
   assert.equal(history.freshness().kind, "current");
-  preview("trigger", "Before loss");
+  preview("trigger", "Before large");
   preview("oversized", "X".repeat(8 * 1024 * 1024 + 1));
-  preview("overflow", "After loss");
+  preview("overflow", "After large");
+  await microtasksUntil(() => {
+    const page = history.snapshot();
+    const value = page.result.found
+      ? page.result.history.rows.at(-1)?.value
+      : undefined;
+    return value?.kind === "message" && value.content === "After large";
+  });
+  assert.equal(history.freshness().kind, "current");
+  const bounded = history.snapshot();
+  assert.ok(bounded.result.found);
+  assert.equal(bounded.result.history.rows.length, 6);
+  const oversized = bounded.result.history.rows.at(-2)?.value;
+  assert.ok(oversized?.kind === "message" && oversized.reference);
+  assert.ok(Buffer.byteLength(JSON.stringify(oversized)) < 32_768);
+  interrupt!();
   await microtasksUntil(() => history.freshness().kind === "disconnected");
   const lost = history.freshness();
   assert.ok(lost.kind === "disconnected");
   assert.equal(lost.reason, "observer-lagged");
   const lastKnown = history.snapshot();
   assert.ok(lastKnown.result.found);
-  assert.equal(
-    lastKnown.result.history.rows.length,
-    4,
-    "terminal must discard the oversized queued preview",
-  );
+  assert.equal(lastKnown.result.history.rows.length, 6);
   history.reconnect();
   await microtasksUntil(() => {
     const page = history.snapshot();
@@ -707,10 +747,13 @@ test("m10-audit-history-latest-delivery: the production history client reads who
   assert.deepEqual(reopened.result.history.rows.at(-1)?.value, {
     kind: "message",
     role: "assistant",
-    content: "After loss",
+    content: "After large",
   });
   const large = reopened.result.history.rows.at(-2)?.value;
-  assert.ok(large?.kind === "message");
-  assert.equal(large.content.length, 8 * 1024 * 1024 + 1);
+  assert.ok(large?.kind === "message" && large.reference);
+  assert.equal(
+    await readHistoryText(run.port, large.reference),
+    "X".repeat(8 * 1024 * 1024 + 1),
+  );
   assert.notEqual(reopened.result.history.rows[1]?.id, original.id);
 });

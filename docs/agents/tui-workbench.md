@@ -93,9 +93,9 @@ Before changing completion, Slash discovery, drafts, prompt captures, or restora
   Live readers follow the opened end; paused content keeps its anchor, as for a click. Expand-all stays rejected.
 - Output/Thoughts toggle by row id. Call patches and Turn diffs inspect complete supplied content in bounded exact-version portions (#489).
   Output collapses before wrapping at ten logical lines or `10 * Math.max(20, width - 6)` code points, whichever comes first; the omission count names
-  lines or characters truthfully. It never auto-expands. Referenced output loads one portion at a time; scrolling at its boundary reads the adjacent portion.
-  Diff inspection has no content cap; Home/End read first/last portions, `r` retries locally, and `f` toggles supplied file metadata. Thought ticks change
-  headings; modal/input key ownership stays unchanged.
+  lines or characters truthfully and never auto-expands. Visible referenced messages/Steers and expanded output/Thoughts/Entry prompts show one portion
+  (#490); scrolling past a visible edge reads the next, a followed live preview opens at its newest, and cut metadata previews inspect `detail`. Diff
+  inspection has no content cap; Home/End read first/last portions, `r` retries, `f` toggles file metadata. Thought ticks change headings; modal/input keys stay.
 - Turn-diff and file-change rows show the first ten structured file names in reported order, wrapped without shortening (#502). Append `N more files`
   after the title's status when names remain; live updates never expand the list. A file-change row with structured files omits its repeated input.
   Large visible names read bounded text on demand; clicking a wrapped name inspects the complete path.

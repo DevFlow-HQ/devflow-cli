@@ -1,4 +1,6 @@
 import type { TurnFact } from "../harness/harness.js";
+import { createHash } from "node:crypto";
+import { fitEncoded } from "./encoded-json.js";
 import { attemptStepId } from "../run/execution/execution.js";
 import type { TurnRecord } from "../run/store/store.js";
 import type {
@@ -6,13 +8,18 @@ import type {
   SessionHistoryValue,
 } from "./projection-port.js";
 
+/** Where a stored fact's immutable retained text is read again: its append-only
+ * event, or an immutable indexed fact such as a Turn input or migrated message. */
+export type StoredAt =
+  | { readonly kind: "event"; readonly index: number }
+  | { readonly kind: "fact"; readonly key: string };
 export interface HistoryFact {
   readonly key: string;
   turn: TurnRecord;
   readonly order: number;
   source: "stored" | "preview";
   value: SessionHistoryValue;
-  eventIndex?: number;
+  stored?: StoredAt;
 }
 export function historyKey(
   turnId: string,
@@ -186,6 +193,14 @@ export function resultValue(
       : { durationMs: duration }),
   };
 }
+/** Bundle-authored Step ids are row headers inside the encoded allowance too. A cut
+ * id keeps a digest, so distinct Steps stay distinct dividers; the full id remains
+ * on the `run` Projection. */
+function stepHeader(step: string): string {
+  if (fitEncoded(step, 512, 1024) === step) return step;
+  const digest = createHash("sha256").update(step).digest("hex").slice(0, 8);
+  return `${fitEncoded(step, 500, 1000)} #${digest}`;
+}
 export function historyRow(
   fact: HistoryFact,
   identity: { readonly id: string; readonly position: string },
@@ -196,7 +211,7 @@ export function historyRow(
     source: fact.source,
     turnStartedAt: fact.turn.admittedAt,
     turn: fact.turn.turnId,
-    ...(step === undefined ? {} : { step }),
+    ...(step === undefined ? {} : { step: stepHeader(step) }),
     value: fact.value,
   };
 }

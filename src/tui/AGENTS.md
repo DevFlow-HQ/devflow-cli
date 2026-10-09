@@ -6,6 +6,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - History text edge analysis scans transient portions without retaining them; exact reads stay raw and `screenText` still owns filtering (#489).
 - History demand readers own independent Solid roots; viewport membership changes dispose those roots without resetting retained readers (#489).
+  `createHistoryContentReaders` is the one keyed reader set for row content and long paths; `rowContentReference` owns which rows read (#490).
 
 - Before changing Start a Run fields, focus, launch assessment, or refusal routing, read [launch presentation](../../docs/agents/tui-launch.md).
 - OpenTUI `<text>` lays out multiple children as separate inline spans, which garbles a line (fragments drop or overlap). Give every `<text>` a single

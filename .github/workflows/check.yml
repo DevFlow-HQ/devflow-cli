@@ -217,6 +217,12 @@ jobs:
           tests/application/history-tool-content.test.ts
           tests/tui/history-tool-content.test.tsx
           tests/tui/history-text-edges.test.ts
+      - name: m10-audit-history-bounded-content
+        run: >-
+          bun run test --
+          -t '^m10-audit-history-bounded-content(:|$)'
+          tests/application/history-bounded-content.test.ts
+          tests/tui/history-bounded-content.test.tsx
       - name: m10-audit-history-index
         run: >-
           bun run test --

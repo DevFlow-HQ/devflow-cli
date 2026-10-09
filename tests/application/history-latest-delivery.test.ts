@@ -10,6 +10,7 @@ import type {
 } from "../../src/application/projection-port.js";
 import { awaitSettled } from "../helpers/settleOperation.js";
 import { openLiveRun } from "../helpers/liveRun.js";
+import { readHistoryText } from "./history-content-fixture.js";
 
 function openHistory({
   t,
@@ -393,7 +394,7 @@ test("m10-audit-history-latest-delivery: a preview-only burst retains each newes
   assert.deepEqual(await pending, { done: true, value: undefined });
 });
 
-test("m10-audit-history-latest-delivery: loss releases the latest state, ignores later pushes, unregisters once and permits an independent observer", async (t) => {
+test("m10-audit-history-latest-delivery: an oversized preview reaches every reader bounded; close unregisters once and permits an independent observer", async (t) => {
   const timer = clock();
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
@@ -418,22 +419,26 @@ test("m10-audit-history-latest-delivery: loss releases the latest state, ignores
     });
     timer.flush();
   };
+  // Content past the whole allowance no longer ends a reader (#490): rows are bounded.
   preview("large", "x".repeat(8 * 1024 * 1024 + 1));
-  const large = await other.next();
-  assert.ok(large.value?.kind === "history-preview");
-  preview("next", "After large"); // Existing oversized-content handling still applies.
-  const after = await other.next();
-  assert.ok(after.value?.kind === "history-preview");
-  assert.deepEqual(await reader.next(), {
-    done: false,
-    value: { kind: "closed", reason: "observer-lagged" },
-  });
+  preview("next", "After large");
+  for (const iterator of [reader, other]) {
+    const large = await iterator.next();
+    assert.ok(
+      large.value?.kind === "history-preview" &&
+        large.value.row.value.kind === "message" &&
+        large.value.row.value.reference !== undefined,
+    );
+    assert.ok(Buffer.byteLength(JSON.stringify(large.value)) < 32_768);
+    const after = await iterator.next();
+    assert.ok(after.value?.kind === "history-preview");
+  }
+  lost.close();
+  lost.close();
   assert.deepEqual(await reader.next(), { done: true, value: undefined });
   preview("next", "Later");
   assert.ok((await other.next()).value?.kind === "history-preview");
   assert.deepEqual(await reader.next(), { done: true, value: undefined });
-  lost.close();
-  lost.close();
   const reopened = openHistory({
     t,
     port: run.port,
@@ -590,7 +595,7 @@ test("m10-audit-history-latest-delivery: deleting the subject prioritizes one te
   assert.equal(reopened.snapshot.result.found, false);
 });
 
-test("m10-audit-history-latest-delivery: replacing a row preview releases its previous payload charge", async (t) => {
+test("m10-audit-history-latest-delivery: replacing a large row preview retains only its bounded latest value", async (t) => {
   const timer = clock();
   const run = await openLiveRun(t, { scheduleHistoryPreview: timer.schedule });
   t.after(run.finish);
@@ -620,12 +625,15 @@ test("m10-audit-history-latest-delivery: replacing a row preview releases its pr
     content: "Small replacement",
   });
   const two = await reader.next();
-  assert.ok(two.value?.kind === "history-preview");
-  assert.deepEqual(two.value.row.value, {
-    kind: "message",
-    role: "assistant",
-    content: large,
-  });
+  assert.ok(
+    two.value?.kind === "history-preview" &&
+      two.value.row.value.kind === "message" &&
+      two.value.row.value.reference !== undefined,
+  );
+  assert.equal(
+    await readHistoryText(run.port, two.value.row.value.reference),
+    large,
+  );
   const pending = reader.next();
   await assertPending(pending);
   page.close();
