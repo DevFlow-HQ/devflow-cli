@@ -2,6 +2,9 @@ import { awaitSettled } from "../helpers/settleOperation.js";
 import { openFakeRunGroup } from "../run/store/fake-git-process.js";
 import type { SessionHistoryRow } from "../../src/application/projection-port.js";
 import assert from "node:assert/strict";
+import { Database } from "bun:sqlite";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { openLiveRun } from "../helpers/liveRun.js";
 
@@ -29,6 +32,35 @@ for (const size of [100, 10_000])
     let flush: (() => void) | undefined;
     const run = await openLiveRun(t, {
       onHistoryRead: () => reads++,
+      seedRun: ({ owner, storeHome }) => {
+        for (let i = 0; i < size; i += 100) admit(owner, `past-${i / 100}`);
+        admit(owner);
+        const groups = join(storeHome, "runs");
+        const database = new Database(
+          join(groups, readdirSync(groups)[0]!, owner.record.runId, "run.db"),
+        );
+        try {
+          // Seed historical facts atomically before Application indexes them.
+          // The live assertions below still exercise the real Store.
+          const insert = database.query(
+            "INSERT INTO turn_event (turn_id, kind, payload, at) VALUES (?, 'thought', ?, ?)",
+          );
+          database.transaction(() => {
+            for (let i = 0; i < size; i++)
+              insert.run(
+                `past-${Math.floor(i / 100)}`,
+                JSON.stringify({
+                  summaryId: `old-${i}`,
+                  content: `Thought ${i}`,
+                  historyOrder: i % 100,
+                }),
+                "2026-10-06T00:00:00.000Z",
+              );
+          })();
+        } finally {
+          database.close();
+        }
+      },
       scheduleHistoryPreview: (next) => {
         flush = next;
         return () => {
@@ -37,20 +69,7 @@ for (const size of [100, 10_000])
       },
     });
     t.after(run.finish);
-    for (let i = 0; i < size; i++) {
-      const turnId = `past-${Math.floor(i / 100)}`;
-      if (i % 100 === 0) admit(run.owner, turnId);
-      run.owner.appendTurnEvent({
-        turnId,
-        kind: "thought",
-        payload: JSON.stringify({
-          summaryId: `old-${i}`,
-          content: `Thought ${i}`,
-        }),
-        at: new Date(),
-      });
-    }
-    admit(run.owner);
+    assert.equal(run.owner.turnEvents().length, size);
     const page = run.port.openProjection({
       family: "session-history",
       runId: run.runId,

@@ -49,6 +49,11 @@ export async function openLiveRun(
   t: TestContext,
   options: {
     onHistoryRead?: () => void;
+    /** Populate canonical fixture facts before Application observes this owner. */
+    seedRun?: (context: {
+      readonly owner: RunOwner;
+      readonly storeHome: string;
+    }) => void;
     scheduleHistoryPreview?: (
       callback: () => void,
       delayMs: number,
@@ -60,11 +65,16 @@ export async function openLiveRun(
   const workspace = realpathSync.native(makeTempDir("secant-lag-ws-"));
   const storeHome = makeTempDir("secant-lag-store-");
   const rawGroup = openRunGroup(storeHome, workspace);
+  let seeded = false;
   const runGroup = {
     ...rawGroup,
     acquireRun(...args: Parameters<typeof rawGroup.acquireRun>) {
       const owner = rawGroup.acquireRun(...args);
       if (owner === undefined) return undefined;
+      if (!seeded) {
+        options.seedRun?.({ owner, storeHome });
+        seeded = true;
+      }
       return {
         ...owner,
         get record() {
