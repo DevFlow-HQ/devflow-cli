@@ -1,6 +1,7 @@
 import stripAnsi from "strip-ansi";
 import type {
   HistoryContentRead,
+  HistoryTextEdgeResume,
   HistoryTextEdges,
 } from "../application/projection-port.js";
 
@@ -25,40 +26,74 @@ export function screenText(text: string): ScreenedText {
   return screenStripped(stripAnsi(text));
 }
 
+interface OscAttempt {
+  readonly start: number;
+  escape: boolean;
+  /** The introducer's `crBefore`, and its `crAt` for a later portion. */
+  readonly crBefore: boolean;
+  readonly crAt: boolean;
+}
+interface CsiAttempt {
+  readonly start: number;
+  phase: "intermediates" | "digits" | "separator";
+  digits: number;
+  fallback?: number;
+}
+/** Scanner state captured at a portion's end, carried as opaque JSON data. */
+interface EdgeScan {
+  readonly position: number;
+  readonly previous: string;
+  readonly cr: boolean;
+  readonly osc?: OscAttempt;
+  readonly csi?: CsiAttempt;
+}
+
 /** Match strip-ansi's control grammar without retaining an unbounded OSC string.
  * Application supplies bounded transient portions; only crossing spans survive.
  * `dropLeadingLf` reports that the last unit before `start` surviving ANSI
- * removal is CR, so the portion's first surviving LF already rendered. */
+ * removal is CR, so the portion's first surviving LF already rendered. With
+ * `resume`, `source` starts at that captured position; every capture reads as
+ * if `end` were the next portion's `start`, so resumed edges equal fresh ones. */
 export const historyTextEdges: (
   source: Iterable<string>,
   start: number,
   end: number,
-) => HistoryTextEdges = (source, start, end) => {
+  resume?: HistoryTextEdgeResume,
+) => {
+  readonly edges: HistoryTextEdges;
+  readonly resume?: HistoryTextEdgeResume;
+} = (source, start, end, resume) => {
+  const from = resume as EdgeScan | undefined;
   let dropLeading = 0,
     dropTrailing = 0,
-    crBefore = false;
-  let position = 0,
-    previous = "";
+    crBefore = from?.cr ?? false,
+    // `crBefore` for a portion starting at the current position.
+    crAt = crBefore;
+  let position = from?.position ?? 0,
+    previous = from?.previous ?? "";
   // Open attempts defer `crBefore`: CSI units are never CR, and a terminated
   // OSC restores the value from its introducer.
-  let osc: { start: number; escape: boolean; crBefore: boolean } | undefined;
-  let csi:
-    | {
-        start: number;
-        phase: "intermediates" | "digits" | "separator";
-        digits: number;
-        fallback?: number;
-      }
-    | undefined;
+  let osc: OscAttempt | undefined = from?.osc && { ...from.osc };
+  let csi: CsiAttempt | undefined = from?.csi && { ...from.csi };
+  let captured: EdgeScan | undefined;
   const final = /[0-9A-PR-TZcf-nq-uy=><~]/;
   const intermediate = new Set(["[", "]", "(", ")", "#", ";", "?"]);
   const digit = /[0-9]/;
   const special = /[\p{Cc}]/gu;
-  const edges = (): HistoryTextEdges => ({
-    dropLeading,
-    dropTrailing,
-    dropLeadingLf: crBefore,
+  const result = () => ({
+    edges: { dropLeading, dropTrailing, dropLeadingLf: crBefore },
+    ...(captured === undefined ? {} : { resume: { ...captured } }),
   });
+  function capture(): void {
+    if (position !== end || captured !== undefined) return;
+    captured = {
+      position,
+      previous,
+      cr: crAt,
+      ...(osc === undefined ? {} : { osc: { ...osc, crBefore: osc.crAt } }),
+      ...(csi === undefined ? {} : { csi: { ...csi } }),
+    };
+  }
   function span(from: number, to: number): void {
     if (from < start && to > start)
       dropLeading = Math.max(dropLeading, Math.min(end - start, to - start));
@@ -71,24 +106,27 @@ export const historyTextEdges: (
     // Units after the matched prefix, or a whole unmatched attempt, stay visible.
     if ((csi.fallback ?? csi.start) < Math.min(position, start))
       crBefore = false;
+    if ((csi.fallback ?? csi.start) < position) crAt = false;
     csi = undefined;
   }
-  function terminate(terminated: NonNullable<typeof osc>): void {
+  function terminate(terminated: OscAttempt): void {
     span(terminated.start, position + 1);
     // Everything since the introducer is removed, including nested attempts.
     crBefore = terminated.crBefore;
+    crAt = terminated.crAt;
     osc = undefined;
     csi = undefined;
   }
   for (const portion of source) {
     let at = 0;
     while (at < portion.length) {
+      capture();
       if (
         position >= end &&
         (!osc || osc.start >= end) &&
         (!csi || csi.start >= end)
       )
-        return edges();
+        return result();
       if (!csi) {
         // Ordinary content needs no per-character walk, even in a huge line.
         special.lastIndex = at;
@@ -99,10 +137,12 @@ export const historyTextEdges: (
         );
         if (stop > at) {
           if (position < start) crBefore = false;
+          crAt = false;
           previous = portion[stop - 1]!;
           position += stop - at;
           at = stop;
           if (at >= portion.length) break;
+          capture();
         }
       }
       const char = portion[at]!;
@@ -125,7 +165,7 @@ export const historyTextEdges: (
           position === csi.start + 1 &&
           previous === "\x1b"
         )
-          osc = { start: csi.start, escape: false, crBefore };
+          osc = { start: csi.start, escape: false, crBefore, crAt };
         consumed = true;
         if (csi.phase === "intermediates" && intermediate.has(char)) {
           // Intermediate bytes keep the introducer open.
@@ -155,15 +195,19 @@ export const historyTextEdges: (
       if (!consumed) {
         if (char === "\x1b" || char === "\x9b")
           csi = { start: position, phase: "intermediates", digits: 0 };
-        else if (position < start) crBefore = char === "\r";
+        else {
+          if (position < start) crBefore = char === "\r";
+          crAt = char === "\r";
+        }
       }
       previous = char;
       position++;
       at++;
     }
   }
+  capture();
   fallback();
-  return edges();
+  return result();
 };
 
 export function screenHistoryPortion(

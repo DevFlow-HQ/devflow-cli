@@ -65,6 +65,7 @@ export async function openLiveRun(
       callback: () => void,
       delayMs: number,
     ) => () => void;
+    observeHistoryRetention?: (runId: string, values: number) => void;
   } = {},
 ): Promise<LiveRun> {
   const catalog = openCatalog(makeTempDir("secant-lag-home-"));

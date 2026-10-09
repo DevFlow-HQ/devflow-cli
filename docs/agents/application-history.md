@@ -28,13 +28,17 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
 - History content (#489, #490) reads UTF-16 portions of at most 4,095 units (4,096 when one keeps a surrogate pair split at its start) or eight normalized
   items, with at most 32 active traversals per Application.
   Continuations stay on one exact version. Stored references keep append-only event coordinates, or the immutable index fact for Turn inputs and
-  migrated messages, never cached bodies; release drops a traversal's body. Live previews and derived Turn results are held versions that survive
+  migrated messages, never cached bodies; release drops a traversal's body. A text continuation carries the total, its resuming part, and the edge
+  analyser's state, so a sequential read is linear; a seek walks from the start (#514). Live previews and derived Turn results are held versions that survive
   only current windows and active traversals. A live preview over a stored start reads its own value. Closing one observer releases only its reads.
   Every variable-length field is a preview with a reference: messages, Thoughts, Entry prompts and Steers inline up to 4,095 units and 12 KiB
   encoded (`reference`); Agent calls, Requests, activity and Turn results cap strings at 512 units/1 KiB (`detail`); tool strings keep 512 units,
   paths 128 units/256 bytes, and file names the existing ten. Cut Step headers keep a digest. Each projected row stays under 18 KiB.
   Trusted TUI composition supplies text edge analysis privately; read callers cannot receive a source iterator. Raw content stays exact.
 - `session-history` (#412–#417) bounds messages/tools/Thoughts/Turn diffs together at 200 with one 50 ms budget for every pending row.
+  The index keeps values only for each Session's newest 200 rows; an evicted row keeps order, identity, and its Store coordinate and reads its value
+  again on re-entry; a Store failure on that read fails the whole page, as initialization does. The index and its content versions are
+  released once no observer or live owner holds the Run (#514).
   Final output replaces previews; empty clears, absent retains incomplete tails. Partials invalidate previews without settling tools; last observer cancels the timer.
   Transcript Resources retain separate entry ids across reads/prepend, excluded from headless; pages still hold 20 entries.
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and

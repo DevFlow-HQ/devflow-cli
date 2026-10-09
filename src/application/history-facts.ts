@@ -13,9 +13,11 @@ import type {
 export type StoredAt =
   | { readonly kind: "event"; readonly index: number }
   | { readonly kind: "fact"; readonly key: string };
+/** The Turn fields history reads. The index never keeps a Turn's input body. */
+export type HistoryTurn = Omit<TurnRecord, "input">;
 export interface HistoryFact {
   readonly key: string;
-  turn: TurnRecord;
+  turn: HistoryTurn;
   readonly order: number;
   source: "stored" | "preview";
   value: SessionHistoryValue;
@@ -27,6 +29,19 @@ export function historyKey(
   id?: string | number,
 ): string {
   return JSON.stringify([turnId, kind, ...(id === undefined ? [] : [id])]);
+}
+/** The parts `historyKey` joined. */
+export function readHistoryKey(key: string): {
+  readonly turnId: string;
+  readonly kind: string;
+  readonly id?: string | number;
+} {
+  const [turnId, kind, id] = JSON.parse(key) as [
+    string,
+    string,
+    (string | number)?,
+  ];
+  return { turnId, kind, id };
 }
 export function storedFactKey(
   turnId: string,
@@ -53,7 +68,7 @@ export function storedFactKey(
 }
 export function storedHistoryValue(
   fact: TurnFact,
-  turn: TurnRecord,
+  turn: HistoryTurn,
   modern: boolean,
 ): SessionHistoryValue | undefined {
   switch (fact.kind) {
@@ -169,7 +184,7 @@ export function storedHistoryValue(
   }
 }
 export function resultValue(
-  turn: TurnRecord,
+  turn: HistoryTurn,
   harness?: string,
   model = turn.modelChoice?.model,
 ): SessionHistoryValue {

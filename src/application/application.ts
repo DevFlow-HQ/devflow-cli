@@ -177,6 +177,7 @@ import type {
   ProjectionSelector,
   Problem,
   HistoryTextEdges,
+  HistoryTextEdgeResume,
   DiagnosticReference,
   ResourceRead,
   ResourceReference,
@@ -361,12 +362,21 @@ interface InteractiveContext extends ClaimedRun {
 // when the launch Workspace becomes approved.
 
 /** Trusted presentation composition analyses bounded transient segments without
- * retaining them. Projection Port callers receive only content and edge counts. */
+ * retaining them. Projection Port callers receive only content and edge counts.
+ * `resume` is the analyser's own state at a previous portion's `end`; with it,
+ * `source` begins at that position instead of the body's start, so a sequential
+ * read never walks the body again (#514). */
 export type HistoryTextEdgeAnalyser = (
   source: Iterable<string>,
   start: number,
   end: number,
-) => HistoryTextEdges;
+  resume?: HistoryTextEdgeResume,
+) => {
+  readonly edges: HistoryTextEdges;
+  /** State at `end`, for the portion that starts there. */
+  readonly resume?: HistoryTextEdgeResume;
+};
+
 export interface ApplicationDependencies {
   readonly historyTextEdges?: HistoryTextEdgeAnalyser;
   /** Invocation-start notices supplied by composition to both clients. */
@@ -416,6 +426,9 @@ export interface ApplicationDependencies {
     callback: () => void,
     delayMs: number,
   ) => () => void;
+  /** Observes how many row values a Run's history index retains after each open,
+   *  publish and release; a test asserts the window bound through it (#514). */
+  readonly observeHistoryRetention?: (runId: string, values: number) => void;
   /** Whether the launching client can relay human turn-taking (#116). Headless
    *  cannot, so it refuses an `interactive-agent` Bundle at Preflight; the TUI sets
    *  this true. Defaults to false. */
@@ -543,6 +556,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   const runObservers = new Map<string, Set<UpdateStream>>();
   const history = createSessionHistory({
     textEdges: deps.historyTextEdges,
+    retained: deps.observeHistoryRetention,
     observedOwner: (runId) => {
       const tracking = runs.get(runId);
       return tracking !== undefined && !tracking.done
@@ -579,6 +593,25 @@ export function createApplication(deps: ApplicationDependencies): Application {
         if (!acquired.ok) return acquired.problem;
         try {
           return acquired.owner.turnEventAt(index) ?? runStoreDamaged(runId);
+        } finally {
+          if (acquired.transient) acquired.owner.close();
+        }
+      } catch (cause) {
+        return { ...runStoreDamaged(runId), cause };
+      }
+    },
+    readConversation(runId, session, before) {
+      try {
+        const acquired = acquireForRead(runId);
+        if (!acquired.ok) return acquired.problem;
+        try {
+          const { owner } = acquired;
+          return owner.transcriptPage({
+            session,
+            cutoff: owner.transcriptCutoff(),
+            before,
+            limit: 1,
+          }).entries[0];
         } finally {
           if (acquired.transient) acquired.owner.close();
         }

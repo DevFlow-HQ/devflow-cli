@@ -416,7 +416,7 @@ test("m10-audit-history-tool-content: every rendered boundary reconstructs exist
       })(),
       4095,
       Math.min(8190, entry.source.length),
-    );
+    ).edges;
     assert.ok(edges.dropLeading >= 0 && edges.dropLeading <= 4095);
     let reconstructed = "";
     for (let offset = 0; offset < entry.source.length; offset += 4095) {
@@ -428,7 +428,7 @@ test("m10-audit-history-tool-content: every rendered boundary reconstructs exist
         })(),
         offset,
         end,
-      );
+      ).edges;
       const part = entry.source.slice(offset, end);
       reconstructed += screenHistoryPortion({
         found: true,

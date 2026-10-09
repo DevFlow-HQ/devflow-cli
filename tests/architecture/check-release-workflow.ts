@@ -237,6 +237,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-turn-event-refusal",
   "m10-followup-typed-turn-facts",
   "m10-audit-headless-output-parity",
+  "m10-followup-bounded-history-cost",
 ] as const;
 
 function testFilesIn(script: string): string[] {

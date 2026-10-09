@@ -539,6 +539,13 @@ jobs:
           tests/headless/run.test.ts
           tests/catalog/catalog.test.ts
           tests/application/preferences.test.ts
+      - name: m10-followup-bounded-history-cost
+        run: >-
+          bun run test --
+          -t '^m10-followup-bounded-history-cost(:|$)'
+          tests/application/history-bounded-cost.test.ts
+          tests/tui/history-bounded-cost.test.ts
+          tests/tui/history-text-edges.test.ts
       - name: M10 runtime failure regressions
         run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test

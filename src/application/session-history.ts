@@ -12,6 +12,7 @@ import type {
   TurnRecord,
   TurnEventRecord,
   TranscriptEntryRecord,
+  TranscriptOrder,
 } from "../run/store/store.js";
 import type { LiveObservation } from "../run/execution/execution.js";
 import { runSessionNotFound } from "./problems.js";
@@ -26,11 +27,13 @@ import type { SubscriptionLifecycle } from "./subscription-lifecycle.js";
 import type { UpdateStream } from "./update-stream.js";
 import {
   historyKey,
+  readHistoryKey,
   storedFactKey,
   storedHistoryValue,
   resultValue,
   historyRow,
   type HistoryFact,
+  type HistoryTurn,
 } from "./history-facts.js";
 
 interface HistoryRecords {
@@ -43,20 +46,39 @@ interface HistoryRecords {
 type HistoryRead =
   | { readonly found: true; readonly records: HistoryRecords }
   | { readonly found: false; readonly problem: Problem };
+/** The newest stored event for a key: its coordinate and what ordering reads. */
+interface StoredMark {
+  readonly index: number;
+  readonly kind: TurnFact["kind"];
+  readonly running: boolean;
+}
 interface IndexedTurn {
-  record: TurnRecord;
+  record: HistoryTurn;
   readonly modern: boolean;
-  readonly stored: Map<string, TurnFact>;
+  readonly stored: Map<string, StoredMark>;
   readonly orders: Map<string, number>;
   nextOrder: number;
   model?: string;
 }
+/** Outside its Session's newest 200 rows a fact keeps only order, identity and
+ * where its value is read again, so retention follows the window (#514). */
+type IndexedFact = Omit<HistoryFact, "value"> & {
+  value?: SessionHistoryValue;
+};
+const WINDOW = 200;
+// Settlement changes only these stored values: delivery, disposition, or a running outcome.
+const SETTLING = new Set<TurnFact["kind"]>([
+  "steer",
+  "agent-call",
+  "tool-call",
+  "tool-partial",
+]);
 interface RunHistory {
   readonly owner: object | undefined;
   readonly turns: Map<string, IndexedTurn>;
   readonly sessions: Set<string>;
-  readonly facts: Map<string, HistoryFact>;
-  readonly pages: Map<string, HistoryFact[]>;
+  readonly facts: Map<string, IndexedFact>;
+  readonly pages: Map<string, IndexedFact[]>;
   readonly pending: Set<string>;
   eventCount: number;
   harness?: string;
@@ -72,17 +94,17 @@ interface Observer {
   >;
   readonly prefix: string;
   serial: number;
-  cutoff?: HistoryFact;
+  cutoff?: IndexedFact;
   hasEarlier: boolean;
   last?: SessionHistorySnapshot;
 }
-function compare(a: HistoryFact, b: HistoryFact): number {
+function compare(a: IndexedFact, b: IndexedFact): number {
   return compareConversationOrder(
     { turnSequence: a.turn.sequence, position: a.order },
     { turnSequence: b.turn.sequence, position: b.order },
   );
 }
-function lowerBound(facts: readonly HistoryFact[], fact: HistoryFact): number {
+function lowerBound(facts: readonly IndexedFact[], fact: IndexedFact): number {
   let lo = 0,
     hi = facts.length;
   while (lo < hi) {
@@ -92,18 +114,33 @@ function lowerBound(facts: readonly HistoryFact[], fact: HistoryFact): number {
   }
   return lo;
 }
-/** Stored facts are indexed once. Event updates touch one item; projections visit only the newest window. */
+const missingFact: Problem = {
+  code: "history-content-missing",
+  explanation: "The retained history fact is unavailable.",
+  remediation: "Retry the current row.",
+  possibleEffects: "none",
+};
+/** Stored facts are indexed once. Event updates touch one item; projections visit only
+ * the newest window, and only its facts keep values. An index lives while an observer
+ * or the live owner holds its Run. */
 export function createSessionHistory(deps: {
   readonly read: (runId: string) => HistoryRead;
   readonly readEvent: (
     runId: string,
     index: number,
   ) => TurnEventRecord | Problem;
+  /** The newest conversation fact in a Session ordered before `before`. */
+  readonly readConversation: (
+    runId: string,
+    session: string,
+    before: TranscriptOrder,
+  ) => TranscriptEntryRecord | undefined | Problem;
   readonly available: (runId: string) => true | Problem;
   readonly textEdges?: HistoryTextEdgeAnalyser;
   readonly observedOwner: (runId: string) => object | undefined;
   readonly subscriptions: SubscriptionLifecycle;
   readonly schedule: (callback: () => void, delayMs: number) => () => void;
+  readonly retained?: (runId: string, values: number) => void;
 }) {
   const runs = new Map<string, RunHistory>();
   const observers = new Set<Observer>();
@@ -120,33 +157,101 @@ export function createSessionHistory(deps: {
         const turn = runs.get(runId)?.turns.get(event.turnId)?.record;
         value = fact && turn ? storedHistoryValue(fact, turn, true) : undefined;
       } else {
-        // Turn inputs and migrated messages are immutable canonical index facts.
-        const fact = runs.get(runId)?.facts.get(at.key);
-        value = fact?.source === "stored" ? fact.value : undefined;
+        // Turn inputs and migrated messages are immutable canonical facts.
+        const run = runs.get(runId);
+        const fact = run?.facts.get(at.key);
+        if (run !== undefined && fact?.source === "stored")
+          return fact.value ?? storedValue(runId, run, fact);
       }
-      return (
-        value ?? {
-          code: "history-content-missing",
-          explanation: "The retained history fact is unavailable.",
-          remediation: "Retry the current row.",
-          possibleEffects: "none",
-        }
-      );
+      return value ?? missingFact;
     },
   });
   function pruneContent(): void {
     content.prune(
       [...runs.values()].flatMap((run) =>
         [...run.pages.values()].flatMap((page) =>
-          page.slice(-200).map((fact) => fact.value),
+          page
+            .slice(-WINDOW)
+            .flatMap((fact) => (fact.value === undefined ? [] : [fact.value])),
         ),
       ),
     );
+  }
+  function inputValue(turn: HistoryTurn, input: string): SessionHistoryValue {
+    return turn.origin === "managed"
+      ? { kind: "entry-prompt", content: input }
+      : { kind: "message", role: "user", content: input };
+  }
+  function eventValue(
+    runId: string,
+    turn: IndexedTurn,
+    index: number,
+  ): SessionHistoryValue | Problem {
+    const event = deps.readEvent(runId, index);
+    if ("code" in event) return event;
+    const fact = readTurnFact(event);
+    return (
+      (fact && storedHistoryValue(fact, turn.record, turn.modern)) ??
+      missingFact
+    );
+  }
+  /** Read a fact's value again from canonical Store facts, never from a cached body. */
+  function storedValue(
+    runId: string,
+    run: RunHistory,
+    fact: IndexedFact,
+  ): SessionHistoryValue | Problem {
+    const { turnId, kind, id } = readHistoryKey(fact.key);
+    const turn = run.turns.get(turnId);
+    if (turn === undefined) return missingFact;
+    if (kind === "result")
+      return resultValue(turn.record, run.harness, turn.model);
+    if (kind === "input" || kind === "legacy") {
+      // A Turn input orders before the Turn's first activity; a migrated message at its own sequence.
+      const seq = typeof id === "number" ? id : undefined;
+      const entry = deps.readConversation(runId, turn.record.session, {
+        turnSequence: turn.record.sequence,
+        position: seq ?? 0,
+        seq: seq === undefined ? 0 : seq + 1,
+      });
+      if (entry !== undefined && "code" in entry) return entry;
+      if (
+        entry?.turnId !== turnId ||
+        (seq === undefined ? entry.order.position !== -1 : entry.seq !== seq)
+      )
+        return missingFact;
+      return seq === undefined
+        ? inputValue(turn.record, entry.content)
+        : {
+            kind: "message",
+            role: entry.role === "user" ? "user" : "assistant",
+            content: entry.content,
+          };
+    }
+    const index =
+      turn.stored.get(fact.key)?.index ??
+      (fact.stored?.kind === "event" ? fact.stored.index : undefined);
+    return index === undefined ? missingFact : eventValue(runId, turn, index);
+  }
+  /** A fact leaving the window keeps no value. A preview leaves as its stored fact, if any. */
+  function evict(run: RunHistory, fact: IndexedFact): void {
+    if (fact.source === "preview") {
+      const mark = run.turns.get(fact.turn.turnId)?.stored.get(fact.key);
+      if (mark === undefined) {
+        remove(run, fact.key);
+        return;
+      }
+      fact.source = "stored";
+      fact.stored = { kind: "event", index: mark.index };
+      run.pending.delete(fact.key);
+    }
+    fact.value = undefined;
   }
   function put(run: RunHistory, fact: HistoryFact): void {
     const previous = run.facts.get(fact.key);
     if (
       previous?.source === fact.source &&
+      previous.value !== undefined &&
       isDeepStrictEqual(previous.value, fact.value)
     )
       return;
@@ -157,14 +262,20 @@ export function createSessionHistory(deps: {
       previous.source = fact.source;
       previous.value = fact.value;
       previous.stored = fact.stored ?? previous.stored;
+      if (lowerBound(page, previous) < page.length - WINDOW)
+        evict(run, previous);
       return;
     }
     const tail = page.at(-1);
-    if (tail === undefined || compare(tail, fact) < 0) page.push(fact);
-    else page.splice(lowerBound(page, fact), 0, fact);
+    const at =
+      tail === undefined || compare(tail, fact) < 0
+        ? page.length
+        : lowerBound(page, fact);
+    page.splice(at, 0, fact);
     run.facts.set(fact.key, fact);
-    for (const older of page.slice(0, Math.max(0, page.length - 200)))
-      if (older.source === "preview") remove(run, older.key);
+    // One insertion moves exactly one fact out of the window: itself or the old first row.
+    const boundary = page.length - WINDOW - 1;
+    if (boundary >= 0) evict(run, at <= boundary ? fact : page[boundary]!);
   }
   function remove(run: RunHistory, key: string): void {
     const fact = run.facts.get(key);
@@ -208,7 +319,12 @@ export function createSessionHistory(deps: {
       return;
     }
     const order = appearance(turn, key, fact.data.historyOrder ?? index);
-    turn.stored.set(key, fact);
+    turn.stored.set(key, {
+      index,
+      kind: fact.kind,
+      running:
+        fact.kind === "tool-call" && fact.data.outcome.kind === "running",
+    });
     const value = storedHistoryValue(fact, turn.record, turn.modern);
     if (value === undefined) {
       if (fact.kind === "thought") remove(run, key);
@@ -264,7 +380,7 @@ export function createSessionHistory(deps: {
       entries.push(entry);
       conversation.set(entry.turnId, entries);
     }
-    for (const record of records.turns) {
+    for (const { input, ...record } of records.turns) {
       const entries = conversation.get(record.turnId) ?? [];
       const modern = entries.some((entry) => entry.kind !== undefined);
       const turn: IndexedTurn = {
@@ -276,7 +392,7 @@ export function createSessionHistory(deps: {
         model: record.modelChoice?.model,
       };
       run.turns.set(record.turnId, turn);
-      if (modern) putInput(run, record);
+      if (modern) putInput(run, record, input);
       else
         for (const [i, entry] of entries.entries()) {
           const key = historyKey(record.turnId, "legacy", entry.seq);
@@ -320,7 +436,7 @@ export function createSessionHistory(deps: {
     const run = initialize(runId);
     return "found" in run ? undefined : run;
   }
-  function putInput(run: RunHistory, turn: TurnRecord): void {
+  function putInput(run: RunHistory, turn: HistoryTurn, input: string): void {
     const key = historyKey(turn.turnId, "input");
     put(run, {
       key,
@@ -328,11 +444,45 @@ export function createSessionHistory(deps: {
       order: -1,
       source: "stored",
       stored: { kind: "fact", key },
-      value:
-        turn.origin === "managed"
-          ? { kind: "entry-prompt", content: turn.input }
-          : { kind: "message", role: "user", content: turn.input },
+      value: inputValue(turn, input),
     });
+  }
+  /** Fill the window's evicted values again, in place. */
+  function windowFacts(
+    runId: string,
+    run: RunHistory,
+    session: string,
+  ): HistoryFact[] | Problem {
+    const facts: HistoryFact[] = [];
+    for (const fact of (run.pages.get(session) ?? []).slice(-WINDOW)) {
+      if (fact.value === undefined) {
+        const value = storedValue(runId, run, fact);
+        if ("code" in value) return value;
+        fact.value = value;
+      }
+      facts.push(fact as HistoryFact);
+    }
+    return facts;
+  }
+  function reportRetention(runId: string): void {
+    if (deps.retained === undefined) return;
+    let values = 0;
+    for (const fact of runs.get(runId)?.facts.values() ?? [])
+      if (fact.value !== undefined) values++;
+    deps.retained(runId, values);
+  }
+  /** Drop an index no observer or live owner holds, with its content versions. */
+  function releaseIdle(runId: string): void {
+    const run = runs.get(runId);
+    if (
+      run === undefined ||
+      deps.observedOwner(runId) !== undefined ||
+      [...observers].some((observer) => observer.runId === runId)
+    )
+      return;
+    run.cancel?.();
+    runs.delete(runId);
+    content.closeRun(runId);
   }
   function snapshot(observer: Observer): SessionHistorySnapshot {
     const run = initialize(observer.runId);
@@ -351,18 +501,19 @@ export function createSessionHistory(deps: {
         },
       };
     const page = run.pages.get(observer.session) ?? [];
-    if (page.length > 200) {
-      const cutoff = page.at(-201)!;
+    if (page.length > WINDOW) {
+      const cutoff = page.at(-WINDOW - 1)!;
       if (observer.cutoff === undefined || compare(cutoff, observer.cutoff) > 0)
         observer.cutoff = cutoff;
       observer.hasEarlier = true;
     }
-    const facts = page
-      .slice(-200)
-      .filter(
-        (fact) =>
-          observer.cutoff === undefined || compare(fact, observer.cutoff) > 0,
-      );
+    const window = windowFacts(observer.runId, run, observer.session);
+    if ("code" in window)
+      return { ...base, result: { found: false, problem: window } };
+    const facts = window.filter(
+      (fact) =>
+        observer.cutoff === undefined || compare(fact, observer.cutoff) > 0,
+    );
     const retained = new Set(facts.map((fact) => fact.key));
     for (const key of observer.identities.keys())
       if (!retained.has(key)) observer.identities.delete(key);
@@ -440,6 +591,8 @@ export function createSessionHistory(deps: {
     pruneContent();
     const run = runs.get(runId);
     if (run !== undefined) cancelIdle(run);
+    releaseIdle(runId);
+    reportRetention(runId);
   }
   function observePreview(
     runId: string,
@@ -458,11 +611,7 @@ export function createSessionHistory(deps: {
     )
       return;
     const stored = turn.stored.get(key);
-    if (
-      stored !== undefined &&
-      (stored.kind !== "tool-call" || stored.data.outcome.kind !== "running")
-    )
-      return;
+    if (stored !== undefined && !stored.running) return;
     const order = appearance(turn, key);
     const firstAppearance = !run.facts.has(key);
     put(run, { key, turn: turn.record, order, source: "preview", value });
@@ -530,6 +679,8 @@ export function createSessionHistory(deps: {
               run.cancel = undefined;
               run.pending.clear();
             }
+            releaseIdle(runId);
+            reportRetention(runId);
           }
         },
       );
@@ -545,6 +696,7 @@ export function createSessionHistory(deps: {
       observers.add(observer);
       const current = snapshot(observer);
       observer.last = current;
+      reportRetention(runId);
       return {
         snapshot: current,
         updates,
@@ -638,7 +790,7 @@ export function createSessionHistory(deps: {
     admitted(runId: string, request: AdmitTurnRequest): void {
       const run = runs.get(runId);
       if (run === undefined || run.turns.has(request.turnId)) return;
-      const record: TurnRecord = {
+      const record: HistoryTurn = {
         turnId: request.turnId,
         attemptId: request.attemptId,
         session: request.session,
@@ -646,7 +798,6 @@ export function createSessionHistory(deps: {
         kind: request.kind,
         modelChoice: request.modelChoice,
         sequence: run.turns.size,
-        input: request.input,
         admittedAt: request.at.toISOString(),
       };
       run.turns.set(record.turnId, {
@@ -658,7 +809,7 @@ export function createSessionHistory(deps: {
         model: record.modelChoice?.model,
       });
       run.sessions.add(record.session);
-      putInput(run, record);
+      putInput(run, record, request.input);
     },
     settled(runId: string, request: SettleTurnRequest): void {
       const run = runs.get(runId);
@@ -676,23 +827,36 @@ export function createSessionHistory(deps: {
         settledAt: request.at.toISOString(),
       };
       for (const key of turn.orders.keys()) {
+        run.pending.delete(key);
         const row = run.facts.get(key);
         const stored = turn.stored.get(key);
+        // A preview always settles. A stored value changes only for a settling
+        // kind, and an evicted one is read again with the settled Turn on re-entry.
+        const refresh =
+          row?.source === "preview" ||
+          (row?.value !== undefined &&
+            stored !== undefined &&
+            SETTLING.has(stored.kind));
+        if (row === undefined || !refresh) continue;
         const value =
           stored === undefined
             ? undefined
-            : storedHistoryValue(stored, turn.record, turn.modern);
-        if (row?.source === "preview" && value === undefined) remove(run, key);
+            : eventValue(runId, turn, stored.index);
+        if (value !== undefined && "code" in value) {
+          // Never keep the unsettled value: the next page reads it again.
+          evict(run, row);
+          continue;
+        }
+        if (row.source === "preview" && value === undefined) remove(run, key);
         else if (value !== undefined)
           put(run, {
             key,
             turn: turn.record,
             order: turn.orders.get(key)!,
             source: "stored",
-            stored: row?.stored,
+            stored: row.stored,
             value,
           });
-        run.pending.delete(key);
       }
       putResult(run, turn);
       cancelIdle(run);
@@ -708,7 +872,7 @@ export function createSessionHistory(deps: {
         if (observer.runId === runId) observer.updates.end("subject-gone");
       runs.get(runId)?.cancel?.();
       runs.delete(runId);
-      content.closeRun(runId, true);
+      content.closeRun(runId);
     },
     shutdown(): void {
       stopped = true;

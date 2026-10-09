@@ -14,6 +14,7 @@ import type {
   HistoryContentRead,
   HistoryContentRequest,
   HistoryItemsReference,
+  HistoryTextEdgeResume,
   HistoryTextReference,
   Problem,
   SessionFileChange,
@@ -57,11 +58,35 @@ const addressSchema = z.object({
   line: z.number().int().nonnegative().optional(),
 });
 type Address = z.infer<typeof addressSchema>;
+const count = z.number().int().nonnegative();
+/** A part's place in a text body: `[group, sub, index]`. Group 0 holds the
+ * bounded header parts; group 1+f is file f, whose sub 0 is its header and sub
+ * 1+h is its hunk h. Each level skips to its index without visiting earlier parts. */
+type PartAt = readonly [group: number, sub: number, index: number];
+const START: PartAt = [0, 0, 0];
 const cursorSchema = z.object({
   readId: z.string(),
   reference: z.string(),
-  offset: z.number().int().nonnegative(),
+  offset: count,
+  total: count.optional(),
+  // A sequential read resumes at the part holding `offset - 1`, which starts at
+  // `skipped`, and resumes edge analysis from its state at `edgesAt`.
+  from: z
+    .object({
+      at: z.tuple([count, count, count]),
+      skipped: count,
+      edges: z.record(z.string(), z.unknown()).optional(),
+      edgesAt: count.optional(),
+    })
+    .optional(),
 });
+type Cursor = z.infer<typeof cursorSchema>;
+interface Resume {
+  readonly at: PartAt;
+  readonly skipped: number;
+  readonly edges?: HistoryTextEdgeResume;
+  readonly edgesAt?: number;
+}
 type Version = {
   readonly id: string;
   readonly runId: string;
@@ -347,105 +372,14 @@ export function createHistoryContent(deps: {
         : shown.output;
     return { ...shown, ...fileFields, output, detail };
   }
-  function* detail(value: Content): Generator<string> {
-    switch (value.kind) {
-      case "message":
-      case "thought":
-      case "entry-prompt":
-      case "steer":
-        yield value.content;
-        return;
-      case "request":
-      case "activity":
-        yield value.description;
-        return;
-      case "agent-call":
-        yield "Call\n";
-        yield value.call;
-        yield "\nReason\n";
-        yield value.reason;
-        if (value.refusal !== undefined) {
-          yield "\nRefusal\n";
-          yield value.refusal;
-        }
-        return;
-      case "turn-result":
-        yield "Result\n";
-        yield value.result;
-        if (value.harness !== undefined) {
-          yield "\nHarness\n";
-          yield value.harness;
-        }
-        if (value.model !== undefined) {
-          yield "\nModel\n";
-          yield value.model;
-        }
-        return;
-    }
-    if (value.kind === "turn-diff") {
-      yield value.content;
-      if (!value.files.some((file) => file.patch !== undefined)) return;
-      yield "\n\nSupplied file patches";
-    } else {
-      yield "Input\n";
-      yield value.input;
-      if (value.cwd !== undefined) {
-        yield "\nCwd\n";
-        yield value.cwd;
-      }
-      if (value.count !== undefined) {
-        yield `\nCount\n${value.count.value} `;
-        yield value.count.unit;
-      }
-      if (
-        value.outcome.kind === "failed" &&
-        value.outcome.error !== undefined
-      ) {
-        yield "\nError\n";
-        yield value.outcome.error;
-      }
-      if (
-        value.outcome.kind === "declined" &&
-        value.outcome.reason !== undefined
-      ) {
-        yield "\nRefusal\n";
-        yield value.outcome.reason;
-      }
-      if (value.nativeOmission !== undefined) {
-        yield "\nHarness omission\n";
-        yield value.nativeOmission;
-      }
-    }
-    for (const file of value.files ?? []) {
-      yield "\n\n";
-      yield file.path;
-      if (file.kind !== undefined) yield `\n${file.kind}`;
-      if (file.additions !== undefined) yield ` +${file.additions}`;
-      if (file.removals !== undefined) yield ` -${file.removals}`;
-      yield "\n";
-      if (file.patch === undefined) yield "No patch supplied";
-      else if (file.patch.kind === "unified") yield file.patch.content;
-      else
-        for (const hunk of file.patch.hunks) {
-          yield `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n`;
-          for (const line of hunk.lines) {
-            yield line;
-            yield "\n";
-          }
-        }
-    }
-  }
   const filesOf = (value: Content) =>
     value.kind === "tool" || value.kind === "turn-diff"
       ? value.files
       : undefined;
-  function* textParts(value: Content, address: Address): Generator<string> {
+  /** The bounded count of parts before any file, each whole. */
+  function headParts(value: Content, address: Address): readonly string[] {
     const file = filesOf(value)?.[address.file ?? -1];
     const patch = file?.patch;
-    const hunk =
-      patch?.kind === "structured"
-        ? patch.hunks[address.hunk ?? -1]
-        : undefined;
     switch (address.field) {
       case "content":
         if (
@@ -453,51 +387,165 @@ export function createHistoryContent(deps: {
           value.kind === "thought" ||
           value.kind === "entry-prompt" ||
           value.kind === "steer"
-        ) {
-          yield value.content;
-          return;
-        }
+        )
+          return [value.content];
         break;
       case "detail":
-        yield* detail(value);
-        return;
+        return detailHead(value);
       case "file-list":
-        for (const file of filesOf(value) ?? []) {
-          if (file.kind !== undefined) yield `${file.kind} `;
-          yield file.path;
-          if (file.additions !== undefined) yield ` +${file.additions}`;
-          if (file.removals !== undefined) yield ` -${file.removals}`;
-          yield "\n";
-        }
-        return;
+        return [];
       case "output":
-        if (value.kind === "tool" && value.output) {
-          yield value.output.text;
-          return;
-        }
+        if (value.kind === "tool" && value.output) return [value.output.text];
         break;
       case "path":
-        if (file) {
-          yield file.path;
-          return;
-        }
+        if (file) return [file.path];
         break;
       case "patch":
-        if (patch?.kind === "unified") {
-          yield patch.content;
-          return;
-        }
+        if (patch?.kind === "unified") return [patch.content];
         break;
       case "line": {
+        const hunk =
+          patch?.kind === "structured"
+            ? patch.hunks[address.hunk ?? -1]
+            : undefined;
         const line = hunk?.lines[address.line ?? -1];
-        if (line !== undefined) {
-          yield line;
-          return;
-        }
+        if (line !== undefined) return [line];
         break;
       }
     }
     throw new Error("Mismatched content target");
+  }
+  function detailHead(value: Content): readonly string[] {
+    switch (value.kind) {
+      case "message":
+      case "thought":
+      case "entry-prompt":
+      case "steer":
+        return [value.content];
+      case "request":
+      case "activity":
+        return [value.description];
+      case "agent-call":
+        return [
+          "Call\n",
+          value.call,
+          "\nReason\n",
+          value.reason,
+          ...(value.refusal === undefined
+            ? []
+            : ["\nRefusal\n", value.refusal]),
+        ];
+      case "turn-result":
+        return [
+          "Result\n",
+          value.result,
+          ...(value.harness === undefined
+            ? []
+            : ["\nHarness\n", value.harness]),
+          ...(value.model === undefined ? [] : ["\nModel\n", value.model]),
+        ];
+      case "turn-diff":
+        return value.files.some((file) => file.patch !== undefined)
+          ? [value.content, "\n\nSupplied file patches"]
+          : [value.content];
+    }
+    const outcome = value.outcome;
+    return [
+      "Input\n",
+      value.input,
+      ...(value.cwd === undefined ? [] : ["\nCwd\n", value.cwd]),
+      ...(value.count === undefined
+        ? []
+        : [`\nCount\n${value.count.value} `, value.count.unit]),
+      ...(outcome.kind === "failed" && outcome.error !== undefined
+        ? ["\nError\n", outcome.error]
+        : []),
+      ...(outcome.kind === "declined" && outcome.reason !== undefined
+        ? ["\nRefusal\n", outcome.reason]
+        : []),
+      ...(value.nativeOmission === undefined
+        ? []
+        : ["\nHarness omission\n", value.nativeOmission]),
+    ];
+  }
+  function fileGroups(
+    value: Content,
+    address: Address,
+  ): readonly SessionFileChange[] {
+    if (address.field === "file-list") return filesOf(value) ?? [];
+    if (address.field !== "detail") return [];
+    if (value.kind === "tool") return value.files ?? [];
+    return value.kind === "turn-diff" &&
+      value.files.some((file) => file.patch !== undefined)
+      ? value.files
+      : [];
+  }
+  function fileHead(
+    file: SessionFileChange,
+    field: Address["field"],
+  ): readonly string[] {
+    const counts = [
+      ...(file.additions === undefined ? [] : [` +${file.additions}`]),
+      ...(file.removals === undefined ? [] : [` -${file.removals}`]),
+    ];
+    if (field === "file-list")
+      return [
+        ...(file.kind === undefined ? [] : [`${file.kind} `]),
+        file.path,
+        ...counts,
+        "\n",
+      ];
+    return [
+      "\n\n",
+      file.path,
+      ...(file.kind === undefined ? [] : [`\n${file.kind}`]),
+      ...counts,
+      "\n",
+      ...(file.patch === undefined
+        ? ["No patch supplied"]
+        : file.patch.kind === "unified"
+          ? [file.patch.content]
+          : []),
+    ];
+  }
+  /** Text parts in order from `from`, each with its own place. */
+  function* textParts(
+    value: Content,
+    address: Address,
+    [group, sub, index]: PartAt = START,
+  ): Generator<readonly [string, PartAt]> {
+    const head = headParts(value, address);
+    for (let i = group === 0 ? index : head.length; i < head.length; i++)
+      yield [head[i]!, [0, 0, i]];
+    const files = fileGroups(value, address);
+    for (let f = Math.max(0, group - 1); f < files.length; f++) {
+      const resumed = f === group - 1;
+      const file = files[f]!;
+      const header = fileHead(file, address.field);
+      const first = !resumed ? 0 : sub === 0 ? index : header.length;
+      for (let i = first; i < header.length; i++)
+        yield [header[i]!, [1 + f, 0, i]];
+      const patch = file.patch;
+      if (address.field !== "detail" || patch?.kind !== "structured") continue;
+      for (
+        let h = resumed ? Math.max(0, sub - 1) : 0;
+        h < patch.hunks.length;
+        h++
+      ) {
+        const hunk = patch.hunks[h]!;
+        // A header, then each line and its newline.
+        const parts = 1 + 2 * hunk.lines.length;
+        for (let k = resumed && h === sub - 1 ? index : 0; k < parts; k++)
+          yield [
+            k === 0
+              ? `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n`
+              : k % 2 === 1
+                ? hunk.lines[(k - 1) / 2]!
+                : "\n",
+            [1 + f, 1 + h, k],
+          ];
+      }
+    }
   }
   function itemPage(
     value: Content,
@@ -589,15 +637,14 @@ export function createHistoryContent(deps: {
       for (const [id, read] of reads) if (read.scope === scope) release(id);
       for (const version of versions.values()) version.previews.delete(scope);
     },
-    closeRun(runId: string, deleted = false): void {
+    /** Drops every read and version of a Run whose index is released or deleted. */
+    closeRun(runId: string): void {
       for (const [id, read] of reads)
         if (read.version.runId === runId) release(id);
       for (const [id, version] of versions)
-        if (version.runId === runId && (deleted || version.source === "held"))
-          versions.delete(id);
-      if (deleted)
-        for (const [id, version] of storedVersions)
-          if (version.runId === runId) storedVersions.delete(id);
+        if (version.runId === runId) versions.delete(id);
+      for (const [id, version] of storedVersions)
+        if (version.runId === runId) storedVersions.delete(id);
     },
     shutdown(): void {
       for (const id of reads.keys()) release(id);
@@ -616,6 +663,7 @@ export function createHistoryContent(deps: {
         if (available !== true) return { found: false, problem: available };
         let offset = 0;
         let read: Read | undefined;
+        let resumed: Cursor | undefined;
         if (request.continuation !== undefined) {
           const cursor = cursorSchema.parse(unseal(request.continuation));
           readId = cursor.readId;
@@ -628,6 +676,7 @@ export function createHistoryContent(deps: {
           )
             return missing("history-continuation-mismatch");
           offset = cursor.offset;
+          resumed = cursor;
         } else {
           if (reads.size >= ACTIVE_LIMIT) return missing("history-read-limit");
           const value =
@@ -650,10 +699,11 @@ export function createHistoryContent(deps: {
           };
           reads.set(readId, read);
         }
-        const cursor = (at: number) =>
-          seal({ readId, reference: reference.id, offset: at });
+        const value = read.value;
         if (reference.type === "history-items") {
-          const page = itemPage(read.value, version, address, offset);
+          const cursor = (at: number) =>
+            seal({ readId, reference: reference.id, offset: at });
+          const page = itemPage(value, version, address, offset);
           return {
             found: true,
             type: reference.type,
@@ -664,18 +714,31 @@ export function createHistoryContent(deps: {
             next: page.more ? cursor(offset + ITEM_SIZE) : undefined,
           };
         }
-        let total = 0;
-        if (reference.type === "history-text")
-          for (const part of textParts(read.value, address))
-            total += part.length;
+        // The exact version is immutable while pinned, so its total is walked once.
+        let total = resumed?.total;
+        if (total === undefined) {
+          total = 0;
+          for (const [part] of textParts(value, address)) total += part.length;
+        }
+        const cursor = (at: number, from?: Resume) =>
+          seal({ readId, reference: reference.id, offset: at, total, from });
         // A fixed grid plus one boundary code unit keeps reverse reads exact,
         // including surrogate pairs, without a cursor stack or whole-body join.
-        let skipped = 0,
-          content = "",
-          more = false;
         const startOffset = Math.max(0, offset - 1);
         const endOffset = offset + TEXT_SIZE + 1;
-        for (const part of textParts(read.value, address)) {
+        const nextStart = offset + TEXT_SIZE - 1;
+        // Only a sequential read resumes; a seek walks the parts from the start.
+        const from =
+          resumed?.from !== undefined && resumed.from.skipped <= startOffset
+            ? resumed.from
+            : undefined;
+        let skipped = from?.skipped ?? 0,
+          content = "",
+          more = false;
+        let following: { at: PartAt; skipped: number } | undefined;
+        for (const [part, at] of textParts(value, address, from?.at)) {
+          if (following === undefined && skipped + part.length > nextStart)
+            following = { at, skipped };
           if (skipped + part.length <= startOffset) {
             skipped += part.length;
             continue;
@@ -704,34 +767,59 @@ export function createHistoryContent(deps: {
         )
           end--;
         more ||= content.length > end;
-        function* portions(): Generator<string> {
-          for (const part of textParts(read!.value, address))
-            for (let at = 0; at < part.length; at += TEXT_SIZE)
-              yield part.slice(at, at + TEXT_SIZE);
-        }
         const exact = content.slice(start, end);
-        const edges = deps.textEdges?.(
-          portions(),
-          startOffset + start,
-          startOffset + start + exact.length,
+        const begin = startOffset + start;
+        const finish = begin + exact.length;
+        // Transient bounded portions from `position`, beginning at a part known to precede it.
+        function* portions(
+          at: PartAt,
+          partStart: number,
+          position: number,
+        ): Generator<string> {
+          for (const [part] of textParts(value, address, at)) {
+            const first = Math.max(0, position - partStart);
+            partStart += part.length;
+            for (let cut = first; cut < part.length; cut += TEXT_SIZE)
+              yield part.slice(cut, cut + TEXT_SIZE);
+          }
+        }
+        const state =
+          from?.edges !== undefined && from.edgesAt === begin
+            ? from.edges
+            : undefined;
+        const analysed = deps.textEdges?.(
+          state === undefined
+            ? portions(START, 0, 0)
+            : portions(from!.at, from!.skipped, begin),
+          begin,
+          finish,
+          state,
+        );
+        const lastOffset = Math.max(
+          0,
+          Math.floor((total - 1) / TEXT_SIZE) * TEXT_SIZE,
         );
         return {
           found: true,
           type: reference.type,
           content: exact,
-          ...(edges ? { edges } : {}),
+          ...(analysed ? { edges: analysed.edges } : {}),
           readId: readId!,
           first: offset > 0 ? cursor(0) : undefined,
-          last:
-            offset <
-            Math.max(0, Math.floor((total - 1) / TEXT_SIZE) * TEXT_SIZE)
-              ? cursor(
-                  Math.max(0, Math.floor((total - 1) / TEXT_SIZE) * TEXT_SIZE),
-                )
-              : undefined,
+          last: offset < lastOffset ? cursor(lastOffset) : undefined,
           previous:
             offset > 0 ? cursor(Math.max(0, offset - TEXT_SIZE)) : undefined,
-          next: more ? cursor(offset + TEXT_SIZE) : undefined,
+          next: more
+            ? cursor(
+                offset + TEXT_SIZE,
+                following && {
+                  ...following,
+                  ...(analysed?.resume === undefined
+                    ? {}
+                    : { edges: analysed.resume, edgesAt: finish }),
+                },
+              )
+            : undefined,
         };
       } catch (cause) {
         if (readId) release(readId);

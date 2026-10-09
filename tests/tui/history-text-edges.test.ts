@@ -21,7 +21,7 @@ function screen(content: string, start = 0, raw = content) {
             })(),
             start,
             start + content.length,
-          ),
+          ).edges,
         }),
   } as const;
   const text = screenHistoryPortion(read).text;
@@ -200,5 +200,72 @@ test("m10-audit-history-tool-content: arbitrary portion cuts reconstruct whole-b
       whole(raw),
       JSON.stringify({ raw, cuts }),
     );
+  }
+});
+
+/** Sequential reads resume the analyser from the state it captured at the previous portion's end. */
+function resumedEdges(raw: string, cuts: readonly number[]) {
+  const bounds = [0, ...cuts, raw.length];
+  const fresh = [],
+    resumed = [];
+  let state: ReturnType<typeof historyTextEdges>["resume"];
+  for (let index = 0; index + 1 < bounds.length; index++) {
+    const start = bounds[index]!,
+      end = bounds[index + 1]!;
+    const source = (from: number) =>
+      (function* () {
+        for (let at = from; at < raw.length; at += GRID)
+          yield raw.slice(at, at + GRID);
+      })();
+    fresh.push(historyTextEdges(source(0), start, end).edges);
+    const read = historyTextEdges(
+      source(state === undefined ? 0 : start),
+      start,
+      end,
+      state,
+    );
+    resumed.push(read.edges);
+    state = read.resume;
+    if (end < raw.length) assert.ok(state, `state captured at ${end}`);
+  }
+  return { fresh, resumed };
+}
+
+test("m10-followup-bounded-history-cost: resumed sequential edges equal fresh whole-body analysis", () => {
+  for (const { raw } of literals)
+    for (let cut = 1; cut < raw.length; cut++) {
+      if (/[\uD800-\uDBFF]/.test(raw[cut - 1]!)) continue;
+      const { fresh, resumed } = resumedEdges(raw, [cut]);
+      assert.deepEqual(resumed, fresh, `${JSON.stringify(raw)} @${cut}`);
+    }
+  for (const raw of [
+    "x".repeat(4092) + "\r\x1b[31m\nMARK",
+    "x\r\x1b]8;;" + "u".repeat(9000) + "\x07\nMARK",
+    "x\r\x1b]8" + "w".repeat(5000) + "\r\nMARK",
+  ]) {
+    const cuts: number[] = [];
+    for (let at = GRID; at < raw.length; at += GRID) cuts.push(at);
+    const { fresh, resumed } = resumedEdges(raw, cuts);
+    assert.deepEqual(resumed, fresh);
+  }
+  const alphabet = [..."xm;:?#([]\\0129", "\r", "\n", "\x1b", "\x1b[", "\x1b]"];
+  alphabet.push("\x9b", "\x9c", "\x07", "\x00", "😀");
+  let seed = 514;
+  const random = (limit: number) => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let mixed = Math.imul(seed ^ (seed >>> 15), seed | 1);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) % limit;
+  };
+  for (let round = 0; round < 3000; round++) {
+    let raw = "";
+    for (let length = random(32); length > 0; length--)
+      raw += alphabet[random(alphabet.length)];
+    const cuts: number[] = [];
+    for (let at = 1; at < raw.length; at++)
+      if (random(3) === 0 && !/[\uD800-\uDBFF]/.test(raw[at - 1]!))
+        cuts.push(at);
+    const { fresh, resumed } = resumedEdges(raw, cuts);
+    assert.deepEqual(resumed, fresh, JSON.stringify({ raw, cuts }));
   }
 });

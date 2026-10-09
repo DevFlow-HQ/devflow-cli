@@ -1970,6 +1970,9 @@ export interface HistoryTextEdges {
    * Presentation drops one leading LF after ANSI removal, before CRLF screening. */
   readonly dropLeadingLf: boolean;
 }
+/** Presentation's edge-analyser state at a portion's end: opaque bounded JSON data
+ * that Application seals on a text continuation and hands back unchanged. */
+export type HistoryTextEdgeResume = { readonly [field: string]: unknown };
 export interface HistoryContentRequest {
   readonly reference: HistoryContentReference;
   readonly continuation?: string;
