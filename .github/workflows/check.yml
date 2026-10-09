@@ -160,6 +160,13 @@ jobs:
           tests/harness/production-parts.test.ts
           tests/harness/observed-fact-conformance.test.ts
           tests/composition/production-harness-parts.test.ts
+      - name: m10-audit-prepare-cancel-shutdown
+        run: >-
+          bun run test --
+          -t '^m10-audit-prepare-cancel-shutdown(:|$)'
+          tests/composition/production-harness-parts.test.ts
+          tests/headless/agent-step.test.ts
+          tests/tui/live-run-workbench.test.tsx
       - name: m10-initial-preparation-ownership
         run: >-
           bun run test --

@@ -18,10 +18,11 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   elsewhere takes the fresh-owner epoch-bump path. `shutdown()` drains every Run it owns with no work in flight, selected by retained ownership, never the durable
   state (#385): a drive that faulted mid-Turn retains its owner and Step with the Run still `running`. It closes the held Harness, releases a blocked
   rest's claim without changing it, and leaves follow-up waiting claims and any non-blocked claim for Store reconciliation, since an unowned `running`
-  record is never reconciled. It then aborts and awaits running work with `SIGNAL_ABORT`, also leaving their claims live. Last, it drains what those
-  drives retained and awaits any drain a cancel or a drive's release already began. A failed drain skips no other drain or abort; shutdown rejects
-  with it once all have run. Those three paths drain a retained Step and owner through `drainRetained`, which marks the Run done before its first
-  await.
+  record is never reconciled. It establishes `SIGNAL_ABORT` on every live Run synchronously before awaiting any retained cleanup (#437),
+  so a slow Step close cannot turn preparation cancellation into a Harness Problem. It captures those drives' settlement promises, drains idle
+  retained owners, awaits the drives, then drains what they retained and awaits any drain a cancel or a drive's release already began.
+  A failed drain skips no other drain or abort; shutdown rejects with it once all have run.
+  Those three paths drain a retained Step and owner through `drainRetained`, which marks the Run done before its first await.
 - Cancel and shutdown race on the Run controller: whichever aborts first supplies its reason. Turn interrupt is bound separately; its Operation reports the
   Harness receipt and its own Turn's result, while the Run's eventual rest still reflects cancel or shutdown when either stops the Run.
 

@@ -1,3 +1,6 @@
+import { writeAgentBundle } from "../helpers/agentBundle.js";
+import { createFake, fakeHarnessProfile } from "../harness/fake-adapter.js";
+import { heldRunPreparation } from "../harness/held-run-preparation.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { wireApplication, withClients } from "../../src/composition/main.js";
@@ -26,7 +29,7 @@ import {
   launch,
   applied,
 } from "../helpers/runLogFixture.js";
-import { awaitRunRest } from "../helpers/settleOperation.js";
+import { awaitSettled, awaitRunRest } from "../helpers/settleOperation.js";
 import { home, readLog } from "./log-sink.js";
 
 async function installAndLaunch(
@@ -373,3 +376,337 @@ for (const primaryFailure of [false, true]) {
     assert.equal(records.at(-1)?.event, "invocation-end");
   });
 }
+
+test("m10-audit-prepare-cancel-shutdown: cancel aborts held Run preparation and rests cancelled", async () => {
+  const fixture = home();
+  const preparation = heldRunPreparation();
+  const wired = wireApplication({
+    ...fixture.overrides,
+    process: storedProcess(),
+    harnessAdapter: preparation.adapter,
+  });
+  try {
+    const runId = await installAndLaunch(wired, fixture.overrides.launchCwd!, [
+      agentStep("work", 0),
+    ]);
+    const signal = await preparation.entered;
+    assert.equal(signal.aborted, false);
+    const cancel = wired.projectionPort.submit({
+      operationId: "cancel",
+      operation: "cancel-run",
+      input: { runId },
+    });
+    assert.ok(cancel.admitted);
+    assert.equal(
+      signal.aborted,
+      true,
+      "cancel reaches preparation before its timeout or release",
+    );
+    assert.deepEqual(await awaitSettled(wired.projectionPort, "cancel"), {
+      status: "applied",
+    });
+    assert.deepEqual(await awaitSettled(wired.projectionPort, "op-launch"), {
+      status: "applied",
+    });
+    const view = await awaitRunRest(wired.projectionPort, runId);
+    assert.equal(view.state, "cancelled");
+    assert.equal(view.problem, undefined);
+    assert.equal(wired.runGroup.listRuns()[0]?.live, false);
+    assert.equal(view.sessions, undefined);
+  } finally {
+    preparation.fail();
+    await wired.close();
+  }
+});
+
+test("m10-audit-prepare-cancel-shutdown: shutdown retains the claim without a halted rest or Harness Problem until reopen", async () => {
+  const fixture = home();
+  const preparation = heldRunPreparation();
+  const process = storedProcess();
+  const overrides = {
+    ...fixture.overrides,
+    process,
+    harnessAdapter: preparation.adapter,
+  };
+  const wired = wireApplication(overrides);
+  let runId: string;
+  try {
+    runId = await installAndLaunch(wired, fixture.overrides.launchCwd!, [
+      agentStep("work", 0),
+    ]);
+    const signal = await preparation.entered;
+    const before = wired.runGroup.readRun(runId);
+    assert.ok(before.ok);
+    await wired.shutdown();
+    assert.equal(signal.aborted, true);
+    assert.deepEqual(await awaitSettled(wired.projectionPort, "op-launch"), {
+      status: "applied",
+    });
+    const after = wired.runGroup.readRun(runId);
+    assert.ok(after.ok);
+    assert.equal(
+      after.run.state,
+      before.run.state,
+      "shutdown writes no durable rest during preparation",
+    );
+    assert.notEqual(after.run.state, "halted");
+    assert.equal(
+      wired.runGroup.listRuns()[0]?.live,
+      true,
+      "the retained claim enables reconciliation",
+    );
+    const view = wired.projectionPort.openProjection({ family: "run", runId });
+    try {
+      assert.ok(view.snapshot.result.found);
+      assert.equal(view.snapshot.result.run.problem, undefined);
+    } finally {
+      view.close();
+    }
+  } finally {
+    preparation.fail();
+    await wired.close();
+  }
+  const reopened = wireApplication({
+    ...overrides,
+    harnessAdapter: qualificationAdapter([]),
+  });
+  try {
+    const view = await awaitRunRest(reopened.projectionPort, runId);
+    assert.equal(view.state, "halted");
+    assert.equal(view.problem, undefined);
+    assert.equal(reopened.runGroup.listRuns()[0]?.live, false);
+    assert.ok(
+      view.actionOffers.some(
+        (offer) => offer.action === "resume-run" && offer.available,
+      ),
+    );
+  } finally {
+    await reopened.close();
+  }
+});
+
+test("m10-audit-prepare-cancel-shutdown: genuine preparation failure keeps its Harness Problem", async () => {
+  const fixture = home();
+  const preparation = heldRunPreparation();
+  const wired = wireApplication({
+    ...fixture.overrides,
+    process: storedProcess(),
+    harnessAdapter: preparation.adapter,
+  });
+  try {
+    const runId = await installAndLaunch(wired, fixture.overrides.launchCwd!, [
+      agentStep("work", 0),
+    ]);
+    const signal = await preparation.entered;
+    preparation.fail();
+    const outcome = await awaitSettled(wired.projectionPort, "op-launch");
+    assert.equal(signal.aborted, false);
+    assert.equal(outcome.status, "not-applied");
+    if (outcome.status === "not-applied")
+      assert.equal(outcome.problem.code, "selected-harness-unavailable");
+    const run = await awaitRunRest(wired.projectionPort, runId);
+    assert.equal(run.state, "halted");
+    assert.equal(run.problem?.code, "selected-harness-unavailable");
+    assert.equal(wired.runGroup.listRuns()[0]?.live, false);
+  } finally {
+    preparation.fail();
+    await wired.close();
+  }
+});
+
+test("m10-audit-prepare-cancel-shutdown: cancel reaches a reopened interactive Step's preparation", async () => {
+  const fixture = home();
+  const preparation = heldRunPreparation();
+  const wired = wireApplication({
+    ...fixture.overrides,
+    process: storedProcess(),
+    harnessAdapter: preparation.adapter,
+  });
+  try {
+    const bundle = writeBundle([
+      { ...agentStep("chat", 0), kind: "interactive-agent" },
+    ]);
+    const built = wired.bundleManagement.build(bundle.folder, {
+      noInstall: false,
+    });
+    assert.ok(built.ok);
+    const created = wired.runGroup.createRun({
+      operationId: "seed",
+      bundleSnapshotDigest: built.report.digest,
+      launch: {},
+      selectedHarness: "claude-code",
+      modelChoice: { model: "fake-model" },
+      at: new Date(),
+    });
+    assert.equal(created.outcome, "created");
+    const owner = wired.runGroup.acquireRun(created.runId);
+    assert.ok(owner);
+    assert.ok(owner.writeState("blocked").ok);
+    assert.ok(owner.release().ok);
+    owner.close();
+    const send = wired.projectionPort.submit({
+      operationId: "send",
+      operation: "send-interactive-turn",
+      input: {
+        runId: created.runId,
+        stepId: "chat",
+        text: "Continue the work",
+      },
+    });
+    assert.ok(send.admitted, JSON.stringify(send));
+    const signal = await preparation.entered;
+    const cancel = wired.projectionPort.submit({
+      operationId: "cancel",
+      operation: "cancel-run",
+      input: { runId: created.runId },
+    });
+    assert.ok(cancel.admitted);
+    assert.equal(signal.aborted, true);
+    assert.deepEqual(await awaitSettled(wired.projectionPort, "cancel"), {
+      status: "applied",
+    });
+    const view = await awaitRunRest(wired.projectionPort, created.runId);
+    assert.equal(view.state, "cancelled");
+    assert.equal(view.problem, undefined);
+  } finally {
+    preparation.fail();
+    await wired.close();
+  }
+});
+
+test("m10-audit-prepare-cancel-shutdown: a startup failure established before shutdown retains the Harness Problem", async () => {
+  const fixture = home();
+  const preparation = heldRunPreparation({
+    phase: "prepare",
+    category: "authentication",
+    possibleEffects: "none",
+    diagnostics: "Log in to the Harness",
+  });
+  const wired = wireApplication({
+    ...fixture.overrides,
+    process: storedProcess(),
+    harnessAdapter: preparation.adapter,
+  });
+  try {
+    const runId = await installAndLaunch(wired, fixture.overrides.launchCwd!, [
+      agentStep("work", 0),
+    ]);
+    await preparation.entered;
+    await wired.shutdown();
+    const outcome = await awaitSettled(wired.projectionPort, "op-launch");
+    assert.equal(outcome.status, "not-applied");
+    if (outcome.status === "not-applied") {
+      assert.equal(outcome.problem.code, "selected-harness-unavailable");
+      assert.match(outcome.problem.explanation, /authentication/);
+    }
+    const run = wired.runGroup.readRun(runId);
+    assert.ok(run.ok);
+    assert.equal(run.run.state, "halted");
+    assert.equal(wired.runGroup.listRuns()[0]?.live, false);
+  } finally {
+    preparation.fail();
+    await wired.close();
+  }
+});
+
+test("m10-audit-prepare-cancel-shutdown: delayed retained-Step cleanup cannot turn preparation cancellation into a Harness failure", async () => {
+  const fixture = home();
+  const preparation = heldRunPreparation();
+  const closing = Promise.withResolvers<void>();
+  const settled = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let runPreparations = 0;
+  const adapter = ownPreparations({
+    async prepare(options) {
+      if (options.writableDirectory === undefined || ++runPreparations > 1)
+        return preparation.adapter.prepare(options);
+      const prepared = await createFake({
+        profile: fakeHarnessProfile(),
+        turns: [],
+      })().prepare(options);
+      assert.ok(prepared.ok);
+      return {
+        ok: true,
+        harness: {
+          ...prepared.harness,
+          async close() {
+            closing.resolve();
+            await release.promise;
+            return prepared.harness.close();
+          },
+        },
+      };
+    },
+  });
+  const wired = wireApplication(
+    {
+      ...fixture.overrides,
+      process: storedProcess(),
+      harnessAdapter: adapter,
+      supportsInteractiveTurns: true,
+    },
+    {
+      record(record) {
+        if (
+          record.event === "operation-outcome" &&
+          record.operationId === "second-launch"
+        )
+          settled.resolve();
+      },
+    },
+  );
+  try {
+    await installAndLaunch(wired, fixture.overrides.launchCwd!, [
+      { ...agentStep("chat", 0), kind: "interactive-agent" },
+    ]);
+    assert.deepEqual(await awaitSettled(wired.projectionPort, "op-launch"), {
+      status: "applied",
+    });
+    const bundle = writeAgentBundle({
+      id: "dev.secant.held-preparation",
+      name: "Held preparation",
+      description: "A Run awaiting Harness preparation",
+      prompt: { path: "prompts/work.md", text: "Work" },
+      routing: [agentStep("work", 0)],
+    });
+    const built = wired.bundleManagement.build(bundle.folder, {
+      noInstall: false,
+    });
+    assert.ok(built.ok);
+    const admission = wired.projectionPort.submit({
+      operationId: "second-launch",
+      operation: "launch-run",
+      input: {
+        bundle: { id: bundle.id },
+        launchInputs: {},
+        trustDigest: built.report.digest,
+        harness: "claude-code",
+        requestedModel: "fake-model",
+      },
+    });
+    assert.ok(admission.admitted);
+    assert.ok(admission.runId);
+    await preparation.entered;
+    const shuttingDown = wired.shutdown();
+    await closing.promise;
+    await settled.promise;
+    assert.deepEqual(
+      await awaitSettled(wired.projectionPort, "second-launch"),
+      { status: "applied" },
+    );
+    const run = wired.runGroup.readRun(admission.runId);
+    assert.ok(run.ok);
+    assert.notEqual(run.run.state, "halted");
+    assert.equal(
+      wired.runGroup.listRuns().find((run) => run.runId === admission.runId)
+        ?.live,
+      true,
+    );
+    release.resolve();
+    await shuttingDown;
+  } finally {
+    release.resolve();
+    preparation.fail();
+    await wired.close();
+  }
+});

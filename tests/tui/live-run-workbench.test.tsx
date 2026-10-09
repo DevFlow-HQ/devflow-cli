@@ -1,5 +1,6 @@
 import { turnEventRefusalScript } from "../helpers/turnEventRefusal.js";
 import { inertPreferencesView } from "./inert.js";
+import { heldRunPreparation } from "../harness/held-run-preparation.js";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -12,7 +13,7 @@ import type {
   LaunchRunInput,
   WorkspaceSnapshot,
 } from "../../src/application/projection-port.js";
-import { wireApplication } from "../../src/composition/main.js";
+import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   type HarnessDefaults,
@@ -25,6 +26,7 @@ import {
   createLiveRunLaunchView,
   createLiveRunWorkbenchView,
   createLiveRunActionsView,
+  createLiveRunListView,
   type BundleCatalogView,
   type RunLaunchView,
   type WorkspaceView,
@@ -594,3 +596,146 @@ test("workbench-model-choice: the live read prepares the Offer and Run Actions p
   assert.ok(result.found);
   assert.deepEqual(result.run.modelChoice, { model: "beta", effort: "medium" });
 });
+
+for (const action of ["cancel", "shutdown"] as const) {
+  test(`m10-audit-prepare-cancel-shutdown: Workbench shows ${action === "cancel" ? "cancelled" : "reconciled halted"} after held preparation`, async (t) => {
+    setEnvironmentForTest(t, {
+      [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath,
+    });
+    const workspace = makeTempDir("secant-tui-prepare-ws-");
+    const home = makeTempDir("secant-tui-prepare-home-");
+    const preparation = heldRunPreparation();
+    const runtime = createFakeBundleProcess({
+      executables: [process.execPath],
+    });
+    const overrides = {
+      secantHome: home,
+      launchCwd: workspace,
+      process: runtime,
+      harnessAdapter: preparation.adapter,
+    };
+    const wired = wireApplication(overrides);
+    const bundle = writeAgentBundle();
+    const built = wired.bundleManagement.build(bundle.folder, {
+      noInstall: false,
+    });
+    assert.ok(built.ok);
+    assert.ok(
+      wired.projectionPort.submit({
+        operationId: "approve",
+        operation: "approve-workspace",
+        input: { path: workspace },
+      }).admitted,
+    );
+    const launch = wired.projectionPort.submit({
+      operationId: "held-launch",
+      operation: "launch-run",
+      input: {
+        bundle: { id: bundle.id },
+        launchInputs: {},
+        trustDigest: built.report.digest,
+        harness: "claude-code",
+        requestedModel: "wired-model",
+      },
+    });
+    assert.ok(launch.admitted);
+    assert.ok(launch.runId);
+    const runId = launch.runId;
+    const signal = await preparation.entered;
+    async function openWorkbench(app: Wiring, state: "Running" | "Halted") {
+      const workspaceProjection = app.projectionPort.openProjection({
+        family: "workspace",
+      });
+      const listProjection = app.projectionPort.openProjection({
+        family: "bundle-catalog",
+      });
+      const focusProjection = app.projectionPort.openProjection({
+        family: "bundle-catalog",
+        focus: { id: bundle.id },
+      });
+      t.after(() => {
+        workspaceProjection.close();
+        listProjection.close();
+        focusProjection.close();
+      });
+      const renderer = makeFakeRenderer(140, 32);
+      const rendered = await mountRenderer(
+        () => (
+          <App
+            preferences={inertPreferencesView()}
+            view={workspaceView(workspaceProjection.snapshot)}
+            bundles={catalogView(
+              listProjection.snapshot,
+              focusProjection.snapshot,
+            )}
+            harnesses={createLiveHarnessCatalogView(app.projectionPort)}
+            preparation={createLiveLaunchPreparationView(app.projectionPort)}
+            launch={createLiveRunLaunchView(app.projectionPort)}
+            run={createLiveRunWorkbenchView(app.projectionPort)}
+            runList={createLiveRunListView(app.projectionPort)}
+            actions={createLiveRunActionsView(app.projectionPort)}
+            renderer={renderer.port}
+            reducedMotion={true}
+            exit={() => {}}
+          />
+        ),
+        { width: 140, height: 32 },
+      );
+      await rendered.waitForFrame((frame) => frame.includes("Secant"));
+      rendered.mockInput.pressArrow("down");
+      rendered.mockInput.pressArrow("down");
+      rendered.mockInput.pressArrow("down");
+      rendered.mockInput.pressEnter();
+      await rendered.waitForFrame((frame) => frame.includes(runId));
+      rendered.mockInput.pressEnter();
+      await rendered.waitForFrame(
+        (frame) => !frame.includes("Previous Runs") && frame.includes(state),
+      );
+      return { rendered, renderer };
+    }
+    try {
+      const { rendered, renderer } = await openWorkbench(wired, "Running");
+      renderer.key("g", { ctrl: true });
+      await rendered.waitForFrame((frame) => frame.includes("c cancel"));
+      if (action === "cancel") {
+        renderer.key("c");
+        await rendered.waitForFrame((frame) =>
+          frame.includes("Press y to confirm"),
+        );
+        renderer.key("y");
+        await rendered.waitForFrame((frame) => frame.includes("Run cancelled"));
+        assert.equal(signal.aborted, true);
+        assert.doesNotMatch(
+          rendered.captureCharFrame(),
+          /Selected Harness unavailable|selected-harness-unavailable/,
+        );
+      } else {
+        await wired.shutdown();
+        assert.equal(signal.aborted, true);
+        assert.doesNotMatch(
+          rendered.captureCharFrame(),
+          /Selected Harness unavailable|selected-harness-unavailable/,
+        );
+        rendered.renderer.destroy();
+        await wired.close();
+        const reopened = wireApplication(overrides);
+        try {
+          const after = await openWorkbench(reopened, "Halted");
+          after.renderer.key("g", { ctrl: true });
+          await after.rendered.waitForFrame((frame) =>
+            frame.includes("r resume"),
+          );
+          assert.doesNotMatch(
+            after.rendered.captureCharFrame(),
+            /Selected Harness unavailable|selected-harness-unavailable/,
+          );
+        } finally {
+          await reopened.close();
+        }
+      }
+    } finally {
+      preparation.fail();
+      await wired.close();
+    }
+  });
+}

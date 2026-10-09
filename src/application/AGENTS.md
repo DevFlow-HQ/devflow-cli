@@ -58,7 +58,8 @@
   Gate answers, End Step, Continue, End Stage, and the follow-up (#354), and the reopened human Turn directly. It rests the Run `halted` through
   `observedOwner`, settles the Operation `selected-harness-unavailable`, and releases the owner; an answer or Attempt committed before the drive stays
   committed. Composition reports the preparation refusal as `harness-unavailable`; Application reports its committed `halted` rest separately, so
-  neither observer claims the other's outcome.
+  neither observer claims the other's outcome. `preparation-cancelled` with the Run's signal aborted joins `driveWithAbortProtocol` (#437);
+  an established startup failure keeps its primary category and Harness Problem.
 - `harness-catalog` caches one qualification promise/result per semantic Harness id for the Application lifetime (#188). List calls discovery only; focus initially
   reports `not-checked`, then publishes one durable normalized result. Qualification diagnostics are process-held Resources addressed by semantic id and checked time.
 - `launch-preparation` and `submitLaunch` share `LaunchPreparation.evaluate` in `launch-preparation.ts` (#189), admitting under identical rules.

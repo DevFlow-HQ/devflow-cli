@@ -25,7 +25,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
   `HeadlessClients.startupNotices` and Home through the `workspace` Projection (#227).
 - `prepareRunHarness` (`wiring.ts`) is the one prepare site for launch, resume, and the interactive reopen: it threads `writableDirectory: owner.workingArea().path`
   identically, and an unusable area is a typed `working-area-unavailable` prepare failure, so the Run halts before any Turn rather than writing planning
-  files anywhere else (#214). Execution never passes the area itself.
+  files anywhere else (#214). Execution never passes the area itself. Routing and reopened human Turns forward the Run's cancel signal to this preparation (#437).
 - Each Step handle composition mints (`interactiveStepDriver`) is registered in the private `heldHarnesses` map, so a `heldStep` the Application hands
   back to `makeRunExecution` (#354) resolves to its prepared Harness without the Application seeing one. The walk reuses it and returns the same handle
   on a `blocked` rest, or closes it; an unregistered handle is closed and a fresh Harness prepared.

@@ -451,10 +451,10 @@ test("CI: all Projection families end before blocked ownership releases and runn
           "abort",
           () => {
             aborts++;
-            // A running Run is aborted only after the blocked Run released ownership.
+            // Establish the Run's signal reason before retained cleanup can yield (#437).
             assert.equal(
               runGroup.listRuns().find((run) => run.runId === blockedId)?.live,
-              false,
+              aborts === 1,
             );
             assert.equal(cancelSignal.reason, "secant:process-signal");
             resolve();
@@ -596,6 +596,10 @@ test("CI: all Projection families end before blocked ownership releases and runn
   blocked.close();
   release();
   await Promise.all([shutdown, repeated]);
+  assert.equal(
+    runGroup.listRuns().find((run) => run.runId === blockedId)?.live,
+    false,
+  );
   assert.equal(cleaned, true);
   assert.equal(complete, true);
   assert.equal(

@@ -1258,45 +1258,32 @@ async function changeRunModelChoice(
   return 0;
 }
 
-/** Submit a cancel-run/delete-run Operation and report its settled outcome. Both
- *  settle inline in a headless process (the Run is not live in it: delete is a
- *  synchronous settler, and a cancel of a Run not live here settles at once), so
- *  the Operation is already applied on the opened snapshot. */
-function endRunOperation(
+/** Submit a cancel-run/delete-run Operation and report its settled outcome. */
+async function endRunOperation(
   port: ProjectionPort,
   io: HeadlessIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   operation: "cancel-run" | "delete-run",
   runId: string,
-): number {
+): Promise<number> {
   const admission = port.submit({
     operationId: randomUUID(),
     operation,
     input: { runId },
   });
   if (!admission.admitted) return fail(io, json, admission.problem);
-
-  const opened = port.openProjection({
-    family: "operation",
-    operationId: admission.operationId,
-  });
-  try {
-    const outcome = opened.snapshot.outcome;
-    if (json) {
-      io.out(`${headlessJson(opened.snapshot)}\n`);
-      return outcome.status === "applied" ? 0 : 1;
-    }
-    if (outcome.status === "not-applied") {
-      return fail(io, false, outcome.problem);
-    }
-    io.out(
-      operation === "cancel-run"
-        ? `Cancelled run ${runId}\n`
-        : `Deleted run ${runId}\n`,
-    );
-    return 0;
-  } finally {
-    opened.close();
+  const settled = await port.settledOperation(admission.operationId);
+  if (json) {
+    io.out(`${headlessJson(settled)}\n`);
+    return settled.outcome.status === "applied" ? 0 : 1;
   }
+  if (settled.outcome.status === "not-applied")
+    return fail(io, false, settled.outcome.problem);
+  io.out(
+    operation === "cancel-run"
+      ? `Cancelled run ${runId}\n`
+      : `Deleted run ${runId}\n`,
+  );
+  return 0;
 }

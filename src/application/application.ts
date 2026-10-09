@@ -287,6 +287,7 @@ type TRunInteractiveStepPreparation =
   | { readonly ok: false; readonly failure: RunHarnessPreparationFailure };
 
 export type PrepareRunInteractiveStep = (context: {
+  readonly cancelSignal?: AbortSignal;
   readonly observeWindowsCleanupFallback?: () => void;
   readonly owner: RunOwner;
 }) => Promise<TRunInteractiveStepPreparation>;
@@ -1133,6 +1134,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
     observed: RunOwner,
     failure: RunHarnessPreparationFailure,
   ): OperationSettlement {
+    // Preparation's typed cancellation joins the Run's own abort protocol.
+    // Established startup failures retain their Harness Problem.
+    if (failure.category === "preparation-cancelled")
+      tracking.abort.signal.throwIfAborted();
     const problem = selectedHarnessUnavailable(runId, failure);
     const previous = tracking.problem;
     tracking.problem = problem;
@@ -3022,6 +3027,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
             }
           }
           const prepared = await prepareRunInteractiveStep!({
+            cancelSignal: tracking.abort.signal,
             observeWindowsCleanupFallback: () =>
               observeWindowsCleanupFallback(input.runId),
             owner,
@@ -4088,24 +4094,22 @@ export function createApplication(deps: ApplicationDependencies): Application {
   }
 
   async function shutdownRuns(): Promise<void> {
-    // Drain every Run this process owns with no work in flight, then abort every
-    // Run live in this process and await each settlement so its child is dead and
-    // its store is consistent before teardown. Each aborts with the signal reason,
-    // so runAndSettle leaves the claim live for the next open to reconcile `halted`
-    // (ADR 0019, #98). Filter on `promise` (set in the same synchronous prefix that
-    // sets `owner`), so the set aborted is exactly the set awaited — shutdown never
-    // resolves before a live Run's settlement it aborted. A drive the signal stopped
-    // can still retain its owner and Step, so a second drain follows, and a drain a
-    // cancel or a drive's release already began is awaited too. A failed drain
-    // skips no other drain and no abort; shutdown rejects once all have run.
+    // Establish every live Run's shutdown reason before any cleanup can yield.
+    // Composition already cancelled pending preparations; a retained Step may
+    // close slowly while those preparations settle. Capture the same promises we
+    // abort, since their drives clear tracking.promise at settlement (#437).
+    const live = [...runs.values()].flatMap((tracking) => {
+      if (tracking.done || tracking.promise === undefined) return [];
+      const settlement = tracking.promise.catch(() => undefined);
+      tracking.abort.abort(SIGNAL_ABORT);
+      return [settlement];
+    });
+    // Drain idle retained owners, await the live drives, then drain what those
+    // drives retained. Signal-stopped work leaves its claim for reconciliation.
+    // A failed drain skips no other drain or abort; shutdown rejects after all
+    // cleanup finishes. Also await a drain a cancel or drive already began.
     const failures = await drainOwnedIdleRuns();
-    const live = [...runs.values()].filter(
-      (tracking) => !tracking.done && tracking.promise !== undefined,
-    );
-    for (const tracking of live) tracking.abort.abort(SIGNAL_ABORT);
-    await Promise.all(
-      live.map((tracking) => tracking.promise!.catch(() => undefined)),
-    );
+    await Promise.all(live);
     failures.push(...(await drainOwnedIdleRuns()));
     // Their own callers report those drains' failures.
     await Promise.allSettled(drains);

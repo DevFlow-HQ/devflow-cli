@@ -3,6 +3,7 @@ import {
   turnEventRefusalScript,
 } from "../helpers/turnEventRefusal.js";
 import { writeAgentBundle as authorAgentBundle } from "../helpers/agentBundle.js";
+import { heldRunPreparation } from "../harness/held-run-preparation.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import { Database } from "bun:sqlite";
 import assert from "node:assert/strict";
@@ -2152,3 +2153,99 @@ test("m10-audit-entry-prompt-kind: a managed prompt re-sent on resume after a lo
     4,
   );
 });
+
+for (const action of ["cancel", "shutdown"] as const) {
+  test(`m10-audit-prepare-cancel-shutdown: headless reports ${action === "cancel" ? "cancelled" : "reconciled halted"} after held preparation`, async (t) => {
+    const preparation = heldRunPreparation();
+    const runtime = createFakeBundleProcess({
+      executables: [process.execPath],
+    });
+    const { wired, bundleId, digest, docPath, home } = wireAgent(t, {
+      adapter: preparation.adapter,
+      process: runtime,
+    });
+    const launch = wired.projectionPort.submit({
+      operationId: "held-launch",
+      operation: "launch-run",
+      input: {
+        bundle: { id: bundleId },
+        launchInputs: { doc: docPath },
+        trustDigest: digest,
+        harness: "claude-code",
+        requestedModel: "wired-model",
+      },
+    });
+    assert.ok(launch.admitted);
+    assert.ok(launch.runId);
+    const signal = await preparation.entered;
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: HeadlessIO = {
+      out: (text) => out.push(text),
+      err: (text) => err.push(text),
+      cwd: () => process.cwd(),
+    };
+    try {
+      if (action === "cancel") {
+        assert.equal(
+          await runHeadless(
+            wired,
+            ["run", "cancel", launch.runId, "--json"],
+            io,
+          ),
+          0,
+        );
+        assert.equal(signal.aborted, true);
+        assert.deepEqual(JSON.parse(out.join("")).outcome, {
+          status: "applied",
+        });
+        out.length = 0;
+        assert.equal(
+          await runHeadless(wired, ["run", "show", launch.runId, "--json"], io),
+          0,
+        );
+        const run = JSON.parse(out.join("")).result.run;
+        assert.equal(run.state, "cancelled");
+        assert.equal(run.problem, undefined);
+      } else {
+        await wired.shutdown();
+        const stored = wired.runGroup.readRun(launch.runId);
+        assert.ok(stored.ok);
+        assert.notEqual(stored.run.state, "halted");
+        assert.equal(signal.aborted, true);
+        await wired.close();
+        const reopened = wireApplication({
+          secantHome: home,
+          launchCwd: stored.run.workspacePath,
+          process: runtime,
+          harnessAdapter: preparation.adapter,
+        });
+        try {
+          assert.equal(
+            await runHeadless(
+              reopened,
+              ["run", "show", launch.runId, "--json"],
+              io,
+            ),
+            0,
+          );
+          const run = JSON.parse(out.join("")).result.run;
+          assert.equal(run.state, "halted");
+          assert.equal(run.problem, undefined);
+          assert.ok(
+            run.actionOffers.some(
+              (offer: { action: string; available: boolean }) =>
+                offer.action === "resume-run" && offer.available,
+            ),
+          );
+        } finally {
+          await reopened.close();
+        }
+      }
+      assert.doesNotMatch(err.join(""), /selected-harness-unavailable/);
+    } finally {
+      preparation.fail();
+      await wired.close();
+    }
+  });
+}

@@ -465,6 +465,7 @@ function makeRunExecution(params: TMakeRunExecutionParams): RunExecution {
         owner,
         scope,
         observeWindowsCleanupFallback,
+        cancelSignal,
       );
       if (!prepared.ok) {
         const harnessFailure = harnessRegistry.preparationFailure(
@@ -511,7 +512,7 @@ function makePrepareRunInteractiveStep(
   runScope: ScopeForRun,
   observe: ExecutionObserver | undefined,
 ): PrepareRunInteractiveStep {
-  return async ({ owner, observeWindowsCleanupFallback }) => {
+  return async ({ owner, cancelSignal, observeWindowsCleanupFallback }) => {
     const selectedHarness = owner.record.selectedHarness;
     if (selectedHarness === undefined) {
       throw new Error(
@@ -524,6 +525,7 @@ function makePrepareRunInteractiveStep(
       owner,
       runScope(owner.record.runId),
       observeWindowsCleanupFallback,
+      cancelSignal,
     );
     if (!prepared.ok) {
       return {
@@ -553,6 +555,7 @@ async function prepareRunHarness(
   owner: RunOwner,
   scope: ReportingScope,
   observeWindowsCleanupFallback: (() => void) | undefined,
+  signal?: AbortSignal,
 ): Promise<PrepareResult> {
   const area = owner.workingArea();
   if (!area.ok) {
@@ -572,6 +575,7 @@ async function prepareRunHarness(
     {
       workspace: owner.record.workspacePath,
       writableDirectory: area.path,
+      signal,
       containment: (fact) => {
         if (fact.kind === "fallback") observeWindowsCleanupFallback?.();
       },
