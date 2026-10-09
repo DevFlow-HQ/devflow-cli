@@ -1,4 +1,4 @@
-import { readAgentCallEvent } from "../store/store.js";
+import { readAgentCallEvent, readTurnFact } from "../store/store.js";
 import {
   agentCompletionCalls,
   flattenSteps,
@@ -123,7 +123,7 @@ function consecutiveAgentContinues(
 /** Only the latest call of the latest Turn can settle an open Attempt, so an
  *  earlier accepted call never outlives a later held or refused one. */
 export function latestAgentCall(
-  owner: Pick<RunOwner, "turns" | "turnEvents">,
+  owner: Pick<RunOwner, "turns" | "turnEventsOf">,
   attemptId: string,
 ) {
   const latest = lastTurnCall(owner, attemptId);
@@ -132,7 +132,7 @@ export function latestAgentCall(
 
 /** The latest Turn's step done the Review checkpoint held for the person. */
 export function heldAgentCall(
-  owner: Pick<RunOwner, "turns" | "turnEvents">,
+  owner: Pick<RunOwner, "turns" | "turnEventsOf">,
   attemptId: string,
 ) {
   const latest = lastTurnCall(owner, attemptId);
@@ -146,7 +146,7 @@ function isCompletionCall(
 }
 
 function lastTurnCall(
-  owner: Pick<RunOwner, "turns" | "turnEvents">,
+  owner: Pick<RunOwner, "turns" | "turnEventsOf">,
   attemptId: string,
 ) {
   const turn = owner
@@ -154,19 +154,21 @@ function lastTurnCall(
     .filter((t) => t.attemptId === attemptId)
     .at(-1);
   if (turn === undefined) return undefined;
-  const events = owner.turnEvents().filter((e) => e.turnId === turn.turnId);
+  const events = owner.turnEventsOf(turn.turnId);
   const call = events
     .map(readAgentCallEvent)
     .filter((c) => c !== undefined)
     .at(-1);
   const id: string | undefined = call?.id;
   if (call === undefined || !isCompletionCall(id)) return undefined;
+  // Compared by call id, so a stamped or reordered expiry still expires its call.
   if (
-    events.some(
-      (e) =>
-        e.kind === "agent-call-expired" &&
-        e.payload === JSON.stringify({ callId: call.callId }),
-    )
+    events.some((e) => {
+      const fact = readTurnFact(e);
+      return (
+        fact?.kind === "agent-call-expired" && fact.data.callId === call.callId
+      );
+    })
   )
     return undefined;
   return { turn, call: { ...call, id } };

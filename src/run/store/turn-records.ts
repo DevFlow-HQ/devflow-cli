@@ -531,10 +531,15 @@ export function readTurns(db: SQLiteBunDatabase): readonly TurnRecord[] {
     });
 }
 
+/** History events in append order: all of them, one Turn's, or the one at `index`. */
 export function readTurnEvents(
   db: SQLiteBunDatabase,
-  index?: number,
+  select:
+    | { readonly index?: undefined; readonly turnId?: undefined }
+    | { readonly index: number; readonly turnId?: undefined }
+    | { readonly index?: undefined; readonly turnId: string } = {},
 ): readonly TurnEventRecord[] {
+  const { index, turnId } = select;
   return db
     .select({
       turn_id: turnEvents.turn_id,
@@ -547,6 +552,7 @@ export function readTurnEvents(
       and(
         ne(turnEvents.kind, "turn-input"),
         ne(turnEvents.kind, "legacy-message"),
+        turnId === undefined ? undefined : eq(turnEvents.turn_id, turnId),
       ),
     )
     .orderBy(asc(turnEvents.seq))

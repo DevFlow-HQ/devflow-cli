@@ -1197,7 +1197,11 @@ function buildTimeline(
           ? {
               endedBy: "agent" as const,
               reason: latestAgentCall(
-                { turns: () => turns, turnEvents: () => turnEvents },
+                {
+                  turns: () => turns,
+                  turnEventsOf: (turnId) =>
+                    turnEvents.filter((e) => e.turnId === turnId),
+                },
                 attempt.attemptId,
               )?.call.reason,
             }

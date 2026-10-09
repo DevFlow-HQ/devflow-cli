@@ -5,6 +5,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 ## Invariants
 
 - `turnEventAt` indexes the same append-only, conversation-excluded sequence as `turnEvents`; new writes never shift an exact Resource (#489).
+  `turnEventsOf` reads one Turn's slice of that sequence, so a per-Turn check never scans the Run (#513).
 
 - Before changing Turn admission, settlement, event payloads, or transcript migration and reads, read
   [Store conversation](../../../docs/agents/run-store-conversation.md).

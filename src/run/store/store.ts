@@ -638,6 +638,8 @@ export interface RunOwner {
   turns(): readonly TurnRecord[];
   /** Every normalized durable Turn event, in append order. */
   turnEvents(): readonly TurnEventRecord[];
+  /** One Turn's normalized durable events, in append order. */
+  turnEventsOf(turnId: string): readonly TurnEventRecord[];
   /** Exact append-only history event, excluding conversation-only rows. */
   turnEventAt(index: number): TurnEventRecord | undefined;
   /** Every named Session's last observed availability. */

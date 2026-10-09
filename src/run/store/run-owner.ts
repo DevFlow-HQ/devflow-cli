@@ -1251,10 +1251,13 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       return readTurns(db);
     },
     turnEventAt(index) {
-      return readTurnEvents(db, index)[0];
+      return readTurnEvents(db, { index })[0];
     },
     turnEvents() {
       return readTurnEvents(db);
+    },
+    turnEventsOf(turnId) {
+      return readTurnEvents(db, { turnId });
     },
     harnessSessions() {
       return readHarnessSessions(db);

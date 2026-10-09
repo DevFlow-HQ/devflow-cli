@@ -1632,3 +1632,50 @@ test("m10-audit-conversation-order: bounded Store reads separate eligibility fro
     "eligibility positions and retained identity never renumber",
   );
 });
+
+test("m10-followup-agent-call-expiry: one Turn's events read alone, in append order", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const owner = group.acquireRun(create(group, "op-1").runId);
+  assert.ok(owner !== undefined);
+  t.after(() => owner.close());
+  for (const turnId of ["first", "second"])
+    assert.ok(
+      owner.admitTurn({
+        turnId,
+        attemptId: "attempt",
+        session: "s",
+        origin: "managed",
+        kind: "agent",
+        input: "Work",
+        recoveryCoordinate: "native",
+        harness: "codex",
+        at: AT,
+      }).ok,
+    );
+  const expired = (turnId: string, callId: string) =>
+    assert.ok(
+      owner.appendTurnEvent({
+        turnId,
+        fact: turnFact("agent-call-expired", { callId }),
+        at: AT,
+      }).ok,
+    );
+  expired("first", "a");
+  expired("second", "b");
+  expired("first", "c");
+  // The admitted input row is conversation-only, so neither read returns it.
+  assert.deepEqual(
+    owner.turnEventsOf("first").map((e) => [e.turnId, readTurnFact(e)?.data]),
+    [
+      ["first", { callId: "a" }],
+      ["first", { callId: "c" }],
+    ],
+  );
+  assert.deepEqual(
+    owner.turnEventsOf("second").map((e) => readTurnFact(e)?.data),
+    [{ callId: "b" }],
+  );
+  assert.deepEqual(owner.turnEventsOf("absent"), []);
+});

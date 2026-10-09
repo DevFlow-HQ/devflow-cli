@@ -94,6 +94,8 @@ const PROCESS_FREE_TEST_FILES = new Set([
   "tests/headless/claude-fact-translation.test.ts",
   // Written over the fake Git Run group (#214).
   "tests/run/store/working-area.test.ts",
+  // Born process-free (#513): the completion check reads a fake Git Run group's Store.
+  "tests/run/execution/interactive-completion.test.ts",
   // Born process-free: fake view/Renderer Port controls, in-process Catalog, and an Application
   // whose injected helper Process throws on every launch route.
   "tests/tui/home-preferences.test.tsx",

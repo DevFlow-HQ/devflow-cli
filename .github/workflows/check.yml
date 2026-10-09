@@ -546,6 +546,12 @@ jobs:
           tests/application/history-bounded-cost.test.ts
           tests/tui/history-bounded-cost.test.ts
           tests/tui/history-text-edges.test.ts
+      - name: m10-followup-agent-call-expiry
+        run: >-
+          bun run test --
+          -t '^m10-followup-agent-call-expiry(:|$)'
+          tests/run/execution/interactive-completion.test.ts
+          tests/run/store/session-and-transcript-evidence.test.ts
       - name: M10 runtime failure regressions
         run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test
