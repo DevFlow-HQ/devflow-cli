@@ -38,9 +38,10 @@ export interface LiveRun {
   readonly owner: RunOwner;
   readonly channel: RequestChannel;
   reopen(): ProjectionPort;
-  shutdown(): Promise<void>;
   /** Let the injected execution return `succeeded`, then await the launch outcome. */
   finish(): Promise<void>;
+  /** End observation while releasing the injected drive so shutdown can drain. */
+  shutdown(): Promise<void>;
 }
 
 /** Launch a Run whose injected execution holds its Turn open: the test drives every
@@ -50,6 +51,8 @@ export async function openLiveRun(
   t: TestContext,
   options: {
     onHistoryRead?: () => void;
+    onCensusRead?: () => void;
+    scheduleRunUpdate?: (callback: () => void, delayMs: number) => () => void;
     /** Populate canonical fixture facts before Application observes this owner. */
     seedRun?: (context: {
       readonly owner: RunOwner;
@@ -69,6 +72,14 @@ export async function openLiveRun(
   let seeded = false;
   const runGroup = {
     ...rawGroup,
+    listRuns() {
+      options.onCensusRead?.();
+      return rawGroup.listRuns();
+    },
+    countRuns() {
+      options.onCensusRead?.();
+      return rawGroup.countRuns();
+    },
     acquireRun(...args: Parameters<typeof rawGroup.acquireRun>) {
       const owner = rawGroup.acquireRun(...args);
       if (owner === undefined) return undefined;
@@ -239,7 +250,6 @@ export async function openLiveRun(
     storeHome,
     owner,
     channel,
-    shutdown: () => app.shutdown(),
     reopen: () =>
       createApplication({
         catalog,
@@ -248,6 +258,11 @@ export async function openLiveRun(
         hostPlatform: hostPlatform(),
         runGroup,
       }).projectionPort,
+    async shutdown() {
+      const shuttingDown = app.shutdown();
+      release();
+      await shuttingDown;
+    },
     async finish() {
       release();
       const outcome = await awaitSettled(port, "launch-lag");

@@ -396,6 +396,11 @@ export interface ApplicationDependencies {
   /** The clock the `run-list` Projection groups rows by (Today / Yesterday /
    *  Older). Defaults to the wall clock; a test injects a fixed instant (#87). */
   readonly now?: () => Date;
+  /** Bound Run snapshot work during a Turn. Settlements flush immediately. */
+  readonly scheduleRunUpdate?: (
+    callback: () => void,
+    delayMs: number,
+  ) => () => void;
   readonly scheduleHistoryPreview?: (
     callback: () => void,
     delayMs: number,
@@ -456,6 +461,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
     subscriptions,
     observe,
     catalog,
+    (harness) => {
+      for (const [runId, observers] of runObservers) {
+        if (observers.size > 0 && runsHarness(runId) === harness)
+          pushRunUpdate(runId);
+      }
+    },
   );
   const harnessInputRegistrations = new Map(
     (deps.harnessRegistry ?? []).map((entry) => [entry.choice.id, entry]),
@@ -506,40 +517,18 @@ export function createApplication(deps: ApplicationDependencies): Application {
       settle(answer: ModelChange | undefined): void;
     }>
   >();
-  const modelChoiceQualifications = new Map<
-    string,
-    ApplicationHarnessQualification
-  >();
   const modelChoicePreparations = new Set<string>();
-  const pendingModelQualifications = new Map<string, Promise<void>>();
-  function qualifyRunModelChoice(harness: string): Promise<void> {
-    const existing = pendingModelQualifications.get(harness);
-    if (existing !== undefined) return existing;
-    const pending = harnessCatalog.qualify(harness).then((qualification) => {
-      modelChoiceQualifications.set(
-        harness,
-        qualification ?? {
-          ok: false,
-          failure: {
-            phase: "prepare",
-            category: "harness-not-registered",
-            possibleEffects: "none",
-          },
-        },
-      );
-      // Several Runs can use the same cached qualification. Refresh each open view.
-      for (const id of runObservers.keys()) pushRunUpdate(id);
-    });
-    pendingModelQualifications.set(harness, pending);
-    return pending;
+  function runsHarness(runId: string): string | undefined {
+    const read = runGroup?.readRun(runId);
+    return read?.ok ? read.run.selectedHarness : undefined;
   }
   function runModelQualification(
     runId: string,
   ): ApplicationHarnessQualification | undefined {
-    const read = runGroup?.readRun(runId);
-    return read?.ok && read.run.selectedHarness !== undefined
-      ? modelChoiceQualifications.get(read.run.selectedHarness)
-      : undefined;
+    const harness = runsHarness(runId);
+    return harness === undefined
+      ? undefined
+      : harnessCatalog.qualification(harness);
   }
   // A Run's observer set outlives any one live tracking entry. A Projection opened
   // while the Run rests joins here before a later Operation creates or replaces
@@ -706,7 +695,34 @@ export function createApplication(deps: ApplicationDependencies): Application {
     pushRunUpdate(runId);
   }
 
+  const pendingRunUpdates = new Map<string, () => void>();
+  const scheduleRunUpdate =
+    deps.scheduleRunUpdate ??
+    ((callback, delay) => {
+      const timer = setTimeout(callback, delay);
+      timer.unref();
+      return () => clearTimeout(timer);
+    });
+
+  function cancelRunUpdate(runId: string): void {
+    pendingRunUpdates.get(runId)?.();
+    pendingRunUpdates.delete(runId);
+  }
+
+  function scheduleTurnUpdate(runId: string): void {
+    history.publish(runId);
+    if (!runObservers.get(runId)?.size || pendingRunUpdates.has(runId)) return;
+    pendingRunUpdates.set(
+      runId,
+      scheduleRunUpdate(() => {
+        pendingRunUpdates.delete(runId);
+        pushRunUpdate(runId);
+      }, 50),
+    );
+  }
+
   function pushRunUpdate(runId: string, readOwner?: RunOwner): void {
+    cancelRunUpdate(runId);
     if (runProjection === undefined) return;
     const tracking = runs.get(runId);
     const observers = runObservers.get(runId);
@@ -752,10 +768,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
       }
     }
     history.publish(runId);
-    pushRunCollectionUpdates();
   }
 
-  // Fan a change to the Workspace's Runs — a write, admission, release, rest, or
+  // Fan a change to the Workspace's Runs — admission, release, rest, or
   // delete — out to every Run-list page and to the Workspace's Run summary (#396).
   function pushRunCollectionUpdates(): void {
     pushRunSummary();
@@ -801,11 +816,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
       return undefined; // live in this process
     }
     try {
-      return runGroup
-        .listRuns()
-        .find(
-          (run) => run.runId === runId && run.live && !run.ownedByThisProcess,
-        );
+      const listing = runGroup.readRunListing(runId);
+      return listing?.live && !listing.ownedByThisProcess ? listing : undefined;
     } catch {
       // A malformed coordination row never throws out of submit (A4); the caller's
       // own store reads then surface it as a typed Problem.
@@ -817,6 +829,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // removes the store, so any open `run` Projection is closed rather than left to
   // read a Run that no longer exists. Pushed before the tracking entry is dropped.
   function pushRunClosed(runId: string): void {
+    cancelRunUpdate(runId);
     history.closed(runId);
     const observers = runObservers.get(runId);
     if (observers === undefined) return;
@@ -865,9 +878,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
       },
       appendTurnEvent(event) {
         const receipt = owner.appendTurnEvent(history.append(runId, event));
-        if (receipt.ok) {
+        if (receipt.ok && receipt.event !== undefined) {
           history.appended(runId, receipt.event);
-          pushRunUpdate(runId);
+          scheduleTurnUpdate(runId);
         }
         return receipt;
       },
@@ -898,10 +911,17 @@ export function createApplication(deps: ApplicationDependencies): Application {
         return result;
       },
       writeState(state) {
+        const previous = tracking?.state;
         const result = owner.writeState(state);
         if (result.ok && tracking !== undefined) {
           tracking.state = state;
           pushRunUpdate(runId);
+          if (
+            (state !== "running" && state !== "created") ||
+            (state === "running" &&
+              (previous === "halted" || previous === "failed"))
+          )
+            pushRunCollectionUpdates();
         }
         return result;
       },
@@ -912,6 +932,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
             tracking.state = request.advanceState;
           }
           pushRunUpdate(runId);
+          if (
+            request.advanceState !== undefined &&
+            request.advanceState !== "running" &&
+            request.advanceState !== "created"
+          )
+            pushRunCollectionUpdates();
         }
         return result;
       },
@@ -922,6 +948,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         if (result.ok && tracking !== undefined) {
           tracking.state = "halted";
           pushRunUpdate(runId);
+          pushRunCollectionUpdates();
         }
         return result;
       },
@@ -932,6 +959,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
         if (result.ok && request.advanceState !== undefined && tracking) {
           tracking.state = request.advanceState;
           pushRunUpdate(runId);
+          if (
+            request.advanceState !== "running" &&
+            request.advanceState !== "created"
+          )
+            pushRunCollectionUpdates();
         }
         return result;
       },
@@ -954,6 +986,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         if (result.ok && tracking !== undefined) {
           tracking.state = "blocked";
           pushRunUpdate(runId);
+          pushRunCollectionUpdates();
         }
         return result;
       },
@@ -1103,6 +1136,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       } finally {
         owner.close();
         pushRunUpdate(runId);
+        pushRunCollectionUpdates();
       }
     }
   }
@@ -1399,6 +1433,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       return { status: "not-applied", problem: runStoreDamaged(runId) };
     }
     tracking.owner = owner;
+    if (tracking.takeover === true) pushRunCollectionUpdates();
     const observed = observedOwner(owner, runId);
     if (tracking.takeover === true && tracking.state === "blocked") {
       // This takeover intentionally drives no routing, so it performs the
@@ -1413,6 +1448,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
           owner.release();
         } finally {
           owner.close();
+          pushRunCollectionUpdates();
         }
         return { status: "not-applied", problem: runStoreDamaged(runId) };
       }
@@ -1705,6 +1741,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       observers.add(updates);
       return () => {
         observers.delete(updates);
+        if (observers.size === 0) cancelRunUpdate(runId);
       };
     });
     if (snapshot.result.found) {
@@ -1715,7 +1752,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         snapshot.result.run.state !== "succeeded" &&
         snapshot.result.run.state !== "cancelled"
       )
-        void qualifyRunModelChoice(snapshot.result.run.selectedHarness);
+        void harnessCatalog.qualify(snapshot.result.run.selectedHarness);
       // A late-joining observer catches up on the current live overlay at once, so
       // a headless follower that opens after a request was raised still sees it
       // (#117). No-op when the Run has no live Turn to describe.
@@ -2054,8 +2091,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
           observers: observersForRun(input.runId),
           live: liveOverlay.fresh(),
         });
-        // The resume claim made this Run live here before its drive writes.
-        pushRunCollectionUpdates();
+        // Takeover claims at acquire; ordinary resume already claimed here.
+        if (!takeoverMatches) pushRunCollectionUpdates();
         return {
           admitted: true,
           runId: input.runId,
@@ -2218,6 +2255,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         owner.release();
         owner.close();
         runs.delete(input.runId);
+        pushRunCollectionUpdates();
       }
       return { status: "not-applied", problem: runStoreDamaged(input.runId) };
     }
@@ -2752,6 +2790,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       owner.release();
       owner.close();
       runs.delete(runId);
+      pushRunCollectionUpdates();
     };
     if (
       upgradeLegacyHarnessSelection(owner, facts.routing, runId) === "fenced"
@@ -3448,11 +3487,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
             possibleEffects: "none",
           },
         };
-      const foreign = runGroup
-        .listRuns()
-        .find(
-          (run) => run.runId === runId && run.live && !run.ownedByThisProcess,
-        );
+      const listing = runGroup.readRunListing(runId);
+      const foreign =
+        listing?.live && !listing.ownedByThisProcess ? listing : undefined;
       if (foreign !== undefined)
         return {
           status: "not-applied",
@@ -3479,9 +3516,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
               : runStoreDamaged(runId),
         };
     }
-    const initialListing = runGroup
-      .listRuns()
-      .find((run) => run.runId === runId);
+    const initialListing = runGroup.readRunListing(runId);
     const initial = modelChoiceOffer({
       runId,
       currentChoice: read.run.modelChoice,
@@ -3493,13 +3528,13 @@ export function createApplication(deps: ApplicationDependencies): Application {
       qualification:
         read.run.selectedHarness === undefined
           ? undefined
-          : modelChoiceQualifications.get(read.run.selectedHarness),
+          : harnessCatalog.qualification(read.run.selectedHarness),
       turnLive: false,
     });
     if (!initial.available && initial.problem.code !== "model-choice-checking")
       return { status: "not-applied", problem: initial.problem };
     const harness = read.run.selectedHarness;
-    if (harness !== undefined) await qualifyRunModelChoice(harness);
+    if (harness !== undefined) await harnessCatalog.qualify(harness);
     // Qualification yields. Re-read canonical state, choice and ownership before
     // resolving either half or acquiring a writer; tracking alone is not authority.
     const latest = runGroup.readRun(runId);
@@ -3511,7 +3546,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
             ? runNotFound(runId)
             : runStoreDamaged(runId),
       };
-    const listing = runGroup.listRuns().find((run) => run.runId === runId);
+    const listing = runGroup.readRunListing(runId);
     const eligibility = modelChoiceOffer({
       runId,
       currentChoice: latest.run.modelChoice,
@@ -3521,7 +3556,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
       qualification:
         latest.run.selectedHarness === undefined
           ? undefined
-          : modelChoiceQualifications.get(latest.run.selectedHarness),
+          : harnessCatalog.qualification(latest.run.selectedHarness),
       turnLive: false,
     });
     if (!eligibility.available)
@@ -3530,7 +3565,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
     const qualification =
       selected === undefined
         ? undefined
-        : modelChoiceQualifications.get(selected);
+        : harnessCatalog.qualification(selected);
     const registration =
       selected === undefined
         ? undefined
@@ -3817,6 +3852,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         }
         pushRunUpdate(runId);
         runs.delete(runId);
+        pushRunCollectionUpdates();
         return { status: "applied" };
       }
       const owner = runGroup.acquireRun(runId, { takeover: true });
@@ -4089,6 +4125,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
 
   let shutdownPromise: Promise<void> | undefined;
   function shutdown(): Promise<void> {
+    for (const runId of pendingRunUpdates.keys()) cancelRunUpdate(runId);
     history.shutdown();
     operations.endObservation();
     subscriptions.shutdown();

@@ -986,3 +986,50 @@ test("countRuns reports a malformed ownership row as unreadable (#396)", (t) => 
     ownershipUnreadable: 1,
   });
 });
+
+test("m10-audit-run-scoped-fanout: one Run ownership read stays fresh across takeover and release without fencing", (t) => {
+  const home = makeTempDir("secant-ownership-read-");
+  const first = openRunGroup(home, WORKSPACE, { selfPid: 1000 });
+  t.after(() => first.close());
+  const created = create(first, "single-ownership");
+  assert.ok(created.outcome === "created");
+  const owner = first.acquireRun(created.runId)!;
+  t.after(() => owner.close());
+  assert.deepEqual(first.readRunListing(created.runId), {
+    runId: created.runId,
+    live: true,
+    ownedByThisProcess: true,
+    ownerPid: 1000,
+  });
+  assert.ok(
+    owner.writeState("blocked").ok,
+    "reading must not fence the writer",
+  );
+  assert.equal(first.readRunListing("absent"), undefined);
+  const second = openRunGroup(home, WORKSPACE, {
+    selfPid: 2000,
+    isOwnerAlive: () => true,
+  });
+  t.after(() => second.close());
+  assert.deepEqual(second.readRunListing(created.runId), {
+    runId: created.runId,
+    live: true,
+    ownedByThisProcess: false,
+    ownerPid: 1000,
+  });
+  const takeover = second.acquireRun(created.runId, { takeover: true })!;
+  t.after(() => takeover.close());
+  assert.deepEqual(first.readRunListing(created.runId), {
+    runId: created.runId,
+    live: true,
+    ownedByThisProcess: false,
+    ownerPid: 2000,
+  });
+  assert.equal(owner.writeState("running").ok, false);
+  assert.ok(takeover.release().ok);
+  assert.deepEqual(first.readRunListing(created.runId), {
+    runId: created.runId,
+    live: false,
+    ownedByThisProcess: false,
+  });
+});

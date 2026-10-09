@@ -170,6 +170,7 @@ const TEST_COMMAND = /\bbun\s+run\s+test(?:\s|$)/;
 export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-history-latest-delivery",
   "m10-audit-history-index",
+  "m10-audit-run-scoped-fanout",
   "operation-receipt-identity-and-lifetime",
   "m10-audit-operation-settlement-owner",
   "m10-audit-steer-stored-when-sent",

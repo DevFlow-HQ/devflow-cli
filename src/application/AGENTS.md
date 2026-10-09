@@ -12,7 +12,8 @@
   A fresh Application learns a notice only from a new fallback launch; the notice is not persisted Run truth.
 - Every canonical Run write goes through `observedOwner`, whose getter reads the refreshed `record`. It intercepts `selectHarness`, `selectModelChoice`,
   `changeModelChoice`, `writeState`, `publishAttempt`, `recordMaterializationConflict`, `recordGateAnswer`, `recordPendingGate`, `admitTurn`,
-  every `appendTurnEvent`, and `settleTurn`, pushing after commit. A new owner method compiles without pushing unless intercepted (A3).
+  every `appendTurnEvent`, and `settleTurn`, pushing after commit; Turn appends coalesce and no-op receipts push nothing.
+  A new owner method compiles without pushing unless intercepted (A3).
   A `run` Projection joins the Run-scoped observer Set even while rested; later tracking entries reuse it so resume and human drivers cannot orphan the stream.
 - `answer-human-gate` serves two gate mechanisms off one Port operation (#108). The Projection derivation decides which: `derived.pendingGate` present is an
   **authored** gate, answered by settling its producing Attempt through `observedOwner.publishAttempt` (into `attempt_log`, so the resumed walk skips the gate) —

@@ -8,6 +8,7 @@ import { Database } from "bun:sqlite";
 import {
   createApplication,
   type Application,
+  type RunExecution,
 } from "../../src/application/application.js";
 import type {
   RunListSnapshot,
@@ -64,6 +65,7 @@ interface Fixture {
 }
 
 interface TFixtureOptions {
+  readonly runExecution?: RunExecution;
   readonly scheduleSettlement?: (settle: () => void | Promise<void>) => void;
   /** Replace the Application's Run Store count read (a malformed registration). */
   readonly countRuns?: () => RunCounts;
@@ -110,13 +112,15 @@ function fixture(t: TestContext, options: TFixtureOptions = {}): Fixture {
     ...(options.scheduleSettlement !== undefined
       ? { scheduleSettlement: options.scheduleSettlement }
       : {}),
-    runExecution: ({ routing, owner }) =>
-      executeRouting(routing, {
-        owner,
-        platform: hostPlatform(),
-        resolveAsset: () => undefined,
-        process: executionProcess,
-      }),
+    runExecution:
+      options.runExecution ??
+      (({ routing, owner }) =>
+        executeRouting(routing, {
+          owner,
+          platform: hostPlatform(),
+          resolveAsset: () => undefined,
+          process: executionProcess,
+        })),
     now: () => NOW,
   });
   // Install one command Bundle; every seeded Run reuses its digest so the join can
@@ -500,3 +504,78 @@ test("authoritative-run-summary: 101 Runs are counted in one Run Store traversal
     acquireRun: 0,
   });
 });
+
+for (const state of ["halted", "failed"])
+  test(`m10-audit-run-scoped-fanout: the open Resumable page removes a ${state} Run when resumed work starts`, async (t) => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const f = fixture(t, {
+      runExecution: async ({ owner }) => {
+        owner.writeState("running");
+        started();
+        await released;
+        owner.writeState("succeeded");
+        return { outcome: "succeeded" };
+      },
+    });
+    f.catalog.approveWorkspace(f.workspace, NOW);
+    const entry = f.catalog.listEntries()[0]!;
+    f.catalog.grantTrust({
+      operationId: "trust-fixture",
+      digest: f.digest,
+      installationGeneration: entry.installationGeneration,
+      grantedAt: NOW,
+    });
+    const runId = seedRun(f, NOW, state);
+    const view = f.app.projectionPort.openProjection({
+      family: "run-list",
+      resumable: true,
+    });
+    t.after(view.close);
+    assert.deepEqual(
+      view.snapshot.rows.map((row) => row.runId),
+      [runId],
+    );
+    const updates = view.updates[Symbol.asyncIterator]();
+    const resumed = f.app.projectionPort.submit({
+      operationId: "resume-filtered",
+      operation: "resume-run",
+      input: { runId },
+    });
+    assert.ok(resumed.admitted, JSON.stringify(resumed));
+    try {
+      await running;
+      for (let i = 0; ; i++) {
+        assert.ok(
+          i < 3,
+          "resume admission must remove its Run from the Resumable page",
+        );
+        const next = updates.next();
+        let ready = false;
+        void next.then(() => {
+          ready = true;
+        });
+        await Promise.resolve();
+        assert.ok(
+          ready,
+          "Resumable observers must refresh before the resumed Run rests",
+        );
+        const update = await next;
+        assert.ok(!update.done && update.value.kind === "durable");
+        if (update.value.snapshot.rows.length === 0) break;
+      }
+    } finally {
+      release();
+      assert.equal(
+        (await f.app.projectionPort.settledOperation(resumed.operationId))
+          .outcome.status,
+        "applied",
+      );
+    }
+  });

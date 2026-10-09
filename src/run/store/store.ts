@@ -694,6 +694,10 @@ export interface RunGroup {
   ): RunOwner | undefined;
   /** Every registered Run in this group. Order is unspecified. */
   listRuns(): readonly RunListing[];
+  /** Read one registered Run's current ownership without acquiring, fencing,
+   *  or traversing other Runs. Unknown Runs return undefined; damaged ownership
+   *  reads unowned, as in `listRuns`. */
+  readRunListing(runId: string): RunListing | undefined;
   /**
    * Count the registered Runs in one traversal that opens each Run Store once and
    * never acquires or fences (#396). `readable` counts records `readRun` would
@@ -1250,6 +1254,25 @@ export function openRunGroup(
     });
   }
 
+  function listingFor(runId: string): RunListing {
+    const ownership = readRunOwnership({
+      dir: join(groupDir, runId),
+      openDatabase: openRunDatabase,
+    });
+    const ownerPid =
+      ownership === undefined || ownership === DAMAGED
+        ? null
+        : ownership.ownerPid;
+    return ownerPid === null
+      ? { runId, live: false, ownedByThisProcess: false }
+      : {
+          runId,
+          live: true,
+          ownerPid,
+          ownedByThisProcess: ownerPid === selfPid,
+        };
+  }
+
   return {
     createRun(request) {
       return admitCreate(request);
@@ -1309,33 +1332,18 @@ export function openRunGroup(
         .all()
         .map((row) => {
           const parsed = registrationRow.safeParse(row);
-          if (!parsed.success) {
+          if (!parsed.success)
             throw new Error("Run Store: a runs row is malformed.");
-          }
-          const ownership = readRunOwnership({
-            dir: join(groupDir, parsed.data.run_id),
-            openDatabase: openRunDatabase,
-          });
-          // A damaged store lists unowned, matching the exact read's damaged Problem.
-          const ownerPid =
-            ownership === undefined || ownership === DAMAGED
-              ? null
-              : ownership.ownerPid;
-          const live = ownerPid != null;
-          if (ownerPid === null) {
-            return {
-              runId: parsed.data.run_id,
-              live: false,
-              ownedByThisProcess: false,
-            };
-          }
-          return {
-            runId: parsed.data.run_id,
-            live,
-            ownerPid,
-            ownedByThisProcess: ownerPid === selfPid,
-          };
+          return listingFor(parsed.data.run_id);
         });
+    },
+    readRunListing(runId) {
+      const row = db.select().from(runs).where(eq(runs.run_id, runId)).get();
+      if (row === undefined) return undefined;
+      const parsed = registrationRow.safeParse(row);
+      if (!parsed.success)
+        throw new Error("Run Store: a runs row is malformed.");
+      return listingFor(parsed.data.run_id);
     },
     countRuns() {
       let readable = 0;

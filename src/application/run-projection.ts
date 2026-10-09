@@ -151,7 +151,7 @@ function runResult(
   // Legality of cancel/delete is decided here, inside Secant (#87): an owned Run
   // can be cancelled; an unowned resting or terminal Run can be deleted. Read from the coordination record, which
   // is the same whether the Run is live in this process or another.
-  const listing = runListing(deps.runGroup, runId);
+  const listing = deps.runGroup.readRunListing(runId);
   const isLive = listing?.live === true;
   const liveElsewhere = isLive && listing?.ownedByThisProcess === false;
   const view = (
@@ -535,10 +535,6 @@ function conflictView(
       type: "diagnostic",
     },
   };
-}
-
-function runListing(runGroup: RunGroup, runId: string): RunListing | undefined {
-  return runGroup.listRuns().find((run) => run.runId === runId);
 }
 
 function runLiveness(listing: RunListing | undefined): RunView["liveness"] {

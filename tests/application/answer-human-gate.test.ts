@@ -324,7 +324,7 @@ test("a checkpoint is answered applied while another Run is live in the same Wor
   );
 });
 
-test("taking over a Run blocked in another process re-owns it blocked, and cancelling it then rests it cancelled (ADR 0031)", async (t) => {
+test("m10-audit-run-scoped-fanout: taking over a Run blocked in another process re-owns it blocked, and cancelling it then rests it cancelled (ADR 0031)", async (t) => {
   const f = fixture(t);
   // A repeat Bundle rests blocked under a first instance (pid 1000).
   const bundle = writeRepeatBundle({
@@ -385,6 +385,14 @@ test("taking over a Run blocked in another process re-owns it blocked, and cance
     state: "live-elsewhere",
     ownerPid: 1000,
   });
+  const workspaceView = app2.projectionPort.openProjection({
+    family: "workspace",
+  });
+  const listView = app2.projectionPort.openProjection({ family: "run-list" });
+  t.after(workspaceView.close);
+  t.after(listView.close);
+  const workspaceUpdates = workspaceView.updates[Symbol.asyncIterator]();
+  const listUpdates = listView.updates[Symbol.asyncIterator]();
   const takeover = app2.projectionPort.submit({
     operationId: "takeover-blocked",
     operation: "resume-run",
@@ -395,6 +403,46 @@ test("taking over a Run blocked in another process re-owns it blocked, and cance
     status: "applied",
   });
   // Re-owned here and still blocked (no execution ran; ownership just moved).
+  for (let i = 0; ; i++) {
+    assert.ok(
+      i < 3,
+      "Workspace must publish the claimed ownership at takeover",
+    );
+    const next = workspaceUpdates.next();
+    let ready = false;
+    void next.then(() => {
+      ready = true;
+    });
+    await Promise.resolve();
+    assert.ok(
+      ready,
+      "takeover must refresh an already-open Workspace before settlement",
+    );
+    const update = await next;
+    assert.ok(!update.done && update.value.kind === "durable");
+    const count = update.value.snapshot.runSummary.ownedLiveRuns;
+    if (count.state === "known" && count.count === 1) break;
+  }
+  for (let i = 0; ; i++) {
+    assert.ok(i < 3, "Run-list must publish the new owner at takeover");
+    const next = listUpdates.next();
+    let ready = false;
+    void next.then(() => {
+      ready = true;
+    });
+    await Promise.resolve();
+    assert.ok(
+      ready,
+      "takeover must refresh an already-open Run-list before settlement",
+    );
+    const update = await next;
+    assert.ok(!update.done && update.value.kind === "durable");
+    const row = update.value.snapshot.rows.find((run) => run.runId === runId);
+    if (row?.ownedByThisProcess) {
+      assert.equal(row.ownerPid, 2000);
+      break;
+    }
+  }
   assert.equal(readRun(app2.projectionPort, runId).state, "blocked");
   assert.equal(
     second.listRuns().find((run) => run.runId === runId)?.ownedByThisProcess,

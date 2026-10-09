@@ -195,6 +195,14 @@ jobs:
           bun run test --
           -t '^m10-audit-history-index(:|$)'
           tests/application/history-index.test.ts
+      - name: m10-audit-run-scoped-fanout
+        run: >-
+          bun run test --
+          -t '^m10-audit-run-scoped-fanout(:|$)'
+          tests/application/run-scoped-fanout.test.ts
+          tests/application/run-list.test.ts
+          tests/application/answer-human-gate.test.ts
+          tests/run/store/ownership-and-recovery.test.ts
       - name: m10-audit-legacy-turn-order
         run: >-
           bun run test --

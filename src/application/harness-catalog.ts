@@ -53,6 +53,8 @@ export interface HarnessCatalog {
    *  against the Harness's declared model list. A repeated call reuses the held
    *  result. Returns undefined for an unregistered id. */
   qualify(id: string): Promise<ApplicationHarnessQualification | undefined>;
+  /** Read the held result without starting qualification. */
+  qualification(id: string): ApplicationHarnessQualification | undefined;
 }
 
 /** The read-only Harness catalog owns the process-scoped qualification cache and
@@ -63,6 +65,7 @@ export function createHarnessCatalog(
   subscriptions: Pick<SubscriptionLifecycle, "open">,
   observe: ApplicationObserver,
   catalog: Catalog,
+  onQualified: (harness: string) => void,
 ): HarnessCatalog {
   const held = new Map<string, HeldQualification>();
   const qualifications = new Map<string, Promise<HeldQualification>>();
@@ -109,6 +112,7 @@ export function createHarnessCatalog(
         const qualification = { checkedAt: now().toISOString(), result };
         held.set(registration.choice.id, qualification);
         observe(qualificationResult(harness, result));
+        onQualified(harness);
         for (const observer of listObservers) {
           observer.push({ kind: "durable", snapshot: listSnapshot() });
         }
@@ -179,10 +183,29 @@ export function createHarnessCatalog(
       id: string,
     ): Promise<ApplicationHarnessQualification | undefined> {
       const registration = registrationFor(id);
-      if (registration === undefined) return undefined;
+      if (registration === undefined) {
+        if (!held.has(id)) {
+          held.set(id, {
+            checkedAt: now().toISOString(),
+            result: {
+              ok: false,
+              failure: {
+                phase: "prepare",
+                category: "harness-not-registered",
+                possibleEffects: "none",
+              },
+            },
+          });
+          onQualified(id);
+        }
+        return undefined;
+      }
       const cached = held.get(id);
       if (cached !== undefined) return cached.result;
       return (await qualifyRegistration(registration)).result;
+    },
+    qualification(id) {
+      return held.get(id)?.result;
     },
     readDiagnostic(reference: HarnessDiagnosticReference): ResourceRead {
       const qualification = held.get(reference.harnessId);

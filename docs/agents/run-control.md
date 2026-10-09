@@ -68,12 +68,17 @@ Before changing Turn interrupt, Steer, live Model choice changes, or Agent follo
   so an in-flight answer stays valid across them (#412).
 - At Turn end `bindAnswer(undefined)` clears any still-outstanding request, bumps the generation, and sets the live phase to `settling` before announcing the overlay, so
   a resumed Run starts clean. The durable `request-expired` timeline row is execution's write, not the live lane's.
-- A **durable** push (`pushRunUpdate`) fans out to this Run's observers **and** every Run-list observer and the Workspace Run summary (`pushRunCollectionUpdates`);
-  a **live overlay** channel push reaches this Run's observers only. `observedOwner` also fans out successful Turn-event and settlement writes (#412).
-  Launch and resume admission, cancel, and delete call that fan-out directly. The summary
-  (`summarizeRuns`, #396) is one `countRuns` read and pushes only when a count changes; the quit guard trusts it, so a new ownership change or claim must reach the
-  fan-out.
-  Each fan-out with a Workspace observer open (always, in the TUI) opens every registered `run.db` once: O(Runs) per durable write.
+- A durable Run push refreshes only that Run and its Session history. A newly committed Turn-event append schedules one Run snapshot within
+  50 ms of the first pending append; later appends share that window. Turn settlement and other immediate Run pushes cancel the timer and publish
+  current facts at once. Store-deduplicated no-op appends push nothing. The last Run observer closing, deletion, or shutdown cancels the timer.
+- Workspace and Run-list census fan-out runs only on Run admission, rest, release, and deletion. Turn admission, Turn-event append, Turn settlement,
+  model changes, and live overlay updates do not trigger it. Resume admission refreshes again when `halted` or `failed` first becomes `running`,
+  so open Resumable pages remove it before rest. Takeover admission publishes only after acquisition changes the owner.
+  The summary (`summarizeRuns`, #396) uses one `countRuns` read and publishes only changed counts. The quit guard trusts it,
+  so every ownership claim and release must reach this fan-out.
+- A Run snapshot reads only its Run's current ownership through `readRunListing`, without acquiring, fencing, or traversing other Run Stores.
+  Harness qualification settlement refreshes each Run with an open observer using that Harness once. Empty retained observer Sets are skipped,
+  and the Harness catalog alone holds qualification promises and results.
 - A late-joining observer catches up on the current overlay at open, so a follower connecting after a request was raised still sees it. By design a client can
   therefore receive live control updates for a Turn whose durable start it never saw: a headless follower opening mid-Turn observes the live request even though its
   durable Turn-start snapshot predates the connection.
