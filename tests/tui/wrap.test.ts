@@ -121,18 +121,30 @@ for (const [glyph, columns, lines] of [
   ["é", 1, 300],
   ["漢", 2, 600],
 ] as const) {
-  test(`m10-audit-row-layout-once: an unbroken 30000-character ${glyph} line wraps in linear time with exact display-column parity`, () => {
+  test(`m10-audit-row-layout-once: an unbroken 30000-character ${glyph} line wraps with linear segmentation work and exact display-column parity`, (t) => {
     const text = glyph.repeat(30_000);
-    const before = performance.now();
+    // Count native segmentation input, including string-width's work, without
+    // replacing Unicode behavior. A fixed number of full scans and cached glyph
+    // measurements fits this linear budget; rescanning each suffix cannot.
+    const segment = Intl.Segmenter.prototype.segment;
+    let segmentedUnits = 0;
+    const budget = 3 * text.length;
+    t.mock.method(
+      Intl.Segmenter.prototype,
+      "segment",
+      function (this: Intl.Segmenter, input: string) {
+        segmentedUnits += input.length;
+        assert.ok(
+          segmentedUnits <= budget,
+          `segmented ${segmentedUnits} code units for ${text.length} input code units`,
+        );
+        return segment.call(this, input);
+      },
+    );
     const wrapped = wrap(text, 100);
-    const elapsed = performance.now() - before;
     assert.deepEqual(
       wrapped,
       Array.from({ length: lines }, () => glyph.repeat(100 / columns)),
-    );
-    assert.ok(
-      elapsed < 100,
-      `30000 ${glyph} characters took ${elapsed.toFixed(1)} ms`,
     );
     assert.equal(wrapped.join(""), text);
   });
