@@ -16,7 +16,6 @@ import {
   untrack,
   type Accessor,
 } from "solid-js";
-import stripAnsi from "strip-ansi";
 import type {
   Problem,
   RunTranscriptEntryView,
@@ -113,8 +112,7 @@ function createEntryLayout(observe: LayoutObserver) {
         const lines = [
           ...leading,
           ...wrapRows([header], width).lines,
-          ...wrapRows(stripAnsi(entry.content).split(/\r?\n/).concat(""), width)
-            .lines,
+          ...wrapRows([entry.content, ""], width).lines,
         ];
         layout = { prefix: leading.length, lines };
         cached.widths.set(width, layout);
@@ -249,7 +247,7 @@ export function createTranscriptReader(deps: {
     const text = read.entries
       .map(
         (entry) =>
-          `${entry.role === "user" ? "User" : "Assistant"}${entryAnnotation(entry)}\n${stripAnsi(entry.content)}\n`,
+          `${entry.role === "user" ? "User" : "Assistant"}${entryAnnotation(entry)}\n${entry.content}\n`,
       )
       .join("\n");
     setExportNotice(

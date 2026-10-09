@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import {
@@ -91,9 +92,9 @@ function StepCount(props: { label: Accessor<string> }) {
   const { theme } = useTheme();
   return (
     <Show when={props.label().length > 0}>
-      <text fg={theme.textMuted} flexShrink={0}>
+      <DisplayText fg={theme.textMuted} flexShrink={0}>
         {props.label()}
-      </text>
+      </DisplayText>
     </Show>
   );
 }
@@ -119,9 +120,9 @@ function RunNotStartedNotice(props: {
   return (
     <Show when={props.notice()}>
       {(message) => (
-        <text fg={theme.warning} flexShrink={0}>
+        <DisplayText fg={theme.warning} flexShrink={0}>
           {`ⓘ ${message()} · ctrl+d dismiss`}
-        </text>
+        </DisplayText>
       )}
     </Show>
   );
@@ -237,8 +238,12 @@ export function ChooseStep(props: {
             <text attributes={TextAttributes.BOLD} fg={theme.error}>
               Correction needed
             </text>
-            <text fg={theme.textMuted}>{problem().explanation}</text>
-            <text fg={theme.textMuted}>{problem().remediation}</text>
+            <DisplayText fg={theme.textMuted}>
+              {problem().explanation}
+            </DisplayText>
+            <DisplayText fg={theme.textMuted}>
+              {problem().remediation}
+            </DisplayText>
           </box>
         )}
       </Show>
@@ -250,12 +255,12 @@ export function ChooseStep(props: {
             fallback={
               <box flexDirection="column" flexShrink={0}>
                 <text fg={theme.textMuted}>The Catalog is empty.</text>
-                <text fg={theme.textMuted}>
+                <DisplayText fg={theme.textMuted}>
                   {"Install one with `secant bundle build <folder>` or"}
-                </text>
-                <text fg={theme.textMuted}>
+                </DisplayText>
+                <DisplayText fg={theme.textMuted}>
                   {"`secant bundle install <file.wfb>`."}
-                </text>
+                </DisplayText>
               </box>
             }
           >
@@ -301,20 +306,24 @@ export function ChooseStep(props: {
       >
         {(problem) => (
           <box flexDirection="column" flexShrink={0}>
-            <text attributes={TextAttributes.BOLD} fg={theme.error}>
+            <DisplayText attributes={TextAttributes.BOLD} fg={theme.error}>
               {`Catalog error: ${problem().code}`}
-            </text>
-            <text fg={theme.textMuted}>{problem().explanation}</text>
-            <text fg={theme.textMuted}>{problem().remediation}</text>
+            </DisplayText>
+            <DisplayText fg={theme.textMuted}>
+              {problem().explanation}
+            </DisplayText>
+            <DisplayText fg={theme.textMuted}>
+              {problem().remediation}
+            </DisplayText>
           </box>
         )}
       </Show>
-      <text
+      <DisplayText
         fg={props.canContinue() ? theme.text : theme.textMuted}
         flexShrink={0}
       >
         {chooserFooter()}
-      </text>
+      </DisplayText>
     </box>
   );
 }
@@ -334,21 +343,23 @@ function SidePanel(props: {
         <box flexDirection="column" flexShrink={0} gap={1} overflow="hidden">
           <box flexDirection="column" flexShrink={0}>
             <text fg={theme.textMuted}>Name</text>
-            <text fg={theme.text}>{bundle().name}</text>
+            <DisplayText fg={theme.text}>{bundle().name}</DisplayText>
           </box>
           <box flexDirection="column" flexShrink={0}>
             <text fg={theme.textMuted}>Description</text>
-            <text fg={theme.text}>{bundle().description}</text>
+            <DisplayText fg={theme.text}>{bundle().description}</DisplayText>
           </box>
           <box flexDirection="column" flexShrink={0}>
             <text fg={theme.textMuted}>Source</text>
-            <text fg={theme.text}>
+            <DisplayText fg={theme.text}>
               {formatOrigin(bundle().origin, bundle().shippedWithRunningSecant)}
-            </text>
+            </DisplayText>
           </box>
           <box flexDirection="column" flexShrink={0}>
             <text fg={theme.textMuted}>Workflow</text>
-            <text fg={theme.text}>{formatRouting(bundle().routing)}</text>
+            <DisplayText fg={theme.text}>
+              {formatRouting(bundle().routing)}
+            </DisplayText>
           </box>
           {/* A calm navigation pointer — full commands and the Execution summary
               live in Workflow Bundles, so this panel never duplicates them. */}
@@ -357,20 +368,20 @@ function SidePanel(props: {
           </text>
           <Show when={props.untrusted()}>
             <box flexDirection="column" flexShrink={0}>
-              <text
+              <DisplayText
                 attributes={TextAttributes.BOLD}
                 fg={props.acknowledged() ? theme.text : theme.warning}
               >
                 {props.acknowledged()
                   ? "Trust acknowledged ✓"
                   : "Untrusted Bundle — press a to acknowledge trust"}
-              </text>
-              <text fg={theme.textMuted}>
+              </DisplayText>
+              <DisplayText fg={theme.textMuted}>
                 {`Digest sha256:${bundle().digest}`}
-              </text>
-              <text fg={theme.textMuted}>
+              </DisplayText>
+              <DisplayText fg={theme.textMuted}>
                 {bundle().executionSummary.warning}
-              </text>
+              </DisplayText>
             </box>
           </Show>
         </box>
@@ -502,8 +513,12 @@ export function HarnessStep(props: {
         {(problem) => (
           <box flexDirection="column" flexShrink={0}>
             <text fg={theme.error}>Correction needed</text>
-            <text fg={theme.textMuted}>{problem().explanation}</text>
-            <text fg={theme.textMuted}>{problem().remediation}</text>
+            <DisplayText fg={theme.textMuted}>
+              {problem().explanation}
+            </DisplayText>
+            <DisplayText fg={theme.textMuted}>
+              {problem().remediation}
+            </DisplayText>
           </box>
         )}
       </Show>
@@ -526,13 +541,13 @@ export function HarnessStep(props: {
         }
       >
         <box flexDirection="column" flexGrow={1} overflow="hidden">
-          <text
+          <DisplayText
             fg={theme.text}
             flexShrink={0}
-          >{`Harness: ${props.focus()?.name ?? props.chosenId()}`}</text>
-          <text fg={theme.textMuted} flexShrink={0}>
+          >{`Harness: ${props.focus()?.name ?? props.chosenId()}`}</DisplayText>
+          <DisplayText fg={theme.textMuted} flexShrink={0}>
             {harnessFocusStatus(props.focus())}
-          </text>
+          </DisplayText>
           <For each={statusLines()}>
             {(line) => (
               <text fg={theme.textMuted} flexShrink={0} wrapMode="none">
@@ -542,13 +557,13 @@ export function HarnessStep(props: {
           </For>
         </box>
       </Show>
-      <text fg={theme.textMuted} flexShrink={0}>
+      <DisplayText fg={theme.textMuted} flexShrink={0}>
         {selected()
           ? props.canContinue()
             ? `enter continue · esc choose another · ${props.canReturn() ? "tab return · " : ""}q quit`
             : `esc choose another · ${props.canReturn() ? "tab return · " : ""}q quit`
           : `↑/↓ move · enter choose · ${props.canReturn() ? "tab/esc return" : "esc back"} · q quit`}
-      </text>
+      </DisplayText>
     </box>
   );
 }
@@ -826,7 +841,9 @@ export function InputsStep(props: {
           </text>
           <Show when={props.problem()}>
             {(problem) => (
-              <text fg={theme.textMuted}>{problem().remediation}</text>
+              <DisplayText fg={theme.textMuted}>
+                {problem().remediation}
+              </DisplayText>
             )}
           </Show>
         </box>
@@ -835,21 +852,23 @@ export function InputsStep(props: {
         <For each={inputs()}>
           {(input, index) => (
             <box flexDirection="column" flexShrink={0}>
-              <text
+              <DisplayText
                 fg={theme.text}
                 attributes={index() === field() ? TextAttributes.BOLD : 0}
               >
                 {`${index() === field() ? "› " : "  "}${input.name} (${input.type})`}
-              </text>
-              <text fg={theme.textMuted}>{`  ${input.description}`}</text>
+              </DisplayText>
+              <DisplayText
+                fg={theme.textMuted}
+              >{`  ${input.description}`}</DisplayText>
               <Switch
                 fallback={
-                  <text fg={theme.text}>
+                  <DisplayText fg={theme.text}>
                     {`  ‹ ${props.values[input.name] ?? "(not set)"} › — ←/→ to choose from: ${options(
                       input.name,
                       input.type,
                     ).join(", ")}`}
-                  </text>
+                  </DisplayText>
                 }
               >
                 <Match when={input.type === "text"}>
@@ -873,16 +892,18 @@ export function InputsStep(props: {
               </Switch>
               <Show when={findingFor(input.name)}>
                 {(explanation) => (
-                  <text fg={theme.error}>{`  ${explanation()}`}</text>
+                  <DisplayText
+                    fg={theme.error}
+                  >{`  ${explanation()}`}</DisplayText>
                 )}
               </Show>
             </box>
           )}
         </For>
       </box>
-      <text fg={theme.textMuted} flexShrink={0}>
+      <DisplayText fg={theme.textMuted} flexShrink={0}>
         {`↑/↓ input · ${current()?.type === "text" ? "ctrl+j newline" : "type to edit"} · enter continue · esc back`}
-      </text>
+      </DisplayText>
     </box>
   );
 }
@@ -1295,9 +1316,9 @@ export function ReviewStep(props: {
         onDismiss={props.onDismissNotice}
         group="Review"
       />
-      <text fg={colour(status().tone)} flexShrink={0} wrapMode="none">
+      <DisplayText fg={colour(status().tone)} flexShrink={0} wrapMode="none">
         {status().text}
-      </text>
+      </DisplayText>
       <box flexDirection="column" flexGrow={1} overflow="hidden">
         <For each={bodyLines().slice(top(), top() + viewport())}>
           {(line) => (

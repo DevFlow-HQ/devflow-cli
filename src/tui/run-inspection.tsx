@@ -1,7 +1,7 @@
 import { useLayoutObserver } from "./layout-observer.js";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, createSignal, For, type Accessor } from "solid-js";
-import stripAnsi from "strip-ansi";
+import { screenText, type ScreenedText } from "./screen-text.js";
 import type {
   DiagnosticReference,
   Problem,
@@ -18,7 +18,7 @@ import {
   type TimelineScroll,
 } from "./run-timeline.js";
 import { useTheme } from "./vendor/theme-context.js";
-import { wrapRows } from "./wrap.js";
+import { wrapScreenedRows } from "./wrap.js";
 
 // Artifact and output inspection owns bounded, wrapped text and modal navigation.
 type Theme = ReturnType<typeof useTheme>["theme"];
@@ -45,7 +45,7 @@ export type Openable =
 interface BlobInspection {
   readonly kind: "blob";
   readonly title: string;
-  readonly lines: readonly string[];
+  readonly lines: readonly ScreenedText[];
   readonly truncated: boolean;
   readonly problem?: Problem;
 }
@@ -104,10 +104,9 @@ export function createInspection(deps: {
         problem: read.problem,
       });
     } else {
-      // Captured output can carry colour escapes and bare carriage returns from a
-      // command forcing colour or drawing a progress bar (D4): strip the escapes
-      // and split on `\r?\n` so a `\r` never corrupts a rendered row.
-      const all = stripAnsi(read.content).split(/\r?\n/);
+      const all = screenText(read.content)
+        .text.split("\n")
+        .map((text) => ({ text }));
       const truncated =
         !("format" in target && target.format === "diff") &&
         all.length > MAX_INSPECT_LINES;
@@ -123,32 +122,34 @@ export function createInspection(deps: {
 
   // Display lines include an explicit truncation marker as the final row when a
   // blob was capped, so it scrolls into view like any other line (#91 AC4).
-  const logicalLines = (): readonly string[] => {
+  const logicalLines = (): readonly ScreenedText[] => {
     const current = inspecting();
     if (current === undefined) return [];
     if (current.problem !== undefined) {
       return [
-        `Error [${current.problem.code}]: ${current.problem.explanation}`,
-        current.problem.remediation,
+        screenText(
+          `Error [${current.problem.code}]: ${current.problem.explanation}`,
+        ),
+        screenText(current.problem.remediation),
       ];
     }
     if (!current.truncated) return current.lines;
     const last = current.lines.at(-1);
-    if (last === undefined) return [RUN_TIMELINE_TRUNCATION_MARKER];
+    if (last === undefined) return [{ text: RUN_TIMELINE_TRUNCATION_MARKER }];
     return current.lines
       .slice(0, -1)
-      .concat(`${last} ${RUN_TIMELINE_TRUNCATION_MARKER}`);
+      .concat({ text: `${last.text} ${RUN_TIMELINE_TRUNCATION_MARKER}` });
   };
   const layoutAtWidth = createMemo(() => {
     const current = inspecting();
     const logical = logicalLines();
-    const widths = new Map<number, ReturnType<typeof wrapRows>>();
+    const widths = new Map<number, ReturnType<typeof wrapScreenedRows>>();
     return (width: number) => {
       let layout = widths.get(width);
       if (layout === undefined) {
         if (current !== undefined)
           observe({ kind: "inspection", id: current.title, width });
-        layout = wrapRows(logical, width);
+        layout = wrapScreenedRows(logical, width);
         widths.set(width, layout);
       }
       return layout;

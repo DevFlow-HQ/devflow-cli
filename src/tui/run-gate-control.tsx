@@ -1,3 +1,4 @@
+import { screenText } from "./screen-text.js";
 import { useDialog } from "./vendor/dialog.js";
 import { TextAttributes, type InputRenderable } from "@opentui/core";
 import {
@@ -207,6 +208,9 @@ export function FreeTextGateControl(props: {
   let field: InputRenderable | undefined;
   onCleanup(() => field?.blur());
   const w = () => props.width();
+  const fieldText = createMemo(() =>
+    screenText(props.text()).text.replace(/[\n\t]/g, " "),
+  );
   const status = () => {
     if (props.pending()) return "… submitting your answer";
     const refusal = props.refusal();
@@ -254,8 +258,11 @@ export function FreeTextGateControl(props: {
           ref={(input) => {
             field = input;
           }}
-          value={props.text()}
-          onInput={props.onInput}
+          value={fieldText()}
+          onInput={(value) => {
+            // Native value updates emit input too; display screening is not an edit.
+            if (value !== fieldText()) props.onInput(value);
+          }}
           focused={
             props.focused() && !props.pending() && dialog.stack.length === 0
           }

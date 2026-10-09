@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import {
   LayoutObserverProvider,
   type LayoutObserver,
@@ -222,9 +223,9 @@ function Fallback(props: { error: unknown; exit: Exit }) {
   // to tear down and print it to the restored terminal.
   props.exit(props.error);
   return (
-    <text fg={theme.error}>
+    <DisplayText fg={theme.error}>
       {props.error instanceof Error ? props.error.message : String(props.error)}
-    </text>
+    </DisplayText>
   );
 }
 
@@ -268,9 +269,9 @@ function QuitConfirmation(props: {
       : `Halt ${props.liveRunCount} live ${props.liveRunCount === 1 ? "Run" : "Runs"} and quit?`;
   return (
     <box paddingLeft={2} paddingRight={2} gap={1}>
-      <text attributes={TextAttributes.BOLD} fg={theme.text}>
+      <DisplayText attributes={TextAttributes.BOLD} fg={theme.text}>
         {title}
-      </text>
+      </DisplayText>
       <Show when={props.liveRunCount === undefined}>
         <text fg={theme.warning}>
           Secant could not read which Runs this instance owns.
@@ -293,7 +294,7 @@ function QuitConfirmation(props: {
               backgroundColor={choice() === option ? theme.primary : undefined}
               onMouseUp={() => choose(option)}
             >
-              <text
+              <DisplayText
                 fg={
                   choice() === option
                     ? theme.selectedListItemText
@@ -302,7 +303,7 @@ function QuitConfirmation(props: {
               >
                 {(choice() === option ? "› " : "  ") +
                   (option === "quit" ? "Halt and Quit" : "Keep Running")}
-              </text>
+              </DisplayText>
             </box>
           )}
         </For>

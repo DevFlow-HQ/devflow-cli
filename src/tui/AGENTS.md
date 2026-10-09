@@ -35,7 +35,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - A launch resolves at **admission** (`run-launch-view.tsx`): the Run id is known and the Run is observable `running` at once (#98 A7), so the flow reaches
   the Workbench before the Run rests and the Workbench follows the live `run` Projection. Every _other_ write (answer, resume, cancel, delete) follows the
   Application-owned `ProjectionPort.settledOperation` through `submit-and-settle.ts` (#448), because Run settlement can be asynchronous (#98).
-  Captured command output is stripped of ANSI escapes with `strip-ansi` and split on `/\r?\n/` in the inspection read path (D4).
+  Display text is screened before wrapping, clipping, or drawing unbounded leaves (#444); Resource and transcript truth stays raw.
 - Sanctioned Seam leak (A29): `createProductionRenderer` (`renderer/renderer.ts`) returns an `@opentui/core` `CliRenderer` that composition
   (`composition/tui-runtime.ts`) binds and hands to `mountTui`, so an inferred `@opentui/core` type crosses into composition where the boundary suite —
   which reads only import specifiers — cannot see it. Deliberate and ADR 0018-sanctioned: Solid's `render(node, renderer)` mounts onto that object while

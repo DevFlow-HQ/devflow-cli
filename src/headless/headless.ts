@@ -1,3 +1,4 @@
+import { screenOutput, type CommandIO } from "./output.js";
 import { headlessJson } from "./json.js";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
@@ -70,13 +71,14 @@ export async function runHeadless(
   args: readonly string[],
   io: HeadlessIO,
 ): Promise<number> {
-  const { program, state } = buildProgram(io, "0.0.0-dev", (run) =>
+  const output = screenOutput(io);
+  const { program, state } = buildProgram(output, "0.0.0-dev", (run) =>
     run(clients),
   );
   try {
     await program.parseAsync(args as string[], { from: "user" });
   } catch (error) {
-    return translateCommanderError(error, io);
+    return translateCommanderError(error, output);
   }
   return state.code;
 }
@@ -89,11 +91,12 @@ export async function runHeadlessCli(
   version: string,
   execute: CommandExecutor,
 ): Promise<number> {
-  const { program, state } = buildProgram(io, version, execute);
+  const output = screenOutput(io);
+  const { program, state } = buildProgram(output, version, execute);
   try {
     await program.parseAsync(args as string[], { from: "user" });
   } catch (error) {
-    return translateCommanderError(error, io);
+    return translateCommanderError(error, output);
   }
   return state.code;
 }
@@ -101,7 +104,7 @@ export async function runHeadlessCli(
 // --- command tree ----------------------------------------------------------
 
 function buildProgram(
-  io: HeadlessIO,
+  io: CommandIO,
   version: string,
   wired: CommandExecutor,
 ): { program: Command; state: { code: number } } {
@@ -332,7 +335,7 @@ function commandPath(cmd: Command): string {
 // (unknown command, unknown flag, excess arguments) becomes a Problem so the
 // output stays uniform with the rest of the headless surface. A non-Commander
 // throw is a genuine failure and propagates to the host's catch.
-function translateCommanderError(error: unknown, io: HeadlessIO): number {
+function translateCommanderError(error: unknown, io: CommandIO): number {
   if (!(error instanceof CommanderError)) throw error;
   // Help (including the help shown for a bare command group) and version were
   // already written; the help text is itself the usage message, so just carry
@@ -366,7 +369,7 @@ function translateCommanderError(error: unknown, io: HeadlessIO): number {
 
 function approve(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   json: boolean,
   path: string,
 ): number {
@@ -386,7 +389,7 @@ function approve(
   try {
     const snapshot = opened.snapshot;
     if (json) {
-      io.out(`${headlessJson(snapshot)}\n`);
+      io.json(`${headlessJson(snapshot)}\n`);
       return snapshot.outcome.status === "applied" ? 0 : 1;
     }
     if (snapshot.outcome.status === "not-applied") {
@@ -401,14 +404,14 @@ function approve(
 
 function showWorkspace(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   json: boolean,
 ): number {
   const opened = port.openProjection({ family: "workspace" });
   try {
     const snapshot = opened.snapshot;
     if (json) {
-      io.out(`${headlessJson(snapshot)}\n`);
+      io.json(`${headlessJson(snapshot)}\n`);
       return 0;
     }
     io.out(`Workspace: ${snapshot.path}\n`);
@@ -427,7 +430,7 @@ function showWorkspace(
 
 function listBundles(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   json: boolean,
 ): number {
   const opened = port.openProjection({ family: "bundle-catalog" });
@@ -440,7 +443,7 @@ function listBundles(
     }
     const { bundles } = snapshot.result;
     if (json) {
-      io.out(`${headlessJson(snapshot)}\n`);
+      io.json(`${headlessJson(snapshot)}\n`);
       return 0;
     }
     if (bundles.length === 0) {
@@ -456,7 +459,7 @@ function listBundles(
 
 function inspectBundle(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   json: boolean,
   selector: string,
 ): number {
@@ -474,7 +477,7 @@ function inspectBundle(
     }
     const bundle = snapshot.result.bundle;
     if (json) {
-      io.out(`${headlessJson(bundle)}\n`);
+      io.json(`${headlessJson(bundle)}\n`);
       return 0;
     }
     io.out(renderFocus(bundle));
@@ -484,10 +487,10 @@ function inspectBundle(
   }
 }
 
-function report(io: HeadlessIO, json: boolean, result: BundleResult): number {
+function report(io: CommandIO, json: boolean, result: BundleResult): number {
   if (!result.ok) return fail(io, json, result.problem);
   if (json) {
-    io.out(`${headlessJson(result.report)}\n`);
+    io.json(`${headlessJson(result.report)}\n`);
     return 0;
   }
   const { identity, digest, outputPath, installed, findings } = result.report;
@@ -509,9 +512,9 @@ function report(io: HeadlessIO, json: boolean, result: BundleResult): number {
   return 0;
 }
 
-function fail(io: HeadlessIO, json: boolean, problem: Problem): number {
+function fail(io: CommandIO, json: boolean, problem: Problem): number {
   if (json) {
-    io.out(`${headlessJson(problem)}\n`);
+    io.json(`${headlessJson(problem)}\n`);
   } else {
     io.err(`Error [${problem.code}]: ${problem.explanation}\n`);
     for (const violation of problem.fieldViolations ?? []) {

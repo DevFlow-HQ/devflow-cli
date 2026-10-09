@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { createSignal, onCleanup, Show, type Accessor } from "solid-js";
 import { useTerminalDimensions } from "@opentui/solid";
 import type { AppearancePreferences } from "../application/projection-port.js";
@@ -96,11 +97,15 @@ export function ShellCommands(props: {
             )}
             overflow="hidden"
           >
-            <text fg={appearance.theme.text} flexShrink={0} wrapMode="none">
+            <DisplayText
+              fg={appearance.theme.text}
+              flexShrink={0}
+              wrapMode="none"
+            >
               {kind === "themes"
                 ? `Themes · ${appearance.active().appearance === "dark" ? "Dark" : "Light"} · ${appearance.active().theme}`
                 : "App commands"}
-            </text>
+            </DisplayText>
             <CommandSearch
               search={search}
               enabled={true}

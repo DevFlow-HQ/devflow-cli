@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import {
@@ -199,26 +200,26 @@ export function PreviousRuns(props: {
       </text>
       <Show when={props.notice()}>
         {(notice) => (
-          <text fg={theme.text} flexShrink={0}>
+          <DisplayText fg={theme.text} flexShrink={0}>
             {`ⓘ ${notice()} · d dismiss`}
-          </text>
+          </DisplayText>
         )}
       </Show>
-      <text fg={theme.textMuted} flexShrink={0}>
+      <DisplayText fg={theme.textMuted} flexShrink={0}>
         {`Filter: ${resumable() ? "Resumable" : "All Runs"} · f to toggle`}
-      </text>
+      </DisplayText>
       <Show
         when={rows().length > 0}
         fallback={
           <box flexDirection="column" flexGrow={1} flexShrink={0}>
-            <text fg={theme.textMuted} flexShrink={0}>
+            <DisplayText fg={theme.textMuted} flexShrink={0}>
               {resumable() ? "No resumable Runs" : "No previous Runs"}
-            </text>
-            <text fg={theme.textMuted} flexShrink={0}>
+            </DisplayText>
+            <DisplayText fg={theme.textMuted} flexShrink={0}>
               {resumable()
                 ? "Press f to show all Runs."
                 : "Start a Run from Home."}
-            </text>
+            </DisplayText>
             <text fg={theme.textMuted}>esc back · q quit</text>
           </box>
         }

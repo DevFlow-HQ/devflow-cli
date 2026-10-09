@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { For, Show } from "solid-js";
@@ -83,21 +84,23 @@ export function Home(props: {
       <Show when={dimensions().height >= 12}>
         <box flexDirection="column" flexShrink={0}>
           <text fg={theme.textMuted}>Workspace</text>
-          <text fg={theme.text}>{view.snapshot().path}</text>
+          <DisplayText fg={theme.text}>{view.snapshot().path}</DisplayText>
         </box>
       </Show>
       {/* A failed Shipped Bundle ensure is a notice, never a block (ADR 0029). */}
       <For each={view.snapshot().startupNotices}>
         {(notice) => (
           <box flexDirection="column" flexShrink={0}>
-            <text fg={theme.warning}>{`Notice: ${notice.explanation}`}</text>
-            <text fg={theme.textMuted}>{notice.remediation}</text>
+            <DisplayText
+              fg={theme.warning}
+            >{`Notice: ${notice.explanation}`}</DisplayText>
+            <DisplayText fg={theme.textMuted}>{notice.remediation}</DisplayText>
           </box>
         )}
       </For>
       <Show when={approved()}>
         <Show when={dimensions().height >= 12}>
-          <text fg={theme.textMuted} flexShrink={0}>
+          <DisplayText fg={theme.textMuted} flexShrink={0}>
             {homeSummary({
               bundleCount: view.snapshot().installedBundleCount,
               previousRuns: view.snapshot().runSummary.previousRuns,
@@ -105,7 +108,7 @@ export function Home(props: {
                 isQualified(harness.qualification),
               )?.name,
             })}
-          </text>
+          </DisplayText>
         </Show>
         <CommandSearch
           search={search}

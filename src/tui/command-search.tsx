@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { createMemo, createSignal, For, Show, type Accessor } from "solid-js";
 import type { RendererKeyEvent } from "./renderer/renderer.js";
 import { clip } from "./clip.js";
@@ -164,11 +165,11 @@ export function CommandSearch(props: {
   };
   return (
     <box flexDirection="column" flexGrow={1} overflow="hidden">
-      <text fg={theme.textMuted} flexShrink={0}>
+      <DisplayText fg={theme.textMuted} flexShrink={0}>
         {s.pane() === "search"
           ? "Search commands [focused]"
           : "Search commands"}
-      </text>
+      </DisplayText>
       <input
         focused={props.enabled}
         value={s.query()}

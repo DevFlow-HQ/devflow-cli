@@ -1,8 +1,8 @@
-import stripAnsi from "strip-ansi";
-import { clip } from "./clip.js";
+import { screenText, type ScreenedText } from "./screen-text.js";
+import { clipScreened } from "./clip.js";
 import type { LayoutObserver } from "./layout-observer.js";
 import type { TimelineRow } from "./run-timeline-rows.js";
-import { wrapRows, wrapRules, type Rule } from "./wrap.js";
+import { wrapScreenedRows, wrapRules, type Rule } from "./wrap.js";
 
 const HANG = 4;
 const BEGINNING = { glyph: "─", title: "Beginning of Run history" };
@@ -57,15 +57,12 @@ function rowText(
   expanded: boolean,
   width: number,
   reducedMotion: boolean,
-): string {
+): ScreenedText {
   const prefix = "  ";
-  if (row.inspection !== undefined) return `  ▸ ${row.text}`;
+  if (row.inspection !== undefined) return screenText(`  ▸ ${row.text}`);
   if (row.output !== undefined) {
-    const output = stripAnsi(row.output.text)
-      .replace(/\r(?!\n)/g, "\n")
-      .replace(/\p{Cc}/gu, (character) =>
-        ["\n", "\r", "\t"].includes(character) ? character : "",
-      );
+    const output = screenText(row.output.text).text;
+    const heading = screenText(row.text).text;
     // Apply both limits before wrapping. Hidden output is never laid out.
     const preview = expanded
       ? { text: output, hidden: "" }
@@ -75,18 +72,27 @@ function rowText(
       : row.output.incomplete
         ? "potentially incomplete"
         : "final";
-    return `${prefix}${row.text}\n  ${expanded ? "▾" : "▸"} Output · ${label}${output === "" ? " · empty" : ""}${preview.hidden === "" ? "" : ` · ${preview.hidden}`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${output === "" ? "" : `\n${preview.text}`}`;
+    return {
+      text: `${prefix}${heading}\n  ${expanded ? "▾" : "▸"} Output · ${label}${output === "" ? " · empty" : ""}${preview.hidden === "" ? "" : ` · ${preview.hidden}`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${output === "" ? "" : `\n${preview.text}`}`,
+    };
   }
   if (row.thought === undefined)
-    return row.oneLine ? clip(prefix + row.text, width) : prefix + row.text;
+    return row.oneLine
+      ? clipScreened(screenText(prefix + row.text), width)
+      : screenText(prefix + row.text);
   const label = row.thought.live
     ? row.text.replace(
         "Thought · Thinking",
         `Thought · Thinking ${reducedMotion ? "[.]" : "|"}`,
       )
     : row.text;
-  const header = clip(`  ${expanded ? "▾" : "▸"} ${label}`, width);
-  return expanded ? `${header}\n${row.thought.content}` : header;
+  const header = clipScreened(
+    screenText(`  ${expanded ? "▾" : "▸"} ${label}`),
+    width,
+  );
+  return expanded
+    ? { text: `${header.text}\n${screenText(row.thought.content).text}` }
+    : header;
 }
 
 /** Row identity owns per-width and expansion layouts of its current value.
@@ -143,7 +149,10 @@ export function createHistoryLayout(
         observe({ kind: "history", id: row.key, width });
         const text = rowText(row, isExpanded, width, reducedMotion);
         const leading = wrapRules(rules, width);
-        const lines = [...leading, ...wrapRows([text], width, HANG).lines];
+        const lines = [
+          ...leading,
+          ...wrapScreenedRows([text], width, HANG).lines,
+        ];
         const prefix = leading.length;
         const thoughtHeader = row.thought?.live ? leading.length : -1;
         layout = {

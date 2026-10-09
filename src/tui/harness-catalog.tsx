@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import {
@@ -132,9 +133,9 @@ export function HarnessCatalog(props: { onBack: () => void }) {
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           Harnesses
         </text>
-        <text fg={theme.textMuted}>
+        <DisplayText fg={theme.textMuted}>
           {`${rows().length} discovered · ${qualified()} qualified on this system`}
-        </text>
+        </DisplayText>
       </box>
       <PanelGroup
         axis={stacked() ? "y" : "x"}
@@ -179,18 +180,18 @@ export function HarnessCatalog(props: { onBack: () => void }) {
           <Show
             when={focusedResult()}
             fallback={
-              <text fg={theme.textMuted} paddingLeft={1}>
+              <DisplayText fg={theme.textMuted} paddingLeft={1}>
                 {nav.emptyInspector()}
-              </text>
+              </DisplayText>
             }
           >
             {(result) => (
               <Show
                 when={foundHarness(result())}
                 fallback={
-                  <text fg={theme.textMuted} paddingLeft={1}>
+                  <DisplayText fg={theme.textMuted} paddingLeft={1}>
                     {notFoundExplanation(result()) ?? "No Harness selected"}
-                  </text>
+                  </DisplayText>
                 }
               >
                 {(harness) => (
@@ -213,9 +214,9 @@ export function HarnessCatalog(props: { onBack: () => void }) {
           </Show>
         </Panel>
       </PanelGroup>
-      <text fg={theme.textMuted} flexShrink={0}>
+      <DisplayText fg={theme.textMuted} flexShrink={0}>
         {nav.hint()}
-      </text>
+      </DisplayText>
     </box>
   );
 }

@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes } from "@opentui/core";
 import { For } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -58,7 +59,7 @@ export function ApprovalDialog() {
         <text fg={theme.textMuted}>
           Secant will only act inside this directory:
         </text>
-        <text fg={theme.text}>{view.snapshot().path}</text>
+        <DisplayText fg={theme.text}>{view.snapshot().path}</DisplayText>
       </box>
       <box
         flexDirection="row"
@@ -74,7 +75,7 @@ export function ApprovalDialog() {
               backgroundColor={key === store.active ? theme.primary : undefined}
               onMouseUp={() => choose(key)}
             >
-              <text
+              <DisplayText
                 fg={
                   key === store.active
                     ? theme.selectedListItemText
@@ -83,7 +84,7 @@ export function ApprovalDialog() {
               >
                 {(key === store.active ? "› " : "  ") +
                   (key === "approve" ? "Approve" : "Decline")}
-              </text>
+              </DisplayText>
             </box>
           )}
         </For>

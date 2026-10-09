@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes } from "@opentui/core";
 import { For, Show, type Accessor, type JSX } from "solid-js";
 import type {
@@ -37,22 +38,22 @@ export function HarnessCatalogInspector(props: {
   return (
     <box flexDirection="column" gap={1} flexShrink={0}>
       <box flexDirection="column" flexShrink={0}>
-        <text attributes={TextAttributes.BOLD} fg={theme.text}>
+        <DisplayText attributes={TextAttributes.BOLD} fg={theme.text}>
           {`${harness().name} · ${qualificationLabel(harness().qualification.state)}`}
-        </text>
-        <text fg={theme.textMuted}>
+        </DisplayText>
+        <DisplayText fg={theme.textMuted}>
           {`Discovery · ${discoveryLabel(harness().discovery)}`}
-        </text>
+        </DisplayText>
       </box>
       <Show when={harness().unavailable}>
         {(problem) => (
           <box flexDirection="column" flexShrink={0}>
-            <text
+            <DisplayText
               fg={theme.error}
-            >{`Unavailable · ${problem().explanation}`}</text>
-            <text
+            >{`Unavailable · ${problem().explanation}`}</DisplayText>
+            <DisplayText
               fg={theme.textMuted}
-            >{`Remediation · ${problem().remediation}`}</text>
+            >{`Remediation · ${problem().remediation}`}</DisplayText>
           </box>
         )}
       </Show>
@@ -89,14 +90,16 @@ export function HarnessCatalogInspector(props: {
       <Show when={harness().displayFactLimits.length > 0}>
         <Section title="Display fact limits">
           <For each={harness().displayFactLimits}>
-            {(limit) => <text fg={theme.textMuted}>{`· ${limit}`}</text>}
+            {(limit) => (
+              <DisplayText fg={theme.textMuted}>{`· ${limit}`}</DisplayText>
+            )}
           </For>
         </Section>
       </Show>
       <Section title="Configuration">
-        <text fg={theme.text}>
+        <DisplayText fg={theme.text}>
           {harness().configurationPosture ?? "Not checked"}
-        </text>
+        </DisplayText>
         <text fg={theme.textMuted}>
           Harness-owned settings stay with the Harness. Secant asks only for
           relevant Run choices during launch or resume.
@@ -108,16 +111,20 @@ export function HarnessCatalogInspector(props: {
 
 function Fact(props: { label: string; value: string }) {
   const { theme } = useTheme();
-  return <text fg={theme.text}>{`${props.label} · ${props.value}`}</text>;
+  return (
+    <DisplayText
+      fg={theme.text}
+    >{`${props.label} · ${props.value}`}</DisplayText>
+  );
 }
 
 function Section(props: { title: string; children: JSX.Element }) {
   const { theme } = useTheme();
   return (
     <box flexDirection="column" flexShrink={0}>
-      <text attributes={TextAttributes.BOLD} fg={theme.text}>
+      <DisplayText attributes={TextAttributes.BOLD} fg={theme.text}>
         {props.title}
-      </text>
+      </DisplayText>
       {props.children}
     </box>
   );
@@ -151,9 +158,11 @@ function SupportedModels(props: { harness: Accessor<HarnessFocus> }) {
   };
   return (
     <box flexDirection="column" flexShrink={0}>
-      <text fg={declaration() === undefined ? theme.textMuted : theme.text}>
+      <DisplayText
+        fg={declaration() === undefined ? theme.textMuted : theme.text}
+      >
         {kindLine()}
-      </text>
+      </DisplayText>
       <For each={entries()}>
         {(entry) => (
           <ModelLines
@@ -175,9 +184,9 @@ function ModelLines(props: { name: string; efforts: string }) {
   const { theme } = useTheme();
   return (
     <box flexDirection="column" flexShrink={0}>
-      <text fg={theme.text}>{`· ${props.name}`}</text>
+      <DisplayText fg={theme.text}>{`· ${props.name}`}</DisplayText>
       <box paddingLeft={2} flexShrink={0}>
-        <text fg={theme.textMuted}>{props.efforts}</text>
+        <DisplayText fg={theme.textMuted}>{props.efforts}</DisplayText>
       </box>
     </box>
   );
@@ -224,17 +233,17 @@ function ReportedSettings(props: { harness: Accessor<HarnessFocus> }) {
   };
   return (
     <box flexDirection="column" flexShrink={0}>
-      <text fg={defaults() === undefined ? theme.textMuted : theme.text}>
+      <DisplayText fg={defaults() === undefined ? theme.textMuted : theme.text}>
         {choiceLine()}
-      </text>
+      </DisplayText>
       <Show when={sourceLine()}>
-        {(line) => <text fg={theme.textMuted}>{line()}</text>}
+        {(line) => <DisplayText fg={theme.textMuted}>{line()}</DisplayText>}
       </Show>
       <Show when={lock()}>
         {(locked) => (
-          <text fg={theme.textMuted}>
+          <DisplayText fg={theme.textMuted}>
             {effortLockSentence(locked().source)}
-          </text>
+          </DisplayText>
         )}
       </Show>
     </box>
@@ -245,11 +254,13 @@ function Capability(props: { capability: HarnessCapabilityView }) {
   const { theme } = useTheme();
   return (
     <box flexDirection="column" flexShrink={0}>
-      <text fg={theme.text}>
+      <DisplayText fg={theme.text}>
         {`${props.capability.name} · ${capabilityLabel(props.capability.state)}`}
-      </text>
+      </DisplayText>
       <box flexDirection="column" paddingLeft={2} flexShrink={0}>
-        <text fg={theme.textMuted}>{props.capability.description}</text>
+        <DisplayText fg={theme.textMuted}>
+          {props.capability.description}
+        </DisplayText>
         <Show
           when={
             props.capability.state === "available-with-limits"
@@ -258,7 +269,9 @@ function Capability(props: { capability: HarnessCapabilityView }) {
           }
         >
           {(limits) => (
-            <text fg={theme.textMuted}>{`Limits · ${limits()}`}</text>
+            <DisplayText
+              fg={theme.textMuted}
+            >{`Limits · ${limits()}`}</DisplayText>
           )}
         </Show>
       </box>

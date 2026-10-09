@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
@@ -95,7 +96,9 @@ export function BundleCatalog(props: {
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           Workflow Bundles
         </text>
-        <text fg={theme.textMuted}>{`${rows().length} installed`}</text>
+        <DisplayText
+          fg={theme.textMuted}
+        >{`${rows().length} installed`}</DisplayText>
       </box>
       <Show
         when={listProblem()}
@@ -157,18 +160,18 @@ export function BundleCatalog(props: {
               <Show
                 when={focusedResult()}
                 fallback={
-                  <text fg={theme.textMuted} paddingLeft={1}>
+                  <DisplayText fg={theme.textMuted} paddingLeft={1}>
                     {nav.emptyInspector()}
-                  </text>
+                  </DisplayText>
                 }
               >
                 {(result) => (
                   <Show
                     when={foundBundle(result())}
                     fallback={
-                      <text fg={theme.textMuted} paddingLeft={1}>
+                      <DisplayText fg={theme.textMuted} paddingLeft={1}>
                         {notFoundExplanation(result()) ?? "No Bundle selected"}
-                      </text>
+                      </DisplayText>
                     }
                   >
                     {(bundle) => (
@@ -195,17 +198,21 @@ export function BundleCatalog(props: {
       >
         {(problem) => (
           <box flexDirection="column" flexShrink={0}>
-            <text attributes={TextAttributes.BOLD} fg={theme.error}>
+            <DisplayText attributes={TextAttributes.BOLD} fg={theme.error}>
               {`Catalog error: ${problem().code}`}
-            </text>
-            <text fg={theme.textMuted}>{problem().explanation}</text>
-            <text fg={theme.textMuted}>{problem().remediation}</text>
+            </DisplayText>
+            <DisplayText fg={theme.textMuted}>
+              {problem().explanation}
+            </DisplayText>
+            <DisplayText fg={theme.textMuted}>
+              {problem().remediation}
+            </DisplayText>
           </box>
         )}
       </Show>
-      <text fg={theme.textMuted} flexShrink={0}>
+      <DisplayText fg={theme.textMuted} flexShrink={0}>
         {nav.hint()}
-      </text>
+      </DisplayText>
     </box>
   );
 }

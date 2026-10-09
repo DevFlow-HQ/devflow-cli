@@ -1,4 +1,3 @@
-import stripAnsi from "strip-ansi";
 import type {
   RunLiveOverlay,
   RunTimelineEvent,
@@ -77,7 +76,7 @@ export function buildTimelineRows(
       ? [
           {
             key: "agent-completion:pending",
-            text: `The agent has asked to end this ${run.pendingAgentCompletion.call === "stage_done" ? "Stage" : "Step"} · ${screenReason(run.pendingAgentCompletion.reason)}`,
+            text: `The agent has asked to end this ${run.pendingAgentCompletion.call === "stage_done" ? "Stage" : "Step"} · ${oneLine(run.pendingAgentCompletion.reason)}`,
             oneLine: true,
           },
         ]
@@ -87,7 +86,7 @@ export function buildTimelineRows(
       ? [
           {
             key: "agent-completion:held",
-            text: `◆ Held for review · the agent's Continue waits for you · ${screenReason(run.heldForReview.message)}`,
+            text: `◆ Held for review · the agent's Continue waits for you · ${oneLine(run.heldForReview.message)}`,
           },
         ]
       : []),
@@ -169,12 +168,12 @@ function durableLabel(event: RunTimelineEvent): string {
         : event.event === "stage-ended"
           ? "▸ Stage ended by the agent"
           : "▸ Step ended by the agent"
-    } · ${screenReason(event.reason ?? "")}`;
+    } · ${oneLine(event.reason ?? "")}`;
   switch (event.event) {
     case "agent-call": {
       const call = event.agentCall;
       if (call === undefined) return "Agent call";
-      return `Agent call ${call.id} · ${call.answer.outcome === "refused" ? `refused · ${call.answer.reason}` : call.disposition === "dropped" ? "dropped" : call.answer.outcome === "held-for-review" ? "held for review" : "accepted, takes effect when this Turn finishes"} · ${screenReason(call.reason)}`;
+      return `Agent call ${call.id} · ${call.answer.outcome === "refused" ? `refused · ${call.answer.reason}` : call.disposition === "dropped" ? "dropped" : call.answer.outcome === "held-for-review" ? "held for review" : "accepted, takes effect when this Turn finishes"} · ${oneLine(call.reason)}`;
     }
     case "run-created":
       return "○ Run created";
@@ -215,10 +214,7 @@ function durableLabel(event: RunTimelineEvent): string {
         asked === undefined
           ? ""
           : ` · ${asked.harness}/${asked.server} · ${asked.message}${asked.url === undefined ? "" : ` · ${asked.url}`}`;
-      return stripAnsi(`? Elicitation declined${evidence}${detail}`).replace(
-        /\p{Cc}/gu,
-        " ",
-      );
+      return `? Elicitation declined${evidence}${detail}`;
     }
     case "request-expired":
       return "? Harness Request expired";
@@ -304,7 +300,7 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
     case "turn-diff":
       return `Turn diff${preview ? " · updating" : ""}${fileRemainder(value.files)}\n${fileLabels(value.files)}`;
     case "thought": {
-      const label = screenReason(
+      const label = oneLine(
         value.content
           .split(/\r?\n/)
           .find((line) => line.trim())
@@ -319,7 +315,7 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
     case "steer":
       return `Steer · ${value.delivery}\n${value.content}`;
     case "agent-call":
-      return `Agent call ${value.call} · ${value.reply.replaceAll("-", " ")}${value.refusal === undefined ? "" : ` · ${value.refusal}`} · ${screenReason(value.reason)} · ${value.disposition}`;
+      return `Agent call ${value.call} · ${value.reply.replaceAll("-", " ")}${value.refusal === undefined ? "" : ` · ${value.refusal}`} · ${oneLine(value.reason)} · ${value.disposition}`;
     case "tool": {
       const label = value.outcome.kind;
       const detail =
@@ -361,15 +357,9 @@ function fileLabels(
     .join("\n");
 }
 
-/** Collapse whitespace so a serialized tool input or usage string stays one line. */
+/** Collapse display whitespace so tool input and usage fit one line. Other controls reach the display screening rule. */
 export function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function screenReason(reason: string): string {
-  return stripAnsi(reason)
-    .replace(/[\r\n\t]/g, " ")
-    .replace(/[\p{Cc}\p{Cf}]/gu, "");
+  return text.replace(/[ \r\n\t]+/g, " ").trim();
 }
 
 /** Fixed metadata slots live outside history: reports cannot add conversation

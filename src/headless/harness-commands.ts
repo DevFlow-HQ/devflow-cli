@@ -1,3 +1,4 @@
+import type { CommandIO } from "./output.js";
 import { headlessJson } from "./json.js";
 import type { Command } from "commander";
 import type {
@@ -5,15 +6,15 @@ import type {
   Problem,
   ProjectionPort,
 } from "../application/projection-port.js";
-import type { CommandExecutor, HeadlessIO, SettleAction } from "./headless.js";
+import type { CommandExecutor, SettleAction } from "./headless.js";
 import { renderHarnessFocus, renderHarnessRow } from "./render.js";
 import { awaitReadiness } from "./readiness.js";
 
 interface HarnessCommandDeps {
-  readonly io: HeadlessIO;
+  readonly io: CommandIO;
   readonly execute: CommandExecutor;
   readonly settle: SettleAction;
-  readonly fail: (io: HeadlessIO, json: boolean, problem: Problem) => number;
+  readonly fail: (io: CommandIO, json: boolean, problem: Problem) => number;
 }
 
 /** Register the read-only Harness catalog commands after Commander settings have
@@ -66,14 +67,14 @@ export function registerHarnessCommands(
 
 function listHarnesses(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   json: boolean,
 ): number {
   const opened = port.openProjection({ family: "harness-catalog" });
   try {
     const snapshot = opened.snapshot;
     if (json) {
-      io.out(`${headlessJson(snapshot)}\n`);
+      io.json(`${headlessJson(snapshot)}\n`);
       return 0;
     }
     if (snapshot.harnesses.length === 0) {
@@ -89,7 +90,7 @@ function listHarnesses(
 
 async function inspectHarness(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   fail: HarnessCommandDeps["fail"],
   json: boolean,
   id: string,
@@ -102,7 +103,7 @@ async function inspectHarness(
   }
   const harness = snapshot.result.harness;
   if (json) {
-    io.out(`${headlessJson(harness)}\n`);
+    io.json(`${headlessJson(harness)}\n`);
     return 0;
   }
   io.out(renderHarnessFocus(harness));

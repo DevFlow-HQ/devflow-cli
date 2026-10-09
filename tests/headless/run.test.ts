@@ -1607,7 +1607,7 @@ for (const url of ["https://example.com/setup", undefined]) {
     const text = h.stdout();
     assert.match(
       text,
-      /elicitation-declined claude-code\/setup: Finish setup now/,
+      /elicitation-declined claude-code\/setup: Finishsetup now/,
     );
     assert.match(
       text,

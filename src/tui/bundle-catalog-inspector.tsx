@@ -1,5 +1,6 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes } from "@opentui/core";
-import { For, Show, type ParentProps } from "solid-js";
+import { For, Show } from "solid-js";
 import type {
   ExecutionSummary,
   InstalledBundleFocus,
@@ -21,34 +22,38 @@ export function BundleCatalogInspector(props: {
   return (
     <box flexDirection="column" gap={1} flexShrink={0}>
       <box flexDirection="column" flexShrink={0}>
-        <text attributes={TextAttributes.BOLD} fg={theme.text}>
+        <DisplayText attributes={TextAttributes.BOLD} fg={theme.text}>
           {bundle().name}
-        </text>
-        <text fg={theme.text}>
+        </DisplayText>
+        <DisplayText fg={theme.text}>
           {`${bundle().id}@${bundle().version} [${bundle().stability}]`}
-        </text>
-        <text fg={theme.textMuted}>{bundle().description}</text>
+        </DisplayText>
+        <DisplayText fg={theme.textMuted}>{bundle().description}</DisplayText>
       </box>
       <box flexDirection="column" flexShrink={0}>
         <Label>Source</Label>
-        <text fg={theme.text}>
+        <DisplayText fg={theme.text}>
           {formatOrigin(bundle().origin, bundle().shippedWithRunningSecant)}
-        </text>
-        <text fg={theme.text}>
+        </DisplayText>
+        <DisplayText fg={theme.text}>
           {`Platforms · ${bundle().platforms.join(", ")}`}
-        </text>
-        <text
+        </DisplayText>
+        <DisplayText
           fg={theme.text}
-        >{`Engine · ${formatEngine(bundle().engine)}`}</text>
-        <text fg={theme.text}>
+        >{`Engine · ${formatEngine(bundle().engine)}`}</DisplayText>
+        <DisplayText fg={theme.text}>
           {`Workspace requirements · ${
             bundle().workspacePrerequisites.length === 0
               ? "none"
               : bundle().workspacePrerequisites.join(", ")
           }`}
-        </text>
-        <text fg={theme.text}>{`Digest · sha256:${bundle().digest}`}</text>
-        <text fg={theme.text}>{`Trust · ${formatTrust(bundle().trust)}`}</text>
+        </DisplayText>
+        <DisplayText
+          fg={theme.text}
+        >{`Digest · sha256:${bundle().digest}`}</DisplayText>
+        <DisplayText
+          fg={theme.text}
+        >{`Trust · ${formatTrust(bundle().trust)}`}</DisplayText>
       </box>
       <box flexDirection="column" flexShrink={0}>
         <Label>Workflow</Label>
@@ -77,9 +82,9 @@ export function BundleCatalogInspector(props: {
         >
           <For each={bundle().launchInputs}>
             {(input) => (
-              <text fg={theme.text}>
+              <DisplayText fg={theme.text}>
                 {`${input.name} (${input.type}): ${input.description}`}
-              </text>
+              </DisplayText>
             )}
           </For>
         </Show>
@@ -89,9 +94,9 @@ export function BundleCatalogInspector(props: {
   );
 }
 
-function Label(props: ParentProps) {
+function Label(props: { children: string }) {
   const { theme } = useTheme();
-  return <text fg={theme.textMuted}>{props.children}</text>;
+  return <DisplayText fg={theme.textMuted}>{props.children}</DisplayText>;
 }
 
 function RoutingNode(props: {
@@ -111,11 +116,11 @@ function RoutingNode(props: {
   }
   return (
     <box flexDirection="column" flexShrink={0}>
-      <text fg={theme.text}>
+      <DisplayText fg={theme.text}>
         {"control" in props.node
           ? `${props.number}. Repeat until a human ends the stage · Continue opens each next iteration`
           : `${props.number}. Repeat until ${props.node.until} · review every ${props.node.reviewCheckpoint.interval}: ${props.node.reviewCheckpoint.message}`}
-      </text>
+      </DisplayText>
       <For each={props.node.steps}>
         {(step, index) => (
           <StepLine
@@ -139,18 +144,18 @@ function StepLine(props: {
     props.commands.find((entry) => entry.stepId === props.step.id);
   return (
     <box flexDirection="column" flexShrink={0}>
-      <text fg={theme.text}>
+      <DisplayText fg={theme.text}>
         {`${props.prefix} ${props.step.id} (${props.step.kind})`}
-      </text>
+      </DisplayText>
       <Show when={command()}>
         {(entry) => (
-          <text fg={theme.textMuted}>
+          <DisplayText fg={theme.textMuted}>
             {`     $ ${entry().executable}${
               entry().scripts.length > 0
                 ? ` · scripts ${entry().scripts.join(", ")}`
                 : ""
             }`}
-          </text>
+          </DisplayText>
         )}
       </Show>
     </box>
@@ -166,7 +171,7 @@ function Execution(props: { summary: ExecutionSummary }) {
   return (
     <box flexDirection="column" flexShrink={0}>
       <Label>{`Execution summary · ${props.summary.platform}`}</Label>
-      <text fg={theme.text}>{`Step kinds · ${counts()}`}</text>
+      <DisplayText fg={theme.text}>{`Step kinds · ${counts()}`}</DisplayText>
       <Show
         when={props.summary.commands.length > 0}
         fallback={<text fg={theme.text}>Commands · none</text>}
@@ -174,7 +179,7 @@ function Execution(props: { summary: ExecutionSummary }) {
         <text fg={theme.text}>Commands</text>
         <For each={props.summary.commands}>
           {(command) => (
-            <text fg={theme.text}>
+            <DisplayText fg={theme.text}>
               {`  ${command.stepId}: ${command.executable}${
                 command.workingDirectory !== undefined
                   ? ` · cwd ${command.workingDirectory}`
@@ -188,11 +193,13 @@ function Execution(props: { summary: ExecutionSummary }) {
                   ? ` · scripts ${command.scripts.join(", ")}`
                   : ""
               }`}
-            </text>
+            </DisplayText>
           )}
         </For>
       </Show>
-      <text fg={theme.warning}>{`Warning · ${props.summary.warning}`}</text>
+      <DisplayText
+        fg={theme.warning}
+      >{`Warning · ${props.summary.warning}`}</DisplayText>
     </box>
   );
 }

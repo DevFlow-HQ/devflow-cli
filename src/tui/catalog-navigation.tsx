@@ -1,3 +1,4 @@
+import { DisplayText } from "./display-text.js";
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { createMemo, createSignal, For, Show, type JSX } from "solid-js";
 import { useBindings } from "./keymap.js";
@@ -283,10 +284,10 @@ export function CatalogEmptyState(props: { title: string; hint: string }) {
   const { theme } = useTheme();
   return (
     <box flexDirection="column" paddingTop={1} flexShrink={0}>
-      <text attributes={TextAttributes.BOLD} fg={theme.text}>
+      <DisplayText attributes={TextAttributes.BOLD} fg={theme.text}>
         {props.title}
-      </text>
-      <text fg={theme.textMuted}>{props.hint}</text>
+      </DisplayText>
+      <DisplayText fg={theme.textMuted}>{props.hint}</DisplayText>
     </box>
   );
 }
@@ -316,15 +317,17 @@ export function CatalogRow(props: {
   return (
     <box flexDirection="column" flexShrink={0} onMouseUp={props.onSelect}>
       <box backgroundColor={fill()}>
-        <text
+        <DisplayText
           fg={titleColor()}
           attributes={props.selected ? TextAttributes.BOLD : 0}
         >
           {`${props.selected ? "› " : "  "}${props.title}`}
-        </text>
+        </DisplayText>
       </box>
       <For each={props.details}>
-        {(detail) => <text fg={theme.textMuted}>{`  ${detail}`}</text>}
+        {(detail) => (
+          <DisplayText fg={theme.textMuted}>{`  ${detail}`}</DisplayText>
+        )}
       </For>
     </box>
   );

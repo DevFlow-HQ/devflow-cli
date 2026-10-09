@@ -1,3 +1,4 @@
+import type { CommandIO } from "./output.js";
 import { headlessJson } from "./json.js";
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
@@ -7,18 +8,18 @@ import type {
   ProjectionPort,
   Problem,
 } from "../application/projection-port.js";
-import type { CommandExecutor, HeadlessIO, SettleAction } from "./headless.js";
+import type { CommandExecutor, SettleAction } from "./headless.js";
 
-function printPair(io: HeadlessIO, pair: AppearancePreferences): void {
+function printPair(io: CommandIO, pair: AppearancePreferences): void {
   io.out(`Theme: ${pair.theme}\nAppearance: ${pair.appearance}\n`);
 }
 export function registerSettingsCommands(
   program: Command,
   deps: {
-    readonly io: HeadlessIO;
+    readonly io: CommandIO;
     readonly execute: CommandExecutor;
     readonly settle: SettleAction;
-    readonly fail: (io: HeadlessIO, json: boolean, problem: Problem) => number;
+    readonly fail: (io: CommandIO, json: boolean, problem: Problem) => number;
   },
 ) {
   const { io, execute, settle, fail } = deps;
@@ -63,7 +64,7 @@ export function registerSettingsCommands(
           const receipt = await clients.projectionPort.settledOperation(
             admission.operationId,
           );
-          if (json) io.out(`${headlessJson(receipt)}\n`);
+          if (json) io.json(`${headlessJson(receipt)}\n`);
           if (receipt.outcome.status === "not-applied")
             return json ? 1 : fail(io, false, receipt.outcome.problem);
           if (!json && receipt.preferencesChange !== undefined)
@@ -75,7 +76,7 @@ export function registerSettingsCommands(
 }
 function showPreferences(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   json: boolean,
 ): number {
   const view = port.openProjection({ family: "preferences" });
@@ -85,7 +86,7 @@ function showPreferences(
       io.err(
         `Notice [${notice.code}]: ${notice.explanation}\nRemediation: ${notice.remediation}\n`,
       );
-    if (json) io.out(`${headlessJson(preferences)}\n`);
+    if (json) io.json(`${headlessJson(preferences)}\n`);
     else printPair(io, preferences);
     return 0;
   } finally {

@@ -839,7 +839,7 @@ test("declined elicitation history shows the question and setup remediation safe
   const frame = conversationText(t.captureCharFrame(), 140);
   assert.match(frame, /Elicitation declined/);
   assert.match(frame, /claude-code\/setup/);
-  assert.match(frame, /Finish setup now/);
+  assert.match(frame, /Finishsetup now/);
   assert.doesNotMatch(frame, /\[31m|\[0m/);
   assert.match(frame, /https:\/\/example.com\/setup/);
   assert.match(frame, /Finish setup in Claude Code directly/);

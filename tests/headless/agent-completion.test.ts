@@ -44,12 +44,9 @@ test("run show JSON retains the raw agent reason from a TUI-capable launch", asy
   output.length = 0;
   assert.equal(await runHeadless(wired, ["run", "show", runId], io), 0);
   const text = output.join("");
-  assert.match(text, /ended by the agent · ready red/);
-  for (const marker of [" agent-call", "ended by the agent"]) {
-    const line = text.split("\n").find((entry) => entry.includes(marker));
-    assert.ok(line);
-    assert.match(line, / · step discuss$/);
-  }
+  assert.match(text, /ended by the agent · ready\nred\t終/);
+  assert.match(text, /agent-call[^\n]*ready\nred\t終 · step discuss/);
+  assert.match(text, /ended by the agent · ready\nred\t終 · step discuss/);
   for (const control of ["\x1b", "\x07", "\u202e"])
     assert.equal(text.includes(control), false);
 });
@@ -101,7 +98,7 @@ test("run show JSON reports a held agent Continue and its raw checkpoint message
   const text = output.join("");
   assert.match(
     text,
-    /Held for review:\n {2}message: Review the tracker\.\n {2}held after: 1 agent Continue\(s\) in a row\n {2}agent reason: ticket 2 done/,
+    /Held for review:\n {2}message: Review\nthe tracker\.\n {2}held after: 1 agent Continue\(s\) in a row\n {2}agent reason: ticket 2 done/,
   );
   assert.equal(text.includes("\x1b"), false);
 });

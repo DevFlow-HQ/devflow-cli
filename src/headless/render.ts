@@ -1,4 +1,3 @@
-import stripAnsi from "strip-ansi";
 import type {
   BundleOriginView,
   BundleTrustState,
@@ -375,9 +374,9 @@ export function renderRun(run: RunView): string {
     lines.push(
       "",
       "Held for review:",
-      `  message: ${screenReason(held.message)}`,
+      `  message: ${held.message}`,
       `  held after: ${held.interval} agent Continue(s) in a row`,
-      `  agent reason: ${screenReason(held.reason)}`,
+      `  agent reason: ${held.reason}`,
     );
   }
 
@@ -511,18 +510,14 @@ export function renderRun(run: RunView): string {
         : ` ${asked.harness}/${asked.server}: ${asked.message}${asked.url === undefined ? "" : ` ${asked.url}`}`;
     const completion =
       event.endedBy === "agent"
-        ? ` · ended by the agent · ${screenReason(event.reason ?? "")}`
+        ? ` · ended by the agent · ${event.reason ?? ""}`
         : "";
     const call =
       event.agentCall !== undefined
-        ? ` · ${event.agentCall.answer.outcome} · ${event.agentCall.disposition} · ${screenReason(event.agentCall.reason)}`
+        ? ` · ${event.agentCall.answer.outcome} · ${event.agentCall.disposition} · ${event.agentCall.reason}`
         : "";
     const line = `  ${event.at} ${event.event}${kind}${elicitation}${detail}${completion}${call}${step}`;
-    lines.push(
-      event.event === "elicitation-declined"
-        ? stripAnsi(line).replace(/\p{Cc}/gu, " ")
-        : line,
-    );
+    lines.push(line);
   }
 
   if (run.conflict !== undefined) {
@@ -661,10 +656,4 @@ function renderTrust(trust: BundleTrustState): string {
     case "trusted":
       return `trusted (granted ${trust.grantedAt})`;
   }
-}
-
-function screenReason(reason: string): string {
-  return stripAnsi(reason)
-    .replace(/[\r\n\t]/g, " ")
-    .replace(/[\p{Cc}\p{Cf}]/gu, "");
 }

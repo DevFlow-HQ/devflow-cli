@@ -1,7 +1,7 @@
+import type { CommandIO } from "./output.js";
 import { headlessJson } from "./json.js";
 import { createRunNoticeReporter, runSnapshotJson } from "./run-notice.js";
 import { randomUUID } from "node:crypto";
-import stripAnsi from "strip-ansi";
 import type { Command } from "commander";
 import type {
   ChangeModelChoiceInput,
@@ -22,7 +22,7 @@ import type {
   RunTranscriptEntryView,
   TranscriptRead,
 } from "../application/projection-port.js";
-import type { CommandExecutor, HeadlessIO, SettleAction } from "./headless.js";
+import type { CommandExecutor, SettleAction } from "./headless.js";
 import { renderRun, renderRunList } from "./render.js";
 import { awaitReadiness } from "./readiness.js";
 import {
@@ -39,12 +39,12 @@ import {
 // commander settings and the shared helpers. Public entrypoints are unchanged.
 
 export interface RunCommandDeps {
-  readonly io: HeadlessIO;
+  readonly io: CommandIO;
   readonly execute: CommandExecutor;
   /** Wraps a command's result so `parseAsync` awaits an async Run command. */
   readonly settle: SettleAction;
   /** The shared Problem printer (owns the exit-code-1 convention for a refusal). */
-  readonly fail: (io: HeadlessIO, json: boolean, problem: Problem) => number;
+  readonly fail: (io: CommandIO, json: boolean, problem: Problem) => number;
 }
 
 /** Register the `run` command group onto `program`. Called by `buildProgram`
@@ -205,7 +205,7 @@ export function registerRunCommands(
                   possibleEffects: "none",
                   cause: result.cause,
                 });
-              if (json) io.out(`${headlessJson(result)}\n`);
+              if (json) io.json(`${headlessJson(result)}\n`);
               else {
                 for (const candidate of result.candidates)
                   io.out(
@@ -561,7 +561,7 @@ function exitForState(state: RunStateName): number {
  *  `heading` lines then the state — exiting by the Run's rest state (A36). */
 async function settleAndReportRun(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   operationId: string,
@@ -584,7 +584,7 @@ async function settleAndReportRun(
         const snapshot = opened.snapshot;
         reportNotice(snapshot);
         if (json) {
-          io.out(`${runSnapshotJson(snapshot)}\n`);
+          io.json(`${runSnapshotJson(snapshot)}\n`);
           return snapshot.result.found
             ? exitForState(snapshot.result.run.state)
             : 1;
@@ -624,7 +624,7 @@ function answerHint(run: RunView): readonly string[] {
 
 interface TLaunchRunParams {
   readonly port: ProjectionPort;
-  readonly io: HeadlessIO;
+  readonly io: CommandIO;
   readonly fail: RunCommandDeps["fail"];
   readonly json: boolean;
   readonly selector: string;
@@ -658,13 +658,13 @@ function assessDraft(
  *  shared `fail` renderer, so an operator sees all problems in one invocation and
  *  the per-Problem format never drifts from a single refusal's. */
 function reportNotReady(
-  io: HeadlessIO,
+  io: CommandIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   findings: readonly Problem[],
 ): number {
   if (json) {
-    io.out(`${headlessJson({ status: "not-ready", findings })}\n`);
+    io.json(`${headlessJson({ status: "not-ready", findings })}\n`);
     return 1;
   }
   for (const problem of findings) fail(io, false, problem);
@@ -753,7 +753,7 @@ async function launchRun(params: TLaunchRunParams): Promise<number> {
 
 async function showRun(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   runId: string,
@@ -763,7 +763,7 @@ async function showRun(
     const snapshot = opened.snapshot;
     createRunNoticeReporter(io.err)(snapshot);
     if (json) {
-      io.out(`${runSnapshotJson(snapshot)}\n`);
+      io.json(`${runSnapshotJson(snapshot)}\n`);
       return snapshot.result.found ? 0 : 1;
     }
     if (!snapshot.result.found) return fail(io, false, snapshot.result.problem);
@@ -830,7 +830,7 @@ function renderOutstandingRequests(
 
 type TResumeRunParams = {
   readonly port: ProjectionPort;
-  readonly io: HeadlessIO;
+  readonly io: CommandIO;
   readonly fail: RunCommandDeps["fail"];
   readonly json: boolean;
   readonly runId: string;
@@ -892,7 +892,7 @@ type HeadlessGateAnswer =
 
 async function answerRun(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   runId: string,
@@ -972,7 +972,7 @@ async function answerRun(
 
 function readRun(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   reference: string,
@@ -1013,7 +1013,7 @@ function readRun(
   const read = port.readResource(outputRef);
   if (!read.found) return fail(io, json, read.problem);
   if (json) {
-    io.out(`${headlessJson(read)}\n`);
+    io.json(`${headlessJson(read)}\n`);
     return 0;
   }
   io.out(read.content.endsWith("\n") ? read.content : `${read.content}\n`);
@@ -1025,7 +1025,7 @@ function readRun(
 // two clients read one transcript the same way. The `--json` shape is additive.
 function readTranscript(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   options: { reference: string; session?: string },
@@ -1086,7 +1086,7 @@ function readTranscript(
   }
 
   if (json) {
-    io.out(
+    io.json(
       `${headlessJson({ page: transcriptJson(page), export: complete === undefined ? undefined : transcriptJson(complete) })}\n`,
     );
     return 0;
@@ -1129,8 +1129,7 @@ function renderTranscriptEntries(
   return entries
     .map(
       (entry) =>
-        // Strip ANSI so the transcript reads clean, matching the TUI (D12).
-        `${entry.role === "user" ? "user" : "assistant"}${entry.kind === "steer" ? " · Steer" : entry.kind === "entry-prompt" ? " · Entry prompt" : ""}${entry.incomplete === true ? " · incomplete" : ""}: ${stripAnsi(entry.content)}`,
+        `${entry.role === "user" ? "user" : "assistant"}${entry.kind === "steer" ? " · Steer" : entry.kind === "entry-prompt" ? " · Entry prompt" : ""}${entry.incomplete === true ? " · incomplete" : ""}: ${entry.content}`,
     )
     .join("\n")
     .concat("\n");
@@ -1138,7 +1137,7 @@ function renderTranscriptEntries(
 
 function listRuns(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   json: boolean,
   resumable: boolean,
   before: string | undefined,
@@ -1151,7 +1150,7 @@ function listRuns(
   try {
     const snapshot = opened.snapshot;
     if (json) {
-      io.out(`${headlessJson(snapshot)}\n`);
+      io.json(`${headlessJson(snapshot)}\n`);
       return 0;
     }
     io.out(renderRunList(snapshot));
@@ -1164,7 +1163,7 @@ function listRuns(
 /** Wait for Application's qualified Offer, then submit partial input unchanged. */
 async function changeRunModelChoice(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   input: ChangeModelChoiceInput,
@@ -1242,7 +1241,7 @@ async function changeRunModelChoice(
     noticeView.close();
   }
   if (json) {
-    io.out(`${headlessJson(receipt)}\n`);
+    io.json(`${headlessJson(receipt)}\n`);
     return receipt.outcome.status === "applied" ? 0 : 1;
   }
   if (receipt.outcome.status === "not-applied")
@@ -1261,7 +1260,7 @@ async function changeRunModelChoice(
 /** Submit a cancel-run/delete-run Operation and report its settled outcome. */
 async function endRunOperation(
   port: ProjectionPort,
-  io: HeadlessIO,
+  io: CommandIO,
   fail: RunCommandDeps["fail"],
   json: boolean,
   operation: "cancel-run" | "delete-run",
@@ -1275,7 +1274,7 @@ async function endRunOperation(
   if (!admission.admitted) return fail(io, json, admission.problem);
   const settled = await port.settledOperation(admission.operationId);
   if (json) {
-    io.out(`${headlessJson(settled)}\n`);
+    io.json(`${headlessJson(settled)}\n`);
     return settled.outcome.status === "applied" ? 0 : 1;
   }
   if (settled.outcome.status === "not-applied")

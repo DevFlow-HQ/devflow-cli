@@ -1,3 +1,4 @@
+import { screenText, type ScreenedText } from "./screen-text.js";
 import stringWidth from "string-width";
 import { RUN_TIMELINE_TRUNCATION_MARKER } from "../application/projection-port.js";
 
@@ -14,10 +15,18 @@ import { RUN_TIMELINE_TRUNCATION_MARKER } from "../application/projection-port.j
 const TAB = "  ";
 const segmenter = new Intl.Segmenter();
 
-/** Wrap `text` (one logical line) to lines of at most `width` display columns.
+/** Screen and wrap `text` to lines of at most `width` display columns.
  *  Continuation lines start with `hang` spaces, reduced when the width leaves no
  *  room for text after them. Always returns at least one line. */
 export function wrap(text: string, width: number, hang = 0): string[] {
+  return wrapScreened(screenText(text), width, hang);
+}
+
+function wrapScreened(text: ScreenedText, width: number, hang = 0): string[] {
+  return text.text.split("\n").flatMap((line) => wrapLine(line, width, hang));
+}
+
+function wrapLine(text: string, width: number, hang: number): string[] {
   const columns = Math.max(1, width);
   const indent = " ".repeat(Math.max(0, Math.min(hang, columns - 1)));
   const lines: string[] = [];
@@ -122,15 +131,16 @@ export interface Rule {
  *  the glyph leads each line, so the words are never lost (#289). */
 function ruleLines(rule: Rule, width: number): string[] {
   const columns = Math.max(1, width);
-  const room = columns - stringWidth(rule.title) - 2;
+  const title = screenText(rule.title).text.replace(/[\n\t]/g, " ");
+  const room = columns - stringWidth(title) - 2;
   if (room >= 4) {
     const left = Math.floor(room / 2);
     return [
-      `${rule.glyph.repeat(left)} ${rule.title} ${rule.glyph.repeat(room - left)}`,
+      `${rule.glyph.repeat(left)} ${title} ${rule.glyph.repeat(room - left)}`,
     ];
   }
-  if (columns < 3) return wrap(`${rule.glyph} ${rule.title}`, columns);
-  return wrap(rule.title, columns - 2).map((line) => `${rule.glyph} ${line}`);
+  if (columns < 3) return wrapLine(`${rule.glyph} ${title}`, columns, 0);
+  return wrapLine(title, columns - 2, 0).map((line) => `${rule.glyph} ${line}`);
 }
 
 /** The counted divider prefix shared by history and transcript entry layouts. */
@@ -165,10 +175,23 @@ export function wrapRows(
   for (const row of rows) {
     const { rules, text } =
       typeof row === "string" ? { rules: [], text: row } : row;
-    const wrapped = [
-      ...wrapRules(rules, width),
-      ...text.split(/\r?\n/).flatMap((line) => wrap(line, width, hang)),
-    ];
+    const wrapped = [...wrapRules(rules, width), ...wrap(text, width, hang)];
+    for (const line of wrapped) lines.push(line);
+    heights.push(wrapped.length);
+  }
+  return { lines, heights };
+}
+
+/** Lay out content screened by the inspection or history display boundary. */
+export function wrapScreenedRows(
+  rows: readonly ScreenedText[],
+  width: number,
+  hang = 0,
+): WrappedRows {
+  const lines: string[] = [];
+  const heights: number[] = [];
+  for (const row of rows) {
+    const wrapped = wrapScreened(row, width, hang);
     for (const line of wrapped) lines.push(line);
     heights.push(wrapped.length);
   }

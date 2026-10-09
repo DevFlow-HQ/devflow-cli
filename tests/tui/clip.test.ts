@@ -73,11 +73,11 @@ test("a keycap counts its drawn two columns, so the cut stays within the budget"
   assert.equal(stringWidth(clip(keycaps, 30)), 29);
 });
 
-test("a joined family emoji is kept whole or dropped whole", () => {
-  assert.equal(clip(`ab${FAMILY}cd`, 5), `ab${FAMILY}…`);
-  const out = clip(`a${FAMILY}bc`, 3);
-  assertWholeCut(`a${FAMILY}bc`, 3, out);
-  assert.equal(out, "a…");
+test("format characters are removed before measuring and clipping emoji", () => {
+  assert.equal(clip(`ab${FAMILY}cd`, 5), "ab👨…");
+  assert.equal(clip(`a${FAMILY}bc`, 3), "a…");
+  assert.equal(clip(FAMILY, 8), "👨👩👧👦");
+  assert.equal(stringWidth(clip(`ab${FAMILY}cd`, 5)), 5);
 });
 
 test("a skin-tone modifier stays attached to its emoji", () => {
@@ -92,7 +92,7 @@ test("a combining mark stays attached to its base letter", () => {
 });
 
 test("multi-code-point graphemes that fit are returned unchanged", () => {
-  for (const text of [KEYCAP, FAMILY, THUMB, ACCENT, `你${KEYCAP}${FAMILY}`]) {
+  for (const text of [KEYCAP, THUMB, ACCENT, `你${KEYCAP}`]) {
     assert.equal(clip(text, stringWidth(text)), text);
   }
 });

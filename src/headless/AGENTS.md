@@ -37,6 +37,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   parentheses. `selectedHarness` is additive, the existing observed JSON fields stay unchanged, and Command-only Runs omit all of them so their frozen shape is unchanged.
 - Command groups register onto the configured program with `io`/`execute`/`fail`/`settle`. Run and settings share the receipt waiter on the
   Projection Port; Run owns `settleAndReportRun` and `splitSelector`, also used by `bundle inspect`.
+- Headless command IO screens text once at stdout/stderr (#444); its JSON path escapes control/format characters without changing values.
 - Headless JSON omits operational Problem causes in every envelope; normalized fields and user data named `cause` remain intact (#449).
 - Settings show JSON is only the theme/appearance pair. Set JSON is the Operation receipt, with `preferencesChange` only on an applied save.
   Fallback notices use stderr and exit zero; failed saves retain not-applied receipts and exit one. Bare settings prints help without composition.

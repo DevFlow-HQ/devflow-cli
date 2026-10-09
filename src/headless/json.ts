@@ -21,5 +21,14 @@ export function headlessJson(value: unknown): string {
       return value;
     },
     2,
+  ).replace(/[\p{Cc}\p{Cf}]/gu, (character) =>
+    character === "\n" || character === "\t"
+      ? character
+      : character
+          .split("")
+          .map(
+            (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
+          )
+          .join(""),
   );
 }

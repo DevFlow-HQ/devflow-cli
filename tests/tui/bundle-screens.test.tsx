@@ -1,3 +1,7 @@
+import {
+  UNTRUSTED_TERMINAL_TEXT,
+  UNSAFE_TERMINAL_CHARACTERS,
+} from "../helpers/terminalText.js";
 import { inertPreferencesView } from "./inert.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -1039,4 +1043,27 @@ test("list fits a small width and after resize without overflow", async () => {
       `overflows 30 cols after resize: ${JSON.stringify(line)}`,
     );
   }
+});
+
+test("m10-audit-screen-control-bytes: Bundle catalog rows and raw inspector leaves screen authored strings", async () => {
+  const row = summary({
+    id: "dev.controls",
+    version: "1.0.0",
+    name: UNTRUSTED_TERMINAL_TEXT,
+    description: UNTRUSTED_TERMINAL_TEXT + "\rSECOND\r\nTHIRD\tTAB",
+  });
+  const { t } = await mount([row, ROWS[1]!], 120, 40);
+  await openCatalog(t);
+  t.mockInput.pressArrow("down");
+  await t.waitForFrame((frame) => frame.includes("No launch inputs"));
+  const frame = t.captureCharFrame();
+  assert.doesNotMatch(frame, UNSAFE_TERMINAL_CHARACTERS);
+  assert.match(frame, /ABC/);
+  assert.match(frame, /SECOND/);
+  assert.match(frame, /THIRD/);
+  assert.doesNotMatch(frame, /example\.com|31m/);
+  assert.equal(row.name, UNTRUSTED_TERMINAL_TEXT);
+  t.resize(40, 16);
+  await t.renderOnce();
+  assert.doesNotMatch(t.captureCharFrame(), UNSAFE_TERMINAL_CHARACTERS);
 });

@@ -322,6 +322,13 @@ jobs:
           -t '^m10-audit-row-layout-once(:|$)'
           tests/tui/run-workbench-layout.test.tsx
           tests/tui/wrap.test.ts
+      - name: m10-audit-screen-control-bytes
+        run: >-
+          bun run test --
+          -t '^m10-audit-screen-control-bytes(:|$)'
+          tests/tui/run-workbench-screen-control-bytes.test.tsx
+          tests/tui/bundle-screens.test.tsx
+          tests/headless/screen-control-bytes.test.ts
       - name: m10-audit-changed-file-cap
         run: >-
           bun run test --
