@@ -12,7 +12,9 @@ change the session outside the Run's Model choice ([ADR 0034](./0034-choose-and-
 [Decide what the home screen offers](https://github.com/secantdev/secant/issues/246) is Secant's own, in the TUI, not `@opentui/keymap`'s command
 registry: the registry's reachable view is built from keymap layers, and the Workbench takes keys from the Renderer Port, not the keymap. Each
 **App command** is owned by the owner of its action (the shell for Themes and Quit, Home for its navigation, the Workbench for entries derived
-only from current Action Offers) and carries an optional slash name and key hint. The Workbench adds:
+only from current Action Offers) and carries an optional slash name and key hint. The 2026-10-09 amendment gives each command
+owner its declared numeric order, shared by Home, Ctrl+P, and Slash discovery, so no command falls ahead of declared entries
+because its id is absent from a separate order list. The Workbench adds:
 
 | Typed                   | App command                                               | Key      |
 | ----------------------- | --------------------------------------------------------- | -------- |
@@ -35,6 +37,10 @@ only a prefix match (so `/tmp/x` never lands on a command), and runs the highlig
 while it is open; Esc closes it and keeps the text. Unavailable App commands are hidden; an exact typed unavailable name gets "isn't available
 right now". Availability follows the Offers: during a working Turn and in an Agent step only Model, Effort, Themes, and Quit; when a Harness
 Request, Human Gate, or Review checkpoint holds the bottom region, no `/` list but the same four in Ctrl+P; after the Run ends, Themes and Quit.
+The 2026-10-09 amendment adds `Recover unsent text` in Ctrl+P while the prompt holds the bottom and earlier-input text is saved,
+including during a working Turn. Distinct bottom controls offer `Copy unsent text` instead. A finished Run also saves its typed
+but unsent draft for Copy; a failed clipboard copy leaves that text saved. Neither recovery command has a slash name.
+Their order follows Model, Effort and available Step endings, before Themes and Quit.
 An entry leaves the open list when its Offer does, reads its Offer when it runs, and a stale Operation is refused with a notice by the existing
 fresh-state admission.
 

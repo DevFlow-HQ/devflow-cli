@@ -541,3 +541,60 @@ test("m10-session-history: an immediate durable Turn settlement clears control o
   assert.equal(projection.live(), undefined);
   await run.finish();
 });
+
+for (const result of ["applied", "refused"] as const) {
+  test(`m10-audit-draft-recovery: a production Steer keeps its Operation id while pending and ${result}`, async (t) => {
+    const catalog = openCatalog(makeTempDir("secant-steer-receipt-"));
+    t.after(() => catalog.close());
+    const app = createApplication({
+      catalog,
+      launchWorkspacePath: makeTempDir("secant-steer-ws-"),
+    });
+    t.after(() => app.shutdown());
+    const submitted: string[] = [];
+    const settlements: ((value: SettledOperationSnapshot) => void)[] = [];
+    const port: ProjectionPort = {
+      ...app.projectionPort,
+      submit(submission) {
+        assert.equal(submission.operation, "steer-turn");
+        submitted.push(submission.operationId);
+        return { admitted: true, operationId: submission.operationId };
+      },
+      settledOperation(operationId) {
+        assert.ok(submitted.includes(operationId));
+        return new Promise((resolve) => settlements.push(resolve));
+      },
+    };
+    const view = createLiveRunWorkbenchView(port);
+    const first = view.steer("run-1", "turn-1", "identical text");
+    const second = view.steer("run-1", "turn-1", "identical text");
+    assert.equal(first().kind, "pending");
+    assert.equal(second().kind, "pending");
+    assert.ok(first().steerId);
+    assert.notEqual(first().steerId, second().steerId);
+    assert.deepEqual(submitted, [first().steerId, second().steerId]);
+    const secondId = second().steerId;
+    const outcome: SettledOperationSnapshot["outcome"] =
+      result === "applied"
+        ? { status: "applied" }
+        : {
+            status: "not-applied",
+            problem: {
+              code: "turn-control-rejected",
+              explanation: "Too late",
+              remediation: "Send again",
+              possibleEffects: "none",
+            },
+          };
+    settlements[1]?.({ family: "operation", operationId: secondId, outcome });
+    await flushUpdates();
+    assert.equal(second().kind, result);
+    assert.equal(second().steerId, secondId);
+    assert.equal(first().kind, "pending");
+    const firstId = first().steerId;
+    settlements[0]?.({ family: "operation", operationId: firstId, outcome });
+    await flushUpdates();
+    assert.equal(first().kind, result);
+    assert.equal(first().steerId, firstId);
+  });
+}

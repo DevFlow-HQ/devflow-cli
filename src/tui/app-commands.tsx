@@ -11,6 +11,7 @@ import type { SearchEntry } from "./command-search.js";
 /** Action owners publish current commands. This catalog supplies discovery, not
  * admission: each action reads its current Action Offer when it runs. */
 export interface AppCommand extends SearchEntry {
+  readonly order: number;
   readonly available?: boolean;
 }
 function createCatalog() {
@@ -20,24 +21,10 @@ function createCatalog() {
   let palette: () => void = () => {};
   let preempt: () => void = () => {};
   let retry: () => void = () => {};
-  const all = () => {
-    const order = [
-      "start-run",
-      "bundles",
-      "previous-runs",
-      "harnesses",
-      "model",
-      "effort",
-      "end-step",
-      "continue",
-      "end-stage",
-      "themes",
-      "quit",
-    ];
-    return owners()
+  const all = () =>
+    owners()
       .flatMap((owner) => owner())
-      .sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-  };
+      .sort((a, b) => a.order - b.order);
   return {
     entries: () => all().filter((entry) => entry.available !== false),
     /** Known names own the draft even while their Offer is unavailable. */

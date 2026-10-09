@@ -10,8 +10,6 @@ import {
 } from "./run-history-scroll.js";
 import { TextAttributes } from "@opentui/core";
 import {
-  batch,
-  untrack,
   createEffect,
   createMemo,
   mapArray,
@@ -42,6 +40,7 @@ import type {
   SendInteractiveTurnOffer,
 } from "../application/projection-port.js";
 import type { RendererKeyEvent, RendererPort } from "./renderer/renderer.js";
+import { createDraftControl } from "./run-draft-control.js";
 import { useAppCommands, type AppCommand } from "./app-commands.js";
 import { clip } from "./clip.js";
 import { searchCommands } from "./command-search.js";
@@ -228,15 +227,6 @@ type TInteraction =
        *  waits on, said in the prompt's note while its control waits. */
       readonly waiting?: string;
     };
-
-/** The semantic input target a draft belongs to: the current Step, and the
- *  Attempt once a follow-up names it. */
-interface TPromptTarget {
-  /** Survives first Attempt naming; changes only when the semantic target departs. */
-  readonly epoch: number;
-  readonly step: string;
-  readonly attempt?: string;
-}
 
 type TActionOperation = "resume" | "cancel" | "delete" | "interrupt";
 type TAppliedActionOperation = Exclude<TActionOperation, "delete">;
@@ -620,44 +610,28 @@ export function RunWorkbench(props: {
     };
   };
 
-  const [draftRestored, setDraftRestored] = createSignal(false);
-  const [draft, setDraft] = createSignal("");
   const [caret, setCaret] = createSignal(0);
-  // Step-ending confirmations have no captured text and own their receipt.
+  // Step-ending confirmations own a receipt independently of captured text.
   const [endingOutcome, setEndingOutcome] =
     createSignal<Accessor<AnswerOutcome>>();
-  type CapturedText = {
-    readonly order: number;
-    readonly target: TPromptTarget;
-    readonly text: string;
-  };
-  type Capture = CapturedText & {
-    readonly kind: "send" | "steer";
-    readonly outcome: Accessor<AnswerOutcome>;
-  };
-  const [captures, setCaptures] = createSignal<readonly Capture[]>([]);
-  const [recoverable, setRecoverable] = createSignal<readonly CapturedText[]>(
-    [],
-  );
-  const [draftNotice, setDraftNotice] = createSignal<string>();
-  const [recoveryNotice, setRecoveryNotice] = createSignal<string>();
+  const drafts = createDraftControl({
+    run,
+    prompt: () => interaction().kind === "prompt",
+    finished: () => interaction().kind === "finished",
+    working: () => offers().interrupt !== undefined,
+    endingPending: () => endingOutcome()?.().kind === "pending",
+    refocus: () => setFocus("bottom"),
+    refused: (outcome) => setPromptRefusal(outcome),
+  });
+  const draft = drafts.draft;
+  const sendPending = drafts.sendPending;
+  const steerPending = drafts.steerPending;
   const recoveryLines = () =>
-    recoverable().length === 0
+    drafts.savedCount() === 0
       ? []
       : hintLines(
-          `Unsent text from an earlier input saved · ^P commands → ${interaction().kind === "prompt" ? "Recover" : "Copy"} unsent text (${recoverable().length})${recoveryNotice() === undefined ? "" : ` · ${recoveryNotice()}`}`,
+          `Unsent text from an earlier input saved · ^P commands → ${interaction().kind === "prompt" ? "Recover" : "Copy"} unsent text (${drafts.savedCount()})${drafts.recoveryNotice() === undefined ? "" : ` · ${drafts.recoveryNotice()}`}`,
         );
-  let captureOrder = 0;
-  const sendPending = () =>
-    captures().some(
-      (capture) =>
-        capture.kind === "send" && capture.outcome().kind === "pending",
-    ) || endingOutcome()?.().kind === "pending";
-  const steerPending = () =>
-    captures().some(
-      (capture) =>
-        capture.kind === "steer" && capture.outcome().kind === "pending",
-    );
   const [promptRefusal, setPromptRefusal] = createSignal<
     | { readonly kind: "refused"; readonly problem: Problem }
     | { readonly kind: "command"; readonly message: string }
@@ -667,35 +641,6 @@ export function RunWorkbench(props: {
       }
     | undefined
   >();
-  const captureText = (
-    kind: Capture["kind"],
-    submit: (text: string) => Accessor<AnswerOutcome>,
-  ) => {
-    const text = draft();
-    const target = promptTarget();
-    if (
-      text.trim() === "" ||
-      captures().some(
-        (capture) =>
-          capture.outcome().kind === "pending" &&
-          capture.text === text &&
-          sameTarget(capture.target, target),
-      )
-    )
-      return;
-    batch(() => {
-      setPromptRefusal(undefined);
-      setDraftNotice(undefined);
-      setDraftRestored(false);
-      restoredPrefix = [];
-      setDraft("");
-      const outcome = submit(text);
-      setCaptures((previous) => [
-        ...previous,
-        { kind, text, target, order: captureOrder++, outcome },
-      ]);
-    });
-  };
   const dispatchSend = (send: TPromptSend) => {
     if (
       (send.kind !== "turn" && send.kind !== "follow-up") ||
@@ -703,7 +648,7 @@ export function RunWorkbench(props: {
       steerPending()
     )
       return;
-    captureText("send", (text) =>
+    drafts.send((text) =>
       send.kind === "follow-up"
         ? view.sendFollowUpTurn(send.offer, text)
         : view.sendInteractiveTurn(send.offer.runId, send.offer.stepId, text),
@@ -715,7 +660,7 @@ export function RunWorkbench(props: {
       setPromptRefusal({ kind: "unavailable-steer", offer });
       return;
     }
-    captureText("steer", (text) => view.steer(offer.runId, offer.turnId, text));
+    drafts.steer((text) => view.steer(offer.runId, offer.turnId, text));
   };
   const confirmEndStep = (offer: EndInteractiveStepOffer) => {
     if (!confirmationCurrent(offer) || sendPending()) return;
@@ -929,7 +874,6 @@ export function RunWorkbench(props: {
   const modelChoice = createModelChoiceControl({
     run,
     offer: () => offers().modelChoice,
-    modal: answerHoldsBottom,
     dims,
     dialog,
     submit: actions.changeModelChoice,
@@ -977,8 +921,7 @@ export function RunWorkbench(props: {
   const promptNote = (
     prompt: Extract<TInteraction, { kind: "prompt" }>,
   ): string | undefined => {
-    if (draftNotice() !== undefined) return draftNotice();
-    if (draftRestored()) return "◇ Steer dropped by interrupt · draft restored";
+    if (drafts.note() !== undefined) return drafts.note();
     if (prompt.send.kind === "follow-up")
       return "◇ You stopped the agent — it is waiting on your reply";
     const current = run();
@@ -1410,61 +1353,6 @@ export function RunWorkbench(props: {
     ),
   );
 
-  // The draft belongs to its semantic input target. A different Step, or a
-  // follow-up for a different Attempt of the same Step, is fresh and resets only
-  // the old target's draft; a follow-up first naming the Attempt of the Step being
-  // steered keeps it. Unrelated updates, resize, catch-ups, and the request or
-  // gate that briefly holds the bottom region keep the draft and focus.
-  const promptTarget = createMemo<TPromptTarget>((previous) => {
-    const current = run();
-    const followUp = followUpOfferOf(current);
-    const step =
-      followUp?.stepId ?? current?.progress[current.position]?.id ?? "";
-    const attempt = followUp?.attemptId;
-    const fresh =
-      previous !== undefined &&
-      (previous.step !== step ||
-        (previous.attempt !== undefined &&
-          attempt !== undefined &&
-          previous.attempt !== attempt));
-    const knownAttempt = attempt ?? (fresh ? undefined : previous?.attempt);
-    return {
-      step,
-      epoch: (previous?.epoch ?? 0) + (fresh ? 1 : 0),
-      ...(knownAttempt === undefined ? {} : { attempt: knownAttempt }),
-    };
-  });
-  const targetKey = (target: TPromptTarget) => String(target.epoch);
-  const sameTarget = (a: TPromptTarget, b: TPromptTarget) =>
-    a.epoch === b.epoch;
-  let lastTarget: TPromptTarget | undefined;
-  let lastFollowUpTurn = "";
-  // The target a restore last filled: the two effects run in no fixed order, so a
-  // fresh target never clears a draft restored into it on the same snapshot.
-  let restoredTargetKey = "";
-  createEffect(() => {
-    if (run() === undefined) return;
-    const target = promptTarget();
-    const previous = lastTarget;
-    const fresh = previous !== undefined && previous.epoch !== target.epoch;
-    if (fresh) {
-      if (restoredTargetKey !== targetKey(target)) {
-        setDraft("");
-        setDraftRestored(false);
-        setDraftNotice(undefined);
-        restoredPrefix = [];
-      }
-      setPromptRefusal(undefined);
-      setFocus("bottom");
-    }
-    lastTarget = target;
-    // Each newly interrupted Turn hands the person its reply (#354).
-    const followUp = followUpOfferOf(run());
-    if (followUp !== undefined && followUp.turnId !== lastFollowUpTurn)
-      setFocus("bottom");
-    if (followUp !== undefined) lastFollowUpTurn = followUp.turnId;
-  });
-
   // The follow-up replaces the Interrupt's receipt (#354): the prompt says the
   // agent is waiting.
   createEffect(() => {
@@ -1475,170 +1363,11 @@ export function RunWorkbench(props: {
       setActionReceipt(undefined);
   });
 
-  // Restored captures remain an ordered prefix while native edits preserve it.
-  // Editing that prefix makes it ordinary draft text; consumed captures never replay.
-  let restoredPrefix: readonly CapturedText[] = [];
-  const restore = (texts: readonly CapturedText[]) => {
-    const prefix = restoredPrefix.map((text) => text.text).join("\n");
-    const current = untrack(draft);
-    const intact =
-      prefix !== "" &&
-      (current === prefix || current.startsWith(`${prefix}\n`));
-    const unsent = intact
-      ? current.slice(prefix.length).replace(/^\n/, "")
-      : current;
-    restoredPrefix = [...(intact ? restoredPrefix : []), ...texts].sort(
-      (a, b) => a.order - b.order,
-    );
-    restoredTargetKey = targetKey(promptTarget());
-    setDraft(
-      [...restoredPrefix.map((text) => text.text), unsent]
-        .filter((text) => text !== "")
-        .join("\n"),
-    );
-  };
-  const handledReceipts = new Set<number>();
-  const restoredCaptures = new Set<number>();
-  const seenSteers = new Set<string>();
-  const matchedSteers = new Set<number>();
-  let steerHistoryOpened = false;
-  type Restoration = CapturedText & {
-    readonly reason: "refused" | "interrupt";
-  };
-  let restoreQueue: Restoration[] = [];
-  const enqueue = (text: CapturedText, reason: Restoration["reason"]) => {
-    if (restoredCaptures.has(text.order)) return;
-    restoredCaptures.add(text.order);
-    restoreQueue.push({ ...text, reason });
-  };
   createEffect(() => {
     const ending = endingOutcome()?.();
     if (ending === undefined || ending.kind === "pending") return;
     if (ending.kind === "refused") setPromptRefusal(ending);
     setEndingOutcome(undefined);
-  });
-  createEffect(() => {
-    const current = run();
-    if (current === undefined) return;
-    const target = promptTarget();
-    const flights = captures();
-    for (const flight of flights) {
-      const outcome = flight.outcome();
-      if (outcome.kind === "pending" || handledReceipts.has(flight.order))
-        continue;
-      handledReceipts.add(flight.order);
-      if (outcome.kind === "refused") {
-        enqueue(flight, "refused");
-        if (sameTarget(flight.target, target)) {
-          setPromptRefusal(outcome);
-          if (
-            flight.kind === "steer" &&
-            outcome.problem.code === "turn-control-rejected"
-          )
-            setDraftNotice("Late Steer · text restored to draft");
-        }
-      }
-    }
-    const entries = current.timeline.flatMap((event) =>
-      event.steer === undefined || event.steer.settlement.kind === "waiting"
-        ? []
-        : [{ event, steer: event.steer }],
-    );
-    if (!steerHistoryOpened) {
-      for (const { steer } of entries) seenSteers.add(steer.steerId);
-      steerHistoryOpened = true;
-    }
-    const readyForDrops =
-      !steerPending() &&
-      !sendPending() &&
-      offers().interrupt === undefined &&
-      (interactiveStep() ||
-        followUpOfferOf(current) !== undefined ||
-        current.state !== "running");
-    if (readyForDrops) {
-      for (const { event, steer } of entries) {
-        if (seenSteers.has(steer.steerId)) continue;
-        seenSteers.add(steer.steerId);
-        const flight = flights.find((capture) => {
-          if (capture.kind !== "steer" || matchedSteers.has(capture.order))
-            return false;
-          const outcome = capture.outcome();
-          if (outcome.steerId !== undefined)
-            return outcome.steerId === steer.steerId;
-          return (
-            outcome.kind === "applied" &&
-            capture.text === steer.text &&
-            (event.step === undefined || capture.target.step === event.step)
-          );
-        });
-        if (flight !== undefined) matchedSteers.add(flight.order);
-        if (
-          steer.settlement.kind !== "dropped" ||
-          steer.settlement.reason !== "interrupt"
-        )
-          continue;
-        if (
-          flight === undefined &&
-          event.step !== current.progress[current.position]?.id
-        )
-          continue;
-        if (
-          !interactiveStep() &&
-          followUpOfferOf(current) === undefined &&
-          sameTarget(flight?.target ?? target, target)
-        )
-          continue;
-        enqueue(
-          flight ?? { text: steer.text, target, order: captureOrder++ },
-          "interrupt",
-        );
-      }
-    }
-    // Queued recovery owns settled sends and definite refusals. Only admitted or
-    // uncertain-effect Steers still need their durable delivery evidence.
-    const outstanding = flights.filter((capture) => {
-      const outcome = capture.outcome();
-      if (outcome.kind === "pending") return true;
-      if (capture.kind !== "steer" || matchedSteers.has(capture.order))
-        return false;
-      return (
-        outcome.kind === "applied" || outcome.problem.possibleEffects !== "none"
-      );
-    });
-    if (outstanding.length !== flights.length) setCaptures(outstanding);
-    if (restoreQueue.length === 0) return;
-    const waiting: Restoration[] = [];
-    const ready: Restoration[] = [];
-    const old: CapturedText[] = [];
-    for (const text of restoreQueue) {
-      if (!sameTarget(text.target, target) || interaction().kind === "finished")
-        old.push(text);
-      else if (
-        interaction().kind !== "prompt" ||
-        flights.some(
-          (capture) =>
-            capture.order < text.order &&
-            capture.outcome().kind === "pending" &&
-            sameTarget(capture.target, text.target),
-        )
-      )
-        waiting.push(text);
-      else ready.push(text);
-    }
-    restoreQueue = waiting;
-    untrack(() =>
-      batch(() => {
-        if (old.length > 0)
-          setRecoverable((previous) =>
-            [...previous, ...old].sort((a, b) => a.order - b.order),
-          );
-        if (ready.length > 0) {
-          restore(ready);
-          if (ready.some((text) => text.reason === "interrupt"))
-            setDraftRestored(true);
-        }
-      }),
-    );
   });
 
   // The unavailable Steer's reason speaks for the live Turn only: when the Turn ends
@@ -1665,22 +1394,25 @@ export function RunWorkbench(props: {
     const entries: AppCommand[] = [
       {
         id: "model",
+        order: 50,
         name: "Model",
         description: "Change the Run model and effort",
         slash: "model",
         available: modelAvailable,
-        run: () => modelChoice.open("model", true),
+        run: () => modelChoice.open("model"),
       },
       {
         id: "effort",
+        order: 60,
         name: "Effort",
         description: "Change effort with the Model choice",
         slash: "effort",
         available: modelAvailable,
-        run: () => modelChoice.open("effort", true),
+        run: () => modelChoice.open("effort"),
       },
       {
         id: "end-step",
+        order: 70,
         name: "End Step",
         description: "Confirm ending the interactive Step",
         slash: "end-step",
@@ -1690,6 +1422,7 @@ export function RunWorkbench(props: {
       },
       {
         id: "continue",
+        order: 80,
         name: "Continue",
         description: "Confirm another Repeat iteration",
         slash: "continue",
@@ -1699,6 +1432,7 @@ export function RunWorkbench(props: {
       },
       {
         id: "end-stage",
+        order: 90,
         name: "End Stage",
         description: "Confirm ending the stage",
         slash: "end-stage",
@@ -1706,34 +1440,25 @@ export function RunWorkbench(props: {
         run: () => arm("end-stage"),
       },
     ];
-    if (current.kind !== "prompt" && recoverable().length > 0)
+    if (current.kind !== "prompt" && drafts.savedCount() > 0)
       entries.push({
         id: "copy-unsent-text",
+        order: 100,
         name: "Copy unsent text",
         description: "Copy saved earlier-input text to the terminal clipboard",
         run: () =>
-          setRecoveryNotice(
-            terminalRenderer.copyToClipboardOSC52(
-              recoverable()
-                .map((text) => text.text)
-                .join("\n"),
-            )
-              ? "Saved unsent text copied to terminal clipboard"
-              : "Clipboard unavailable · unsent text remains saved",
+          drafts.copied(
+            terminalRenderer.copyToClipboardOSC52(drafts.savedText()),
           ),
       });
     if (current.kind === "prompt") {
-      if (recoverable().length > 0)
+      if (drafts.savedCount() > 0)
         entries.push({
           id: "recover-unsent-text",
+          order: 100,
           name: "Recover unsent text",
           description: "Put saved earlier-input text before this draft",
-          run: () =>
-            batch(() => {
-              restore(recoverable());
-              setRecoverable([]);
-              setDraftNotice("Earlier-input text recovered into this draft");
-            }),
+          run: drafts.recover,
         });
     }
     return entries;
@@ -1826,13 +1551,8 @@ export function RunWorkbench(props: {
       });
       return true;
     }
-    batch(() => {
-      restoredPrefix = [];
-      setDraftNotice(undefined);
-      setDraft("");
-      setDraftRestored(false);
-      setPromptRefusal(undefined);
-    });
+    drafts.clear();
+    setPromptRefusal(undefined);
     entry.run();
     return true;
   };
@@ -2106,8 +1826,7 @@ export function RunWorkbench(props: {
         promptInteraction() !== undefined &&
         draft() !== ""
       ) {
-        setDraft("");
-        setDraftRestored(false);
+        drafts.clear();
         setPromptRefusal(undefined);
         return;
       }
@@ -2552,7 +2271,7 @@ export function RunWorkbench(props: {
                       <PromptControl
                         model={model}
                         draft={draft}
-                        onInput={(value) => setDraft(value)}
+                        onInput={drafts.input}
                         focused={promptFieldFocused}
                         slashOpen={() => slashVisible() || mentionsVisible()}
                         onCaret={setCaret}

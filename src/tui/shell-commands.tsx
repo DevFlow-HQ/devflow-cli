@@ -136,6 +136,7 @@ export function ShellCommands(props: {
   catalog.register(() => [
     {
       id: "themes",
+      order: 110,
       name: "Themes",
       description: "Preview and save Dark or Light appearance",
       slash: "themes",
@@ -143,6 +144,7 @@ export function ShellCommands(props: {
     },
     {
       id: "quit",
+      order: 120,
       name: "Quit",
       description: "Leave Secant with guarded live Run shutdown",
       slash: "quit",

@@ -377,3 +377,39 @@ test("m10-audit-truthful-keys: preference read notice is visible on Home at laun
   await type(t, "Quit");
   assert.match(t.captureCharFrame(), /Saved preferences could not be read/);
 });
+
+test("m10-audit-draft-recovery: Home and Ctrl+P use the same owner-declared navigation order", async () => {
+  const { t } = await mount(controlledPreferences().view, 100, 40);
+  const names = [
+    "Start a Run",
+    "Workflow Bundles",
+    "Previous Runs",
+    "Harnesses",
+    "Themes",
+    "Quit",
+  ];
+  const ordered = () => {
+    const frame = t.captureCharFrame();
+    const positions = names.map((name) => frame.indexOf(name));
+    assert.ok(
+      positions.every((position) => position >= 0),
+      frame,
+    );
+    assert.ok(
+      positions.every(
+        (position, index) => index === 0 || position > positions[index - 1]!,
+      ),
+      frame,
+    );
+  };
+  ordered();
+  assert.doesNotMatch(
+    t.captureCharFrame(),
+    /› (?:Start|Workflow|Previous|Harnesses|Themes|Quit)/,
+  );
+  t.mockInput.pressKey("p", { ctrl: true });
+  await t.waitForFrame((frame) => frame.includes("App commands"));
+  ordered();
+  await escape(t);
+  ordered();
+});

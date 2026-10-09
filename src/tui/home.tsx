@@ -33,24 +33,28 @@ export function Home(props: {
       ? [
           {
             id: "start-run",
+            order: 10,
             name: "Start a Run",
             description: "Launch a Workflow Bundle",
             run: props.onStartRun,
           },
           {
             id: "bundles",
+            order: 20,
             name: "Workflow Bundles",
             description: "Inspect installed Workflows and versions",
             run: props.onOpenBundles,
           },
           {
             id: "previous-runs",
+            order: 30,
             name: "Previous Runs",
             description: "Inspect and reopen Run history",
             run: props.onOpenPreviousRuns,
           },
           {
             id: "harnesses",
+            order: 40,
             name: "Harnesses",
             description: "Inspect discovery and model capabilities",
             run: props.onOpenHarnesses,
@@ -59,18 +63,7 @@ export function Home(props: {
       : [],
   );
   const search = createCommandSearch({
-    entries: () => {
-      const entries = catalog.entries();
-      const order = [
-        "start-run",
-        "bundles",
-        "previous-runs",
-        "harnesses",
-        "themes",
-        "quit",
-      ];
-      return order.flatMap((id) => entries.filter((entry) => entry.id === id));
-    },
+    entries: catalog.entries,
     escape() {},
     quit: () => exit(),
   });

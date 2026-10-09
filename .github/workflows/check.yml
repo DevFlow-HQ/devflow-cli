@@ -296,6 +296,13 @@ jobs:
           tests/tui/run-workbench-interaction.test.tsx
           tests/tui/run-workbench-layout.test.tsx
           tests/tui/run-workbench-prompt.test.tsx
+      - name: m10-audit-draft-recovery
+        run: >-
+          bun run test --
+          -t '^m10-audit-draft-recovery(:|$)'
+          tests/tui/run-workbench-prompt.test.tsx
+          tests/tui/home-preferences.test.tsx
+          tests/tui/run-view.test.ts
       - name: m10-audit-row-layout-once
         run: >-
           bun run test --

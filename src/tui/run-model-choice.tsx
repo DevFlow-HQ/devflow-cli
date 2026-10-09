@@ -18,12 +18,10 @@ type AvailableOffer = Extract<ChangeModelChoiceOffer, { available: true }>;
 export function createModelChoiceControl(props: {
   run: Accessor<RunView | undefined>;
   offer: Accessor<ChangeModelChoiceOffer | undefined>;
-  modal: Accessor<boolean>;
   dims: Accessor<{ width: number; height: number }>;
   dialog: ReturnType<typeof useDialog>;
   submit: RunActionsView["changeModelChoice"];
 }) {
-  let overInteraction = false;
   const [showing, setShowing] = createSignal(false);
   const [draft, setDraft] = createSignal<ModelChoiceDraft>({
     kind: "model-needed",
@@ -47,11 +45,7 @@ export function createModelChoiceControl(props: {
     if (showing()) props.dialog.clear();
   };
   createEffect(() => {
-    if (
-      showing() &&
-      ((props.modal() && !overInteraction) || props.offer()?.available !== true)
-    )
-      close();
+    if (showing() && props.offer()?.available !== true) close();
   });
   onCleanup(close);
   const reachWords = (reach: ChangeModelChoiceOffer["reach"]) =>
@@ -85,18 +79,9 @@ export function createModelChoiceControl(props: {
         : [change.effortReset.explanation]),
     ];
   };
-  const open = (
-    stage: "model" | "effort" = "model",
-    allowInteraction = false,
-  ) => {
+  const open = (stage: "model" | "effort" = "model") => {
     const offer = props.offer();
-    if (
-      offer?.available !== true ||
-      (props.modal() && !allowInteraction) ||
-      pending()
-    )
-      return;
-    overInteraction = allowInteraction;
+    if (offer?.available !== true || pending()) return;
     setDraft(
       offer.currentChoice === undefined
         ? { kind: "model-needed" }
@@ -149,8 +134,7 @@ export function createModelChoiceControl(props: {
               const chosen = draft();
               if (
                 currentOffer?.available !== true ||
-                chosen.kind !== "chosen" ||
-                (props.modal() && !overInteraction)
+                chosen.kind !== "chosen"
               ) {
                 close();
                 return;

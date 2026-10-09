@@ -204,7 +204,8 @@ export function makeRunView(initial: RunSnapshot) {
   // Every captured write gets an independent receipt, including concurrent sends.
   const interactiveReceipts: ReturnType<typeof createSignal<AnswerOutcome>>[] =
     [];
-  const steerReceipts: ReturnType<typeof createSignal<AnswerOutcome>>[] = [];
+  type SteerOutcome = ReturnType<ReturnType<RunWorkbenchView["steer"]>>;
+  const steerReceipts: ReturnType<typeof createSignal<SteerOutcome>>[] = [];
   const receipt = (receipts: typeof interactiveReceipts) => {
     const outcome = createSignal<AnswerOutcome>({ kind: "pending" });
     receipts.push(outcome);
@@ -217,7 +218,11 @@ export function makeRunView(initial: RunSnapshot) {
   const setSteerOutcome = (
     outcome: AnswerOutcome,
     index = steerReceipts.length - 1,
-  ) => steerReceipts[index]?.[1](outcome);
+  ) =>
+    steerReceipts[index]?.[1]((previous) => ({
+      ...outcome,
+      steerId: previous.steerId,
+    }));
   const sends: { runId: string; stepId: string; text: string }[] = [];
   const followUps: { runId: string; turnId: string; text: string }[] = [];
   const ends: { runId: string; stepId: string }[] = [];
@@ -353,7 +358,12 @@ export function makeRunView(initial: RunSnapshot) {
     },
     steer: (runId, turnId, text) => {
       steers.push({ runId, turnId, text });
-      return receipt(steerReceipts);
+      const outcome = createSignal<SteerOutcome>({
+        kind: "pending",
+        steerId: `fixture-steer-${steerReceipts.length}`,
+      });
+      steerReceipts.push(outcome);
+      return outcome[0];
     },
     answerText: (gate, text) => {
       texts.push({ gate, text });
@@ -422,6 +432,11 @@ export function makeRunView(initial: RunSnapshot) {
     steers,
     setInteractiveOutcome,
     setSteerOutcome,
+    steerId(index = steerReceipts.length - 1) {
+      const receipt = steerReceipts[index];
+      assert.ok(receipt, "Steer receipt exists");
+      return receipt[0]().steerId;
+    },
     setRequestOutcome,
     setGateOutcome,
   };

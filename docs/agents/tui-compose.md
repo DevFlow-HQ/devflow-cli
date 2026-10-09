@@ -33,7 +33,8 @@ Read before changing Workspace path completion, Slash discovery, prompt captures
   resize, and catch-ups keep the draft and focus. Each newly interrupted Turn's follow-up refocuses the prompt. After an Interrupt the prompt's note says
   the agent waits on the person: the follow-up's, or an interactive Step's until a later Turn settles.
 - Enter captures and clears sent Turn, follow-up and Steer text immediately (#420); admission never clears newer typing. The field stays editable.
-  A still-pending capture cannot be dispatched twice. A pending Steer holds a second Steer or boundary send back without freezing native editing.
+  A cleared capture cannot be dispatched twice; deliberately retyping identical text creates a new send. A pending Steer holds a second Steer
+  or boundary send back without freezing native editing.
   Step-ending confirmations own a separate receipt. An unavailable Steer shows its Offer's reason only at Enter.
 - Refused receipts and Interrupt drops share one ordered restore before unsent text, separated by a single newline. Earlier pending captures hold later
   restores back. Restored captures keep their order across later restores while native edits preserve the restored prefix; edits to that prefix make it
@@ -42,6 +43,7 @@ Read before changing Workspace path completion, Slash discovery, prompt captures
   counted notice and Ctrl+P's `Recover unsent text`. Only that command moves it into the current draft. Distinct bottom controls instead offer
   `Copy unsent text` through the terminal clipboard; unavailable clipboard support leaves text saved. Automatic restores preserve details or dialog focus.
 - Interrupt drops wait for the live Turn and pending receipts to leave (#356). Full text comes from `RunTimelineEvent.steer`, never its capped `detail`.
-  Steer receipts carry their opaque Operation id to match durable `steerId`, including identical-text retries and different Attempts.
+  The private draft controller owns every clear and its restore note, and saves a finished Run's typed draft for Copy.
+  Steer receipts require their opaque Operation id to match durable `steerId`, including identical-text retries and different Attempts.
   Captured send order wins; uncaptured drops retain recorded order. Opening old history and repeated snapshots never restore twice. Restore only into an
   interactive Step's prompt or an Agent Step's follow-up (#354); a signal-halted Agent Step's same-target drops stay history.

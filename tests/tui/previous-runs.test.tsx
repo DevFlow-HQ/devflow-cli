@@ -130,7 +130,7 @@ function runViewOf(run: RunView): RunWorkbenchView {
     endInteractiveStep: () => () => ({ kind: "applied" }),
     continueRepeat: () => () => ({ kind: "applied" }),
     endStage: () => () => ({ kind: "applied" }),
-    steer: () => () => ({ kind: "applied" }),
+    steer: () => () => ({ kind: "applied", steerId: "unused-steer" }),
     answerText: () => () => ({ kind: "applied" }),
     answerRequest: () => () => ({ kind: "applied" }),
   };

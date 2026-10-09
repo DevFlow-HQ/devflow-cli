@@ -47,10 +47,9 @@ import { submitAndSettle, type SettleOutcome } from "./submit-and-settle.js";
 /** An answer as the Workbench observes it: `pending` until it settles, then
  *  `applied` (the open snapshot then drops the checkpoint and its offer) or a
  *  refusal Problem. This is the shared submit-and-settle outcome (A23). */
-export type AnswerOutcome = SettleOutcome & {
-  /** Steer Operations use the same opaque id as their durable settlement. */
-  readonly steerId?: string;
-};
+export type AnswerOutcome = SettleOutcome;
+/** Steer Operations use the same opaque id as their durable settlement. */
+export type SteerOutcome = AnswerOutcome & { readonly steerId: string };
 export type TRunViewFreshness = TProjectionStreamHealth;
 
 /** The durable Run snapshot joined with its explicitly separate ephemeral Turn
@@ -127,7 +126,7 @@ export interface RunWorkbenchView {
    *  the running agent without ending the Turn. Offered only when the prepared
    *  Harness declares native steer. The accessor starts `pending` and settles once
    *  the Operation resolves; a rejected or stale steer settles `refused`. */
-  steer(runId: string, turnId: string, text: string): Accessor<AnswerOutcome>;
+  steer(runId: string, turnId: string, text: string): Accessor<SteerOutcome>;
   /** Answers a free-text Human Gate (#108): publishes `text` as the gate's declared
    *  `text` output and advances the Run. The accessor starts `pending` and settles
    *  once the Operation resolves; a shape mismatch or stale Gate settles `refused`. */

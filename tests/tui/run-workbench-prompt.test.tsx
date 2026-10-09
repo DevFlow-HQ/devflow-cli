@@ -1109,7 +1109,7 @@ for (const [width, height] of [
         kind: "delivered",
         delivery: "within-turn",
       }),
-      steerSettlement("first", "restore this guidance", {
+      steerSettlement(wb.control.steerId(0), "restore this guidance", {
         kind: "dropped",
         reason: "interrupt",
       }),
@@ -1176,7 +1176,7 @@ test("a drop seen before the Agent Step rests restores once the follow-up is off
   await wb.t.renderOnce();
   const timeline = [
     steerSettlement(
-      "in-flight",
+      wb.control.steerId(0),
       "guidance in flight",
       { kind: "dropped", reason: "interrupt" },
       "repair",
@@ -1208,7 +1208,7 @@ test("a signal-halted Agent Step parks no compose for Steers its Turn dropped (#
       actionOffers: [RESUME_OFFER],
       timeline: [
         steerSettlement(
-          "dropped",
+          wb.control.steerId(0),
           "guidance that cannot be sent",
           { kind: "dropped", reason: "interrupt" },
           "repair",
@@ -1247,7 +1247,7 @@ test("settlement observed before its receipt restores once after admission, with
   await type(wb.t, "a racing draft");
   await press(wb.t, wb.renderer, "return");
   const timeline = [
-    steerSettlement("racing", "a racing draft", {
+    steerSettlement(wb.control.steerId(0), "a racing draft", {
       kind: "dropped",
       reason: "interrupt",
     }),
@@ -1294,7 +1294,7 @@ for (const close of ["offer-ended", "armed"] as const) {
     if (close === "armed") await press(wb.t, wb.renderer, "escape");
     const timeline = [
       steerSettlement(
-        "late-accepted",
+        wb.control.steerId(0),
         "guidance awaiting receipt",
         { kind: "dropped", reason: "interrupt" },
         "repair",
@@ -1783,14 +1783,6 @@ for (const route of ["turn", "follow-up"] as const) {
     const wb = await mountWorkbench(initial, 60, 24);
     await type(wb.t, "first capture");
     await press(wb.t, wb.renderer, "return");
-    // Re-entering a still-pending capture is suppressed independently of focus.
-    await type(wb.t, "first capture");
-    await press(wb.t, wb.renderer, "return");
-    assert.equal(
-      (route === "turn" ? wb.control.sends : wb.control.followUps).length,
-      1,
-    );
-    await press(wb.t, wb.renderer, "c", { ctrl: true });
     await type(wb.t, "second capture");
     await press(wb.t, wb.renderer, "return");
     await type(wb.t, "unsent");
@@ -1889,7 +1881,7 @@ test("m10-workbench-interaction: an old-Step Steer drop and refused receipt reta
   await press(wb.t, wb.renderer, "return");
   const timeline = [
     steerSettlement(
-      "old-drop",
+      wb.control.steerId(0),
       "old guidance",
       { kind: "dropped", reason: "interrupt" },
       "repair",
@@ -1901,7 +1893,6 @@ test("m10-workbench-interaction: an old-Step Steer drop and refused receipt reta
   wb.control.setSteerOutcome({
     kind: "refused",
     problem: { ...DRAFT_REFUSAL.problem, possibleEffects: "unknown" },
-    steerId: "old-drop",
   });
   await wb.t.renderOnce();
   wb.control.setRun(interactiveRunOf({ timeline }));
@@ -1922,16 +1913,15 @@ test("m10-workbench-interaction: refused receipts and Interrupt drops share capt
   wb.control.setSteerOutcome({
     kind: "refused",
     problem: { ...DRAFT_REFUSAL.problem, possibleEffects: "unknown" },
-    steerId: "second-drop",
   });
   await wb.t.renderOnce();
   await type(wb.t, " unsent");
   const timeline = [
-    steerSettlement("second-drop", "second steer", {
+    steerSettlement(wb.control.steerId(1), "second steer", {
       kind: "dropped",
       reason: "interrupt",
     }),
-    steerSettlement("first-drop", "first steer", {
+    steerSettlement(wb.control.steerId(0), "first steer", {
       kind: "dropped",
       reason: "interrupt",
     }),
@@ -1956,7 +1946,7 @@ test("m10-workbench-interaction: an identical-text Steer retry restores the acce
   wb.control.setRun(
     interactiveRunOf({
       timeline: [
-        steerSettlement("retry-drop", "again", {
+        steerSettlement(wb.control.steerId(1), "again", {
           kind: "dropped",
           reason: "interrupt",
         }),
@@ -2051,7 +2041,7 @@ test("m10-workbench-interaction: Steer ids distinguish identical text in two Att
   const wb = await mountWorkbench(steerableRunOf(), 100, 30);
   await type(wb.t, "identical guidance");
   await press(wb.t, wb.renderer, "return");
-  wb.control.setSteerOutcome({ kind: "applied", steerId: "first-id" });
+  wb.control.setSteerOutcome({ kind: "applied" });
   await wb.t.renderOnce();
   wb.control.setRun(waitingRunOf());
   await wb.t.renderOnce();
@@ -2066,20 +2056,20 @@ test("m10-workbench-interaction: Steer ids distinguish identical text in two Att
   await wb.t.renderOnce();
   await type(wb.t, "identical guidance");
   await press(wb.t, wb.renderer, "return");
-  wb.control.setSteerOutcome({ kind: "applied", steerId: "second-id" });
+  wb.control.setSteerOutcome({ kind: "applied" });
   await wb.t.renderOnce();
   wb.control.setRun(
     waitingRunOf({
       actionOffers: [newOffer],
       timeline: [
         steerSettlement(
-          "second-id",
+          wb.control.steerId(1),
           "identical guidance",
           { kind: "dropped", reason: "interrupt" },
           "repair",
         ),
         steerSettlement(
-          "first-id",
+          wb.control.steerId(0),
           "identical guidance",
           { kind: "dropped", reason: "interrupt" },
           "repair",
@@ -3078,3 +3068,284 @@ test("m10-audit-token-ripgrep-listing: hidden capped suggestions leave idle Esca
   assert.match(wb.t.captureCharFrame(), /Search commands/);
   assert.equal(wb.control.sends.length, 0);
 });
+
+test("m10-audit-draft-recovery: a finished Run offers its typed multiline draft through Copy and keeps it after clipboard refusal", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 60, 24);
+  await type(wb.t, "typed but unsent");
+  wb.t.mockInput.pressKey("j", { ctrl: true });
+  await type(wb.t, "second line");
+  wb.control.setRun(interactiveRunOf({ state: "succeeded", actionOffers: [] }));
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /Copy unsent text \(1\)/);
+  const copied: string[] = [];
+  const original = wb.t.renderer.copyToClipboardOSC52;
+  wb.t.renderer.copyToClipboardOSC52 = (text) => {
+    copied.push(text);
+    return false;
+  };
+  try {
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    await type(wb.t, "Copy unsent text");
+    await press(wb.t, wb.renderer, "down");
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(copied, ["typed but unsent\nsecond line"]);
+    assert.match(wb.t.captureCharFrame(), /Clipboard unavailable/);
+    wb.control.setRun(
+      interactiveRunOf({ state: "succeeded", actionOffers: [] }),
+    );
+    await wb.t.renderOnce();
+    wb.t.renderer.copyToClipboardOSC52 = (text) => {
+      copied.push(text);
+      return true;
+    };
+    await press(wb.t, wb.renderer, "p", { ctrl: true });
+    await type(wb.t, "Copy unsent text");
+    await press(wb.t, wb.renderer, "down");
+    await press(wb.t, wb.renderer, "return");
+    assert.deepEqual(copied, [
+      "typed but unsent\nsecond line",
+      "typed but unsent\nsecond line",
+    ]);
+  } finally {
+    wb.t.renderer.copyToClipboardOSC52 = original;
+  }
+});
+
+for (const route of ["turn", "follow-up"] as const) {
+  test(`m10-audit-draft-recovery: deliberately retyped identical ${route} text is sent while the first capture is pending`, async () => {
+    const wb = await mountWorkbench(
+      route === "turn" ? interactiveRunOf() : waitingRunOf(),
+    );
+    await type(wb.t, "same text");
+    await press(wb.t, wb.renderer, "return");
+    await press(wb.t, wb.renderer, "return");
+    const submissions =
+      route === "turn" ? wb.control.sends : wb.control.followUps;
+    assert.equal(submissions.length, 1);
+    await type(wb.t, "same text");
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(submissions.length, 2);
+    wb.control.setInteractiveOutcome(DRAFT_REFUSAL, 1);
+    await wb.t.renderOnce();
+    assert.doesNotMatch(wb.t.captureCharFrame(), /> same text/);
+    wb.control.setInteractiveOutcome(DRAFT_REFUSAL, 0);
+    await wb.t.renderOnce();
+    await press(wb.t, wb.renderer, "return");
+    assert.equal(submissions[2]?.text, "same text\nsame text");
+  });
+}
+
+test("m10-audit-draft-recovery: Ctrl+C removes a late restore note with the text and native typing starts a fresh draft", async () => {
+  const wb = await mountWorkbench(steerableInteractiveRunOf(), 100, 30);
+  await type(wb.t, "late guidance");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setSteerOutcome({
+    kind: "refused",
+    problem: { ...DRAFT_REFUSAL.problem, code: "turn-control-rejected" },
+  });
+  await wb.t.renderOnce();
+  assert.match(wb.t.captureCharFrame(), /Late Steer.*text restored/);
+  await press(wb.t, wb.renderer, "c", { ctrl: true });
+  assert.doesNotMatch(
+    wb.t.captureCharFrame(),
+    /Late Steer|text restored|late guidance/,
+  );
+  await type(wb.t, "fresh");
+  await press(wb.t, wb.renderer, "return");
+  assert.equal(wb.control.steers[1]?.text, "fresh");
+});
+
+for (const route of ["send", "slash", "target", "native deletion"] as const) {
+  test(`m10-audit-draft-recovery: ${route} clears the restoration note with the draft`, async () => {
+    const wb = await mountWorkbench(
+      steerableInteractiveRunOf({
+        actionOffers: [AVAILABLE_STEER_OFFER, INTERRUPT_OFFER, MODEL_OFFER],
+      }),
+      100,
+      30,
+    );
+    await type(wb.t, "late guidance");
+    await press(wb.t, wb.renderer, "return");
+    wb.control.setSteerOutcome({
+      kind: "refused",
+      problem: { ...DRAFT_REFUSAL.problem, code: "turn-control-rejected" },
+    });
+    await wb.t.renderOnce();
+    assert.match(wb.t.captureCharFrame(), /Late Steer.*text restored/);
+    if (route === "send") await press(wb.t, wb.renderer, "return");
+    else if (route === "target") {
+      wb.control.setRun(
+        interactiveRunOf({
+          progress: [
+            { id: "new", kind: "interactive-agent", status: "blocked" },
+          ],
+          actionOffers: [{ ...SEND_OFFER, stepId: "new" }],
+        }),
+      );
+      await wb.t.renderOnce();
+    } else {
+      for (let i = 0; i < "late guidance".length; i++) {
+        if (route === "slash")
+          wb.t.mockInput.pressArrow("left", { shift: true });
+        else wb.t.mockInput.pressBackspace();
+      }
+      await wb.t.renderOnce();
+      if (route === "slash") {
+        await type(wb.t, "/model");
+        assert.match(wb.t.captureCharFrame(), /Late Steer/);
+        await press(wb.t, wb.renderer, "return");
+        await press(wb.t, wb.renderer, "escape");
+      }
+    }
+    assert.doesNotMatch(
+      wb.t.captureCharFrame(),
+      /Late Steer|text restored|> late guidance/,
+    );
+    await type(wb.t, "fresh");
+    assert.match(wb.t.captureCharFrame(), /> fresh/);
+  });
+}
+
+test("m10-audit-draft-recovery: Recover and Copy follow Model, Effort and Step endings in Ctrl+P", async () => {
+  const wb = await mountWorkbench(interactiveRunOf(), 120, 40);
+  await type(wb.t, "old input");
+  await press(wb.t, wb.renderer, "return");
+  wb.control.setRun(
+    interactiveRunOf({
+      progress: [{ id: "new", kind: "interactive-agent", status: "blocked" }],
+      actionOffers: [
+        { ...SEND_OFFER, stepId: "new" },
+        { ...END_OFFER, stepId: "new" },
+        MODEL_OFFER,
+      ],
+    }),
+  );
+  wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  let frame = wb.t.captureCharFrame();
+  let previous = -1;
+  for (const name of [
+    "Model ·",
+    "Effort ·",
+    "End Step",
+    "Recover unsent text",
+    "Themes ·",
+    "Quit (",
+  ]) {
+    const position = frame.indexOf(name);
+    assert.ok(position > previous, frame);
+    previous = position;
+  }
+  await press(wb.t, wb.renderer, "escape");
+  wb.control.setRun(interactiveRunOf({ state: "cancelled", actionOffers: [] }));
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "p", { ctrl: true });
+  frame = wb.t.captureCharFrame();
+  assert.ok(frame.indexOf("Copy unsent text") >= 0, frame);
+  assert.ok(
+    frame.indexOf("Copy unsent text") < frame.indexOf("Themes ·"),
+    frame,
+  );
+  assert.ok(frame.indexOf("Themes ·") < frame.indexOf("Quit ("), frame);
+  assert.doesNotMatch(frame, /Recover unsent text|Model ·|Effort ·|End Step/);
+});
+
+for (const appearance of ["dark", "light"] as const) {
+  for (const [width, height] of [
+    [48, 18],
+    [120, 24],
+    [121, 24],
+    [160, 40],
+  ] as const) {
+    test(`m10-audit-draft-recovery: ${appearance} drafts preserve large text, paused history, focus and dual resize at ${width}x${height}`, async () => {
+      const preferences = {
+        ...inertPreferencesView(),
+        snapshot: () => ({
+          family: "preferences" as const,
+          preferences: { theme: "everforest", appearance },
+          supportedThemes: ["everforest"],
+          actionOffers: [],
+        }),
+      };
+      const initial = interactiveRunOf({ timeline: events(80) });
+      const wb = await mountWorkbench(
+        initial,
+        width,
+        height,
+        undefined,
+        true,
+        undefined,
+        preferences,
+      );
+      await press(wb.t, wb.renderer, "pageup");
+      assert.match(wb.t.captureCharFrame(), /Paused|Jump to latest/);
+      const long = "verbatim large draft ".repeat(50);
+      await wb.t.mockInput.pasteBracketedText(long);
+      await wb.t.renderOnce();
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(wb.control.sends[0]?.text, long);
+      await type(wb.t, "newer draft");
+      const anchor = wb.t.captureCharFrame().split("\n")[1];
+      wb.control.setRun({ ...initial });
+      await wb.t.renderOnce();
+      assert.equal(wb.t.captureCharFrame().split("\n")[1], anchor);
+      for (const nextWidth of [120, 121, 48, 160]) {
+        resizeWorkbench(wb.t, wb.renderer, nextWidth, 24);
+        await wb.t.renderOnce();
+        const frame = wb.t.captureCharFrame();
+        assert.match(frame, /Paused|Jump to latest/);
+        assert.match(frame, /> newer draft/);
+        noOverflow(frame, nextWidth);
+        assert.equal(wb.t.captureSpans().rows, 24);
+      }
+      wb.control.setInteractiveOutcome(DRAFT_REFUSAL);
+      await wb.t.renderOnce();
+      await type(wb.t, " at caret end");
+      await press(wb.t, wb.renderer, "return");
+      assert.equal(
+        wb.control.sends[1]?.text,
+        `${long}\nnewer draft at caret end`,
+      );
+      await type(wb.t, "kept on finish");
+      wb.control.setRun(
+        interactiveRunOf({
+          state: "failed",
+          actionOffers: [],
+          timeline: events(80),
+        }),
+      );
+      await wb.t.renderOnce();
+      const frame = wb.t.captureCharFrame();
+      assert.match(frame, /Run failed/);
+      assert.match(frame, /Copy unsent text \(1\)/);
+      assert.match(frame, /Paused|Jump to latest/);
+      const spans = wb.t.captureSpans().lines.flatMap((line) => line.spans);
+      const recovery = spans.find((span) =>
+        span.text.includes("Unsent text from an earlier input saved"),
+      );
+      assert.ok(recovery, frame);
+      assert.deepEqual(
+        [recovery.fg.r, recovery.fg.g, recovery.fg.b].map((v) =>
+          Math.round(v * 255),
+        ),
+        appearance === "dark" ? [230, 152, 117] : [245, 125, 38],
+      );
+      const copied: string[] = [];
+      const original = wb.t.renderer.copyToClipboardOSC52;
+      wb.t.renderer.copyToClipboardOSC52 = (text) => {
+        copied.push(text);
+        return true;
+      };
+      try {
+        await press(wb.t, wb.renderer, "p", { ctrl: true });
+        await type(wb.t, "Copy unsent text");
+        await press(wb.t, wb.renderer, "down");
+        await press(wb.t, wb.renderer, "return");
+        assert.deepEqual(copied, ["kept on finish"]);
+      } finally {
+        wb.t.renderer.copyToClipboardOSC52 = original;
+      }
+    });
+  }
+}

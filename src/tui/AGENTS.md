@@ -59,7 +59,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Native prompt caret offsets map logical columns through graphemes, never `cursorCharacterOffset`; completion edits native selection and acknowledges it once (#423).
 - Prompt receipts are independent per dispatch (#420). A native textarea `setText` moves its cursor to the start; prompt write-back calls
   `gotoBufferEnd` after clear or restore so continued typing extends the restored draft. Ordinary updates never write text back.
-- Workbench Steer receipts carry the Operation id as `steerId` for exact settlement matching; equal text never identifies a production capture.
+- `run-draft-control.ts` owns captures, ordered recovery and the draft's restore note. Every clear goes through its `clear`, including native empty input.
+- Workbench Steer receipts require the Operation id as `steerId`, including fakes; equal text never identifies a capture. Command owners declare numeric order.
 
 ## Tests
 
