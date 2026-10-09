@@ -40,6 +40,7 @@ interface Preparation {
   readonly abort: AbortController;
   readonly resources: Resource[];
   readonly cleanupFailures: HarnessFailure[];
+  readonly observedFailures: Set<HarnessFailure>;
   readonly changed: () => void;
   pending: boolean;
   handedOff: boolean;
@@ -81,6 +82,7 @@ export class PreparationOwner {
       abort: new AbortController(),
       resources: [],
       cleanupFailures: [],
+      observedFailures: new Set(),
       changed: () => this.notify(),
       pending: true,
       handedOff: false,
@@ -102,7 +104,11 @@ export class PreparationOwner {
         options.phases === undefined
           ? undefined
           : (fact) => {
-              if (preparation.reporting) options.phases?.(fact);
+              if (preparation.reporting) {
+                options.phases?.(fact);
+                if (fact.kind === "phase-end" && fact.outcome === "failed")
+                  preparation.observedFailures.add(fact.failure);
+              }
             },
       containment:
         options.containment === undefined
@@ -178,8 +184,8 @@ export class PreparationOwner {
     } finally {
       this.beforeObservation();
       preparation.pending = false;
-      preparation.changed();
       this.release(preparation);
+      preparation.changed();
     }
   }
 
@@ -238,7 +244,12 @@ export class PreparationOwner {
       preparation.reporting = false;
       const unresolved: PreparationCleanupReport["preparations"][number]["unresolved"][number][] =
         [];
-      if (preparation.pending)
+      if (
+        preparation.pending ||
+        preparation.resources.some(
+          (resource) => resource.cleanup.kind === "pending",
+        )
+      )
         unresolved.push(Object.freeze({ kind: "preparation-pending" }));
       for (const resource of preparation.resources) {
         if (resource.process.kind === "owned")
@@ -251,6 +262,9 @@ export class PreparationOwner {
       }
       return Object.freeze({
         preparation: preparation.id,
+        startupFailureObserved:
+          preparation.startupFailure !== undefined &&
+          preparation.observedFailures.has(preparation.startupFailure),
         ...(preparation.startupFailure === undefined
           ? {}
           : { startupFailure: snapshotFailure(preparation.startupFailure) }),
@@ -277,7 +291,9 @@ export class PreparationOwner {
       (preparation) =>
         preparation.pending ||
         preparation.resources.some(
-          (resource) => resource.process.kind === "owned",
+          (resource) =>
+            resource.process.kind === "owned" ||
+            resource.cleanup.kind === "pending",
         ),
     );
   }
@@ -332,6 +348,7 @@ export class PreparationOwner {
             });
           }
           resource.cleanup = { kind: "settled", receipt: close };
+          this.release(preparation);
           preparation.changed();
           return close;
         },
@@ -349,6 +366,7 @@ export class PreparationOwner {
             cause: safe,
           } satisfies OwnedProcessClose;
           resource.cleanup = { kind: "settled", receipt };
+          this.release(preparation);
           preparation.changed();
           return receipt;
         },
@@ -359,10 +377,12 @@ export class PreparationOwner {
 
   private release(preparation: Preparation): void {
     if (
-      !preparation.reporting &&
+      (!preparation.reporting || preparation.cleanupFailures.length === 0) &&
       !preparation.pending &&
       preparation.resources.every(
-        (resource) => resource.process.kind === "closed",
+        (resource) =>
+          resource.process.kind === "closed" &&
+          resource.cleanup.kind !== "pending",
       )
     ) {
       this.preparations.delete(preparation);
@@ -419,12 +439,11 @@ export class PreparationOwner {
               close.kind === "signal" ||
               close.kind === "spawn-error"
             ) {
-              // Keep failure/id metadata for the final report, never the
-              // confirmed child's native handle.
+              // Preserve cleanup-failure evidence without retaining the native handle.
               resource.process = { kind: "closed" };
             }
-            preparation.changed();
             this.release(preparation);
+            preparation.changed();
           },
           () => {
             preparation.changed();

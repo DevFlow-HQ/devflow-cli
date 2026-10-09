@@ -19,7 +19,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Cross-M
 - Composition owns the qualify prepare-then-close pairing: a registration's catalog qualification prepares its private Adapter against the canonical
   launch Workspace, reads its defaults (`readDefaults`, #341), and immediately closes it. Only a clean close publishes the captured profile and
   defaults, and a throwing defaults read is a `prepare-exception` after the close; prepare or cleanup failure crosses as normalized
-  unavailability, never an Adapter or prepared Harness (#188).
+  unavailability, never an Adapter or prepared Harness (#188). Shutdown closes a held defaults read's Prepared Harness immediately,
+  skips defaults after admissions close, and drains pairings within the shared deadline. At the bound, a held close records one unresolved cleanup
+  observation before reporting closes; later receipts cannot replace it (#438).
 - `wireApplication` runs the Shipped Bundle startup ensure for both roots, reading the `.wfb` files from the `builtin/` asset directory beside the entry
   module (`import.meta.dirname`, `/$bunfs/root` in the binary); no directory means zero built-ins. Its notices reach headless stderr through
   `HeadlessClients.startupNotices` and Home through the `workspace` Projection (#227).

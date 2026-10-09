@@ -186,6 +186,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-workbench-interaction",
   "m10-confirmation-target-identity",
   "m10-audit-production-harness-parts-in-doubles",
+  "m10-audit-preparation-lifetime-bounds",
   "m10-audit-prepare-cancel-shutdown",
   "m10-initial-preparation-ownership",
   "m10-previous-release-conversation",

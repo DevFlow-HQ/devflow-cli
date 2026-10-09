@@ -1,6 +1,5 @@
 import {
   PreparationOwner,
-  type InitialPreparation,
   type PreparationClock,
 } from "./preparation-owner.js";
 import { TurnEventProducer } from "./turn-event-producer.js";
@@ -181,9 +180,7 @@ class ClaudeCodeAdapter implements HarnessAdapter {
   }
 
   prepare(options: PrepareOptions): Promise<PrepareResult> {
-    return this.preparations.prepare(options, (scoped, initial) =>
-      this.acquire(scoped, initial),
-    );
+    return this.preparations.prepare(options, (scoped) => this.acquire(scoped));
   }
 
   /** Qualification cache, private to the Adapter, keyed by the discovered
@@ -196,12 +193,8 @@ class ClaudeCodeAdapter implements HarnessAdapter {
     this.preparations = new PreparationOwner(overrides.preparationClock);
   }
 
-  private async acquire(
-    options: PrepareOptions,
-    initial: InitialPreparation,
-  ): Promise<PrepareResult> {
+  private async acquire(options: PrepareOptions): Promise<PrepareResult> {
     const refuse = (failure: HarnessFailure): PrepareResult => {
-      initial.failed(failure);
       return { ok: false, failure };
     };
     const platform = harnessPlatform(

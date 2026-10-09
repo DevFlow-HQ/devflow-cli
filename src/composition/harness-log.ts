@@ -217,7 +217,7 @@ export function recordPreparationCleanup(
     ),
   });
   for (const entry of report.preparations) {
-    if (entry.startupFailure !== undefined) {
+    if (entry.startupFailure !== undefined && !entry.startupFailureObserved) {
       log?.record({
         event: "harness-preparation-failure",
         harness,
@@ -245,4 +245,20 @@ function preparationFailureFields(
     ...failureFields({ ...failure, cause: undefined }),
     ...(failure.cause === undefined ? {} : { cause: failure.cause }),
   };
+}
+
+/** Qualification owns this post-handoff deadline observation, not Run cleanup. */
+export function recordQualificationCleanupUnresolved(
+  harness: SelectedHarnessId,
+  log: Recorder | undefined,
+): void {
+  log?.record({
+    event: "harness-cleanup",
+    harness,
+    status: "unclean",
+    sessions: [],
+    failurePhase: "cleanup",
+    category: "qualification-cleanup-unresolved",
+    possibleEffects: "none",
+  });
 }

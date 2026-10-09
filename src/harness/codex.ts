@@ -192,6 +192,7 @@ export function createCodexAdapter(
 
 class CodexAdapter implements HarnessAdapter {
   private readonly preparations: PreparationOwner;
+  private readonly failedGenerations = new Set<CodexGeneration>();
 
   close(options?: Parameters<HarnessAdapter["close"]>[0]) {
     return this.preparations.close(options);
@@ -214,7 +215,6 @@ class CodexAdapter implements HarnessAdapter {
     initial: InitialPreparation,
   ): Promise<PrepareResult> {
     const refuse = (failure: HarnessFailure): PrepareResult => {
-      initial.failed(failure);
       return { ok: false, failure };
     };
     const nativePlatform = this.overrides.platform ?? process.platform;
@@ -272,7 +272,11 @@ class CodexAdapter implements HarnessAdapter {
       options.containment,
       initial,
     );
-    if (!live.ok) return { ok: false, failure: live.failure };
+    if (!live.ok) {
+      if (live.unreaped !== undefined)
+        this.retainFailedGeneration(live.unreaped);
+      return { ok: false, failure: live.failure };
+    }
     const profile = buildProfile({
       target: discovery.target,
       version: version.value,
@@ -306,6 +310,23 @@ class CodexAdapter implements HarnessAdapter {
       end: () => harness.endAppServer(),
     });
     return { ok: true, harness };
+  }
+
+  private retainFailedGeneration(generation: CodexGeneration): void {
+    // The preparation owner owns Process cleanup; retain the native connection
+    // and diagnostics until that independent lifetime confirms final exit.
+    this.failedGenerations.add(generation);
+    void generation.process.closed().then(
+      (close) => {
+        if (
+          close.kind === "exited" ||
+          close.kind === "signal" ||
+          close.kind === "spawn-error"
+        )
+          this.failedGenerations.delete(generation);
+      },
+      () => undefined,
+    );
   }
 
   private async replaceGeneration(
@@ -514,7 +535,6 @@ class CodexAdapter implements HarnessAdapter {
         "Could not launch Codex app-server.",
         spawned.failure.cause,
       );
-      initial?.failed(launchFailure);
       launch.failed(launchFailure);
       return { ok: false, failure: launchFailure };
     }

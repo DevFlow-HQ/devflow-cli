@@ -347,7 +347,6 @@ test("detail-off drops records before serialization or a wall-clock read", async
     "qualification-start",
     "qualification-result",
     "harness-preparation-cleanup",
-    "harness-preparation-failure",
     "harness-preparation-cleanup",
     "invocation-end",
   ]);

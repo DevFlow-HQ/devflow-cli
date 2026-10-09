@@ -44,7 +44,10 @@ import {
   type Platform,
   routingNeedsHarness,
 } from "../workflow/workflow.js";
-import { HarnessRegistry } from "./harness-registry.js";
+import {
+  HarnessRegistry,
+  type HarnessRegistryOverrides,
+} from "./harness-registry.js";
 import type { ReportingScope } from "./harness-log.js";
 import type { OperationalLog } from "./operational-log.js";
 import { applicationObserver } from "./application-log.js";
@@ -133,6 +136,8 @@ export interface WiringOverrides {
   readonly harnessAdapter?: HarnessAdapter;
   /** A Codex Adapter test seam. Production constructs the native Adapter. */
   readonly codexHarnessAdapter?: HarnessAdapter;
+  /** Qualification shutdown shares this monotonic test clock with initial cleanup. */
+  readonly qualificationClock?: HarnessRegistryOverrides["qualificationClock"];
   /** Whether the launching client can relay human turn-taking (#116, #122). The TUI
    *  root sets this true; the headless root leaves it false so an interactive-agent
    *  Bundle is refused at Preflight. Defaults to false. */
@@ -322,6 +327,7 @@ export function wireApplication(
         codexAdapter: overrides.codexHarnessAdapter,
         discoverClaudeCode: overrides.discoverClaudeCode,
         discoverCodex: overrides.discoverCodex,
+        qualificationClock: overrides.qualificationClock,
       },
     );
     lifetime.harnessRegistry = harnessRegistry;

@@ -66,6 +66,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   `effortLock` carries an opaque `source`. Composition's qualify path is its one caller.
 - Each prepare and cache hit keeps its own Process, phases and signal (#333, #407). Signal cancellation stops only initial preparation.
   Adapter close retains acquisitions until Process `closed()` confirms exit; its immutable report separates startup failure from cleanup history.
+  Resolved cleanup-free failures are released before reporting. Only Codex handshake refusal needs `initial.failed` before awaiting cleanup;
+  its failed native generation stays private until final exit. Pending cleanup receipts count as preparation-pending; reports retain startup facts
+  already sent through the phase observer, with that observation marked so composition does not log them again (#438).
 - `PrepareOptions.writableDirectory` (#214) is validated by the one shared `writableDirectoryFailure` (`writable-directory.ts`) before anything
   native runs (not an existing absolute directory ⇒ typed `writable-directory-unavailable`). Claude Code forwards it as `--add-dir` on every launch; Codex
   sends a per-thread `sandbox_workspace_write.writable_roots` config override and refuses the Turn `writable-directory-refused` only when an acknowledged

@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { launchTui, withClients } from "../../src/composition/main.js";
+import {
+  createClaudeCodeAdapter,
+  createCodexAdapter,
+} from "../../src/harness/harness.js";
 import type {
   HarnessAdapter,
   PrepareResult,
   PreparationCloseOptions,
+  HarnessDefaults,
+  CleanupReport,
 } from "../../src/harness/harness.js";
 import { makeFakeRenderer } from "../tui/renderer-fixture.js";
 import { ownPreparations } from "../harness/preparation-double.js";
@@ -14,6 +20,10 @@ import {
   wiringProcess,
 } from "../helpers/wiringDoubles.js";
 import { home, readLog } from "./log-sink.js";
+import {
+  preparationClock,
+  scriptedPreparation,
+} from "../harness/scripted-preparation.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 
 function lifetimeHome() {
@@ -240,3 +250,301 @@ test("m10-initial-preparation-ownership: partial construction closes created Ada
   const catalog = openCatalog(overrides.secantHome!);
   catalog.close();
 });
+
+test("m10-audit-preparation-lifetime-bounds: held defaults close and record cleanup before invocation end", async () => {
+  const { folder, overrides } = lifetimeHome();
+  const entered = Promise.withResolvers<void>();
+  const defaults = Promise.withResolvers<HarnessDefaults>();
+  const closed = Promise.withResolvers<void>();
+  let closes = 0;
+  const base = qualified([]);
+  const adapter = ownPreparations({
+    async prepare(options) {
+      const prepared = await base.prepare(options);
+      assert.ok(prepared.ok);
+      return {
+        ok: true,
+        harness: {
+          ...prepared.harness,
+          readDefaults() {
+            entered.resolve();
+            return defaults.promise;
+          },
+          async close() {
+            closes++;
+            closed.resolve();
+            return prepared.harness.close();
+          },
+        },
+      };
+    },
+  });
+  try {
+    assert.equal(
+      await withClients(
+        async ({ projectionPort }) => {
+          projectionPort.openProjection({
+            family: "harness-catalog",
+            focus: { id: "claude-code" },
+          });
+          await entered.promise;
+          return 0;
+        },
+        { ...overrides, harnessAdapter: adapter },
+      ),
+      0,
+    );
+    assert.equal(closes, 1);
+    const records = readLog(folder).records;
+    const cleanups = records.filter(
+      (record) => record.event === "harness-cleanup",
+    );
+    assert.equal(cleanups.length, 1);
+    assert.equal(cleanups[0]?.status, "clean");
+    assert.equal(records.at(-1)?.event, "invocation-end");
+    assert.ok(records.indexOf(cleanups[0]!) < records.length - 1);
+  } finally {
+    defaults.resolve(QUALIFICATION_DEFAULTS);
+    await closed.promise;
+  }
+});
+
+test("m10-audit-preparation-lifetime-bounds: a handoff after admission closes skips defaults and closes once", async () => {
+  const { folder, overrides } = lifetimeHome();
+  const entered = Promise.withResolvers<void>();
+  const handoff = Promise.withResolvers<PrepareResult>();
+  const base = qualified([]);
+  const success = await base.prepare({
+    workspace: process.cwd(),
+    process: overrides.process!,
+  });
+  assert.ok(success.ok);
+  let reads = 0;
+  let closes = 0;
+  const adapter: HarnessAdapter = {
+    prepare() {
+      entered.resolve();
+      return handoff.promise;
+    },
+    async close() {
+      handoff.resolve({
+        ok: true,
+        harness: {
+          ...success.harness,
+          async readDefaults() {
+            reads++;
+            return QUALIFICATION_DEFAULTS;
+          },
+          async close() {
+            closes++;
+            return success.harness.close();
+          },
+        },
+      });
+      return { status: "closed", preparations: [] };
+    },
+  };
+  assert.equal(
+    await withClients(
+      async ({ projectionPort }) => {
+        projectionPort.openProjection({
+          family: "harness-catalog",
+          focus: { id: "claude-code" },
+        });
+        await entered.promise;
+        return 0;
+      },
+      { ...overrides, harnessAdapter: adapter },
+    ),
+    0,
+  );
+  assert.equal(reads, 0);
+  assert.equal(closes, 1);
+  const records = readLog(folder).records;
+  assert.equal(
+    records.filter((record) => record.event === "harness-cleanup").length,
+    1,
+  );
+  assert.equal(records.at(-1)?.event, "invocation-end");
+});
+
+test("m10-audit-preparation-lifetime-bounds: a logged qualification failure is absent from the shutdown report", async () => {
+  const { folder, overrides } = lifetimeHome();
+  await withClients(
+    async ({ projectionPort }) => {
+      const focus = projectionPort.openProjection({
+        family: "harness-catalog",
+        focus: { id: "claude-code" },
+      });
+      const update = await focus.updates[Symbol.asyncIterator]().next();
+      assert.equal(update.value?.kind, "durable");
+      focus.close();
+      return 0;
+    },
+    {
+      ...overrides,
+      harnessAdapter: createClaudeCodeAdapter({ env: {}, platform: "aix" }),
+    },
+  );
+  const records = readLog(folder).records;
+  assert.equal(
+    records.filter(
+      (record) =>
+        record.event === "qualification-result" &&
+        record.category === "unsupported-platform",
+    ).length,
+    1,
+  );
+  assert.equal(
+    records.filter((record) => record.event === "harness-preparation-failure")
+      .length,
+    0,
+  );
+  const report = records.find(
+    (record) =>
+      record.event === "harness-preparation-cleanup" &&
+      record.harness === "claude-code",
+  );
+  assert.equal(report?.preparations, 0);
+});
+
+test("m10-audit-preparation-lifetime-bounds: retained cleanup failures do not repeat observed startup failures", async () => {
+  const { folder, overrides } = lifetimeHome();
+  const clock = preparationClock();
+  const scripted = scriptedPreparation({
+    failure: "authentication",
+    cleanup: { kind: "cleanup-timeout" },
+  });
+  const adapter = createCodexAdapter({
+    env: {},
+    cleanupTimeoutMs: 0,
+    preparationClock: clock.clock,
+  });
+  await withClients(
+    async ({ projectionPort }) => {
+      const focus = projectionPort.openProjection({
+        family: "harness-catalog",
+        focus: { id: "codex" },
+      });
+      const update = await focus.updates[Symbol.asyncIterator]().next();
+      assert.equal(update.value?.kind, "durable");
+      focus.close();
+      await scripted.exit();
+      return 0;
+    },
+    { ...overrides, process: scripted.process, codexHarnessAdapter: adapter },
+  );
+  const records = readLog(folder).records;
+  assert.equal(
+    records.filter(
+      (record) =>
+        record.event === "qualification-result" &&
+        record.category === "authentication",
+    ).length,
+    1,
+  );
+  assert.equal(
+    records.filter(
+      (record) =>
+        record.event === "harness-preparation-failure" &&
+        record.category === "authentication",
+    ).length,
+    0,
+  );
+  assert.equal(
+    records.filter(
+      (record) =>
+        record.event === "harness-preparation-cleanup-failure" &&
+        record.category === "cleanup-timeout",
+    ).length,
+    1,
+  );
+  assert.equal(records.at(-1)?.event, "invocation-end");
+});
+
+for (const dispatch of ["timer", "late-receipt"] as const) {
+  test(`m10-audit-preparation-lifetime-bounds: ${dispatch} qualification deadline records unresolved cleanup once before invocation end`, async () => {
+    const { folder, overrides } = lifetimeHome();
+    const clock = preparationClock();
+    const entered = Promise.withResolvers<void>();
+    const defaults = Promise.withResolvers<HarnessDefaults>();
+    const cleanupStarted = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<CleanupReport>();
+    const cleanupFinished = Promise.withResolvers<void>();
+    const base = qualified([]);
+    const adapter = ownPreparations(
+      {
+        async prepare(options) {
+          const prepared = await base.prepare(options);
+          assert.ok(prepared.ok);
+          return {
+            ok: true,
+            harness: {
+              ...prepared.harness,
+              readDefaults() {
+                entered.resolve();
+                return defaults.promise;
+              },
+              async close() {
+                cleanupStarted.resolve();
+                const report = await cleanup.promise;
+                cleanupFinished.resolve();
+                return report;
+              },
+            },
+          };
+        },
+      },
+      clock.clock,
+    );
+    const configured = {
+      ...overrides,
+      harnessAdapter: adapter,
+      qualificationClock: clock.clock,
+    };
+    const invocation = withClients(async ({ projectionPort }) => {
+      projectionPort.openProjection({
+        family: "harness-catalog",
+        focus: { id: "claude-code" },
+      });
+      await entered.promise;
+      return 0;
+    }, configured);
+    try {
+      await cleanupStarted.promise;
+      assert.deepEqual(clock.scheduled(), [5000]);
+      if (dispatch === "timer") clock.advance(5000);
+      else {
+        clock.elapse(5001);
+        cleanup.resolve({ clean: true, detail: "post-deadline close" });
+      }
+      assert.equal(await invocation, 0);
+      const before = readLog(folder).text;
+      const records = readLog(folder).records;
+      const observations = records.filter(
+        (record) => record.event === "harness-cleanup",
+      );
+      assert.equal(observations.length, 1);
+      assert.equal(observations[0]?.status, "unclean");
+      assert.equal(
+        observations[0]?.category,
+        "qualification-cleanup-unresolved",
+      );
+      assert.equal(records.at(-1)?.event, "invocation-end");
+      assert.ok(records.indexOf(observations[0]!) < records.length - 1);
+      cleanup.resolve({ clean: true, detail: "late close" });
+      defaults.resolve(QUALIFICATION_DEFAULTS);
+      await cleanupFinished.promise;
+      await invocation;
+      assert.equal(
+        readLog(folder).text,
+        before,
+        "late cleanup cannot rewrite the deadline observation or use the closed sink",
+      );
+    } finally {
+      cleanup.resolve({ clean: true, detail: "closed" });
+      defaults.resolve(QUALIFICATION_DEFAULTS);
+      await invocation;
+    }
+  });
+}

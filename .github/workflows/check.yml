@@ -160,6 +160,12 @@ jobs:
           tests/harness/production-parts.test.ts
           tests/harness/observed-fact-conformance.test.ts
           tests/composition/production-harness-parts.test.ts
+      - name: m10-audit-preparation-lifetime-bounds
+        run: >-
+          bun run test --
+          -t '^m10-audit-preparation-lifetime-bounds(:|$)'
+          tests/harness/preparation-ownership.test.ts
+          tests/composition/preparation-lifetime.test.ts
       - name: m10-audit-prepare-cancel-shutdown
         run: >-
           bun run test --

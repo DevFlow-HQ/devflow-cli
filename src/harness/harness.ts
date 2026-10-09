@@ -968,6 +968,8 @@ interface PreparationFailure extends Omit<HarnessFailure, "cause"> {
 interface PreparationCleanupEntry {
   readonly preparation: number;
   readonly startupFailure?: PreparationFailure;
+  /** The supplied phase observer already received this startup failure. */
+  readonly startupFailureObserved: boolean;
   readonly cleanupFailures: readonly PreparationFailure[];
   readonly unresolved: readonly (
     | { readonly kind: "preparation-pending" }

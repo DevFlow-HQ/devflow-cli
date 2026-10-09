@@ -28,7 +28,7 @@ const decoder = new TextDecoder();
 export function scriptedPreparation(
   options: {
     readonly failure?: "authentication" | "protocol";
-    readonly cleanup?: OwnedProcessClose;
+    readonly cleanup?: OwnedProcessClose | Promise<OwnedProcessClose>;
     readonly acquisition?: Promise<void>;
     readonly onModelList?: () => void;
   } = {},

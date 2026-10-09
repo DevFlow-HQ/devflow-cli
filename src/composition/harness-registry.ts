@@ -23,11 +23,13 @@ import {
   type HarnessDefaults,
   type HarnessFailure,
   type PrepareResult,
+  type CleanupReport,
 } from "../harness/harness.js";
 import type { SelectedHarnessId } from "../run/store/store.js";
 import {
   prepareRecorded,
   recordPreparationCleanup,
+  recordQualificationCleanupUnresolved,
   type ReportingScope,
   type ScopedPrepareOptions,
 } from "./harness-log.js";
@@ -39,6 +41,10 @@ export interface HarnessRegistryOverrides {
   readonly codexAdapter?: HarnessAdapter;
   readonly discoverClaudeCode?: () => HarnessDiscovery;
   readonly discoverCodex?: () => HarnessDiscovery;
+  readonly qualificationClock?: {
+    readonly now: () => number;
+    readonly schedule: (callback: () => void, delayMs: number) => () => void;
+  };
 }
 
 const inputRules = {
@@ -49,6 +55,11 @@ const inputRules = {
 /** Build tooling uses the same registered portfolio as runtime ingestion. */
 export function supportedBundleInputRules(): readonly HarnessInputRule[] {
   return mergeHarnessInputRules(Object.values(inputRules));
+}
+
+interface HeldQualification {
+  readonly result: Promise<ApplicationHarnessQualification>;
+  expire(): void;
 }
 
 interface THarnessRegistryEntry {
@@ -69,7 +80,7 @@ export class HarnessRegistry {
   constructor(
     qualificationWorkspace: string,
     private readonly invocation: ReportingScope,
-    overrides: HarnessRegistryOverrides,
+    private readonly overrides: HarnessRegistryOverrides,
   ) {
     const { process } = invocation;
     const claudeCodeAdapter =
@@ -91,7 +102,7 @@ export class HarnessRegistry {
           return normalizeDiscovery(discovery, CLAUDE_CODE_EXECUTABLE_ENV);
         },
         qualify: () =>
-          qualifyAdapter(
+          this.qualify(
             claudeCodeAdapter,
             "claude-code",
             qualificationWorkspace,
@@ -114,7 +125,7 @@ export class HarnessRegistry {
           return normalizeDiscovery(discovery, CODEX_EXECUTABLE_ENV);
         },
         qualify: () =>
-          qualifyAdapter(
+          this.qualify(
             codexAdapter,
             "codex",
             qualificationWorkspace,
@@ -130,17 +141,134 @@ export class HarnessRegistry {
   }
 
   private closing: Promise<void> | undefined;
+  private qualificationDeadline: number | undefined;
+  private readonly qualificationStop = new AbortController();
+  private readonly qualifications = new Set<HeldQualification>();
+
+  private qualify(
+    adapter: HarnessAdapter,
+    harness: SelectedHarnessId,
+    workspace: string,
+    invocation: ReportingScope,
+  ): Promise<ApplicationHarnessQualification> {
+    let reporting = true;
+    let handedOff = false;
+    let cleanupRecorded = false;
+    const expire = () => {
+      if (reporting && handedOff && !cleanupRecorded)
+        recordQualificationCleanupUnresolved(harness, invocation.log);
+      reporting = false;
+    };
+    const scope: ReportingScope = {
+      ...invocation,
+      ...(invocation.log === undefined
+        ? {}
+        : {
+            log: {
+              record: (record) => {
+                if (!reporting) return;
+                if (
+                  this.qualificationDeadline !== undefined &&
+                  this.monotonicNow() >= this.qualificationDeadline
+                ) {
+                  expire();
+                  return;
+                }
+                if (record.event === "harness-cleanup") cleanupRecorded = true;
+                invocation.log?.record(record);
+              },
+            },
+          }),
+    };
+    const result = qualifyAdapter(
+      adapter,
+      harness,
+      workspace,
+      scope,
+      this.qualificationStop.signal,
+      () => {
+        handedOff = true;
+      },
+    );
+    const qualification: HeldQualification = {
+      result,
+      expire,
+    };
+    this.qualifications.add(qualification);
+    const release = () => {
+      reporting = false;
+      this.qualifications.delete(qualification);
+    };
+    void result.then(release, release);
+    return result;
+  }
+
+  private async drainQualifications(
+    monotonicDeadlineMs: number,
+  ): Promise<void> {
+    let cancelTimer: (() => void) | undefined;
+    try {
+      await Promise.race([
+        Promise.allSettled(
+          Array.from(
+            this.qualifications,
+            (qualification) => qualification.result,
+          ),
+        ),
+        new Promise<void>((resolve) => {
+          const expire = () => {
+            // Publish the immutable deadline observation before the drain ends.
+            for (const qualification of this.qualifications)
+              qualification.expire();
+            resolve();
+          };
+          const delayMs = Math.max(
+            0,
+            monotonicDeadlineMs - this.monotonicNow(),
+          );
+          if (this.overrides.qualificationClock !== undefined)
+            cancelTimer = this.overrides.qualificationClock.schedule(
+              expire,
+              delayMs,
+            );
+          else {
+            const timer = setTimeout(expire, delayMs);
+            cancelTimer = () => clearTimeout(timer);
+          }
+        }),
+      ]);
+    } finally {
+      cancelTimer?.();
+    }
+  }
+
+  private monotonicNow(): number {
+    return this.overrides.qualificationClock?.now() ?? performance.now();
+  }
 
   /** All calls close admission synchronously before composition starts Run drain. */
   close(): Promise<void> {
     if (this.closing !== undefined) return this.closing;
-    const monotonicDeadlineMs = performance.now() + 5000;
+    const result = Promise.withResolvers<void>();
+    this.closing = result.promise;
+    const monotonicDeadlineMs = this.monotonicNow() + 5000;
+    this.qualificationDeadline = monotonicDeadlineMs;
     const reports = Array.from(this.entries, ([harness, entry]) =>
       entry.adapter.close({ monotonicDeadlineMs }).then((report) => {
         recordPreparationCleanup(report, harness, this.invocation.log);
       }),
     );
-    this.closing = Promise.all(reports).then(() => undefined);
+    this.qualificationStop.abort();
+    void Promise.allSettled([
+      ...reports,
+      this.drainQualifications(monotonicDeadlineMs),
+    ]).then((outcomes) => {
+      const errors = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : [],
+      );
+      if (errors.length > 0) result.reject(errors[0]);
+      else result.resolve();
+    });
     return this.closing;
   }
 
@@ -205,6 +333,8 @@ async function qualifyAdapter(
   harness: SelectedHarnessId,
   workspace: string,
   invocation: ReportingScope,
+  signal: AbortSignal,
+  handedOff: () => void,
 ): Promise<ApplicationHarnessQualification> {
   let prepared: PrepareResult;
   try {
@@ -221,39 +351,67 @@ async function qualifyAdapter(
     return { ok: false, failure: qualificationFailure(prepared.failure) };
   }
 
+  handedOff();
   const profile = prepared.harness.profile;
-  // The Harness's own defaults ride the same bounded qualification (#341): read
-  // before the close, so the prepared child that answers them is still open.
+  let closing: Promise<CleanupReport> | undefined;
+  const close = () =>
+    (closing ??= Promise.resolve().then(() => prepared.harness.close()));
+  const stopped = Promise.withResolvers<undefined>();
+  const stop = () => {
+    // Start cleanup without waiting for the defaults exchange to answer.
+    void close().catch(() => undefined);
+    stopped.resolve(undefined);
+  };
+  signal.addEventListener("abort", stop, { once: true });
+  if (signal.aborted) stop();
   let defaults: HarnessDefaults | undefined;
   let defaultsError: unknown;
   try {
-    defaults = await prepared.harness.readDefaults();
-  } catch (error) {
-    defaultsError = error;
-  }
-  try {
-    const cleanup = await prepared.harness.close();
-    if (!cleanup.clean) {
+    if (!signal.aborted) {
+      try {
+        defaults = await Promise.race([
+          prepared.harness.readDefaults(),
+          stopped.promise,
+        ]);
+      } catch (error) {
+        defaultsError = error;
+      }
+    }
+    try {
+      const cleanup = await close();
+      if (!cleanup.clean) {
+        return {
+          ok: false,
+          failure:
+            cleanup.failure === undefined
+              ? {
+                  phase: "cleanup",
+                  category: "cleanup",
+                  possibleEffects: "possible",
+                  diagnostics: cleanup.detail,
+                }
+              : qualificationFailure(cleanup.failure),
+        };
+      }
+    } catch (error) {
+      return qualificationException("cleanup", error);
+    }
+    if (signal.aborted) {
       return {
         ok: false,
-        failure:
-          cleanup.failure === undefined
-            ? {
-                phase: "cleanup",
-                category: "cleanup",
-                possibleEffects: "possible",
-                diagnostics: cleanup.detail,
-              }
-            : qualificationFailure(cleanup.failure),
+        failure: {
+          phase: "prepare",
+          category: "preparation-cancelled",
+          possibleEffects: "none",
+        },
       };
     }
-  } catch (error) {
-    return qualificationException("cleanup", error);
+    if (defaults === undefined)
+      return qualificationException("prepare", defaultsError);
+    return { ok: true, profile, defaults };
+  } finally {
+    signal.removeEventListener("abort", stop);
   }
-  if (defaults === undefined) {
-    return qualificationException("prepare", defaultsError);
-  }
-  return { ok: true, profile, defaults };
 }
 
 function qualificationFailure(
