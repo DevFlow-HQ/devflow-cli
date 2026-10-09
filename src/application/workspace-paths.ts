@@ -14,6 +14,8 @@ import {
 
 const FILE_CAP = 100_000;
 const HELPER_STOP_MS = 1000;
+const PATH_BYTES = 4096;
+const utf8 = new TextDecoder("utf-8", { fatal: true });
 type ListedCandidate = {
   readonly candidate: WorkspacePathCandidate;
   readonly prepared: ReturnType<typeof fuzzysort.prepare>;
@@ -153,9 +155,9 @@ export function createWorkspacePathSearch(deps: {
     if (helper === undefined)
       throw new Error("Embedded Workspace path helper unavailable");
     const executable = await helper();
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
     const inGit = await gitWorkspace(workspacePath);
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
     const launched = await deps.process.spawnOwnedProcess({
       role: "workspace-paths",
       executable,
@@ -191,7 +193,7 @@ export function createWorkspacePathSearch(deps: {
     const abort = () => {
       void stop()?.catch(() => {});
     };
-    signal?.addEventListener("abort", abort, { once: true });
+    signal.addEventListener("abort", abort, { once: true });
     let timedOut = false;
     const deadline = setTimeout(() => {
       timedOut = true;
@@ -206,20 +208,41 @@ export function createWorkspacePathSearch(deps: {
     };
     let fileCount = 0;
     let capped = false;
-    let tail = "";
-    const decoder = new TextDecoder("utf-8", { fatal: true });
+    // Entries split on NUL bytes; one unrepresentable or over-long name is
+    // skipped like an unreadable folder, while an unterminated tail still fails.
+    let pending: Uint8Array[] = [];
+    let pendingBytes = 0;
+    let overlong = false;
+    const keep = (piece: Uint8Array) => {
+      if (overlong) return;
+      pendingBytes += piece.length;
+      if (pendingBytes > PATH_BYTES) {
+        overlong = true;
+        pending = [];
+      } else pending.push(piece.slice());
+    };
+    const entry = (): string | undefined => {
+      const bytes = overlong ? undefined : Buffer.concat(pending);
+      pending = [];
+      pendingBytes = 0;
+      overlong = false;
+      try {
+        return bytes === undefined ? undefined : utf8.decode(bytes);
+      } catch {
+        return undefined;
+      }
+    };
     try {
-      if (signal?.aborted) abort();
+      if (signal.aborted) abort();
       await Promise.all([
         (async () => {
           for await (const bytes of child.stdout) {
             if (capped) continue;
-            const text = tail + decoder.decode(bytes, { stream: true });
             let start = 0;
             for (
-              let end = text.indexOf("\0");
+              let end = bytes.indexOf(0);
               end !== -1;
-              end = text.indexOf("\0", start)
+              end = bytes.indexOf(0, start)
             ) {
               fileCount++;
               if (fileCount > FILE_CAP) {
@@ -230,16 +253,16 @@ export function createWorkspacePathSearch(deps: {
                 abort();
                 break;
               }
-              const path = normalized(text.slice(start, end));
+              keep(bytes.subarray(start, end));
+              const raw = entry();
+              const path = raw === undefined ? undefined : normalized(raw);
               if (path !== undefined) addCandidates(listing.candidates, path);
               start = end + 1;
             }
             changed();
-            tail = capped ? "" : text.slice(start);
-            if (tail.length > 4096)
-              throw new Error("Workspace path exceeds its bound");
+            if (!capped) keep(bytes.subarray(start));
           }
-          if (!capped && (tail + decoder.decode()).length !== 0)
+          if (!capped && (pendingBytes !== 0 || overlong))
             throw new Error("Incomplete Workspace path listing");
         })(),
         (async () => {
@@ -249,7 +272,7 @@ export function createWorkspacePathSearch(deps: {
         })(),
       ]);
       const result = await close;
-      signal?.throwIfAborted();
+      signal.throwIfAborted();
       if (timedOut) throw new Error("Workspace path helper timed out");
       if (result.kind === "cleanup-error" || result.kind === "spawn-error")
         throw result.cause;
@@ -269,7 +292,7 @@ export function createWorkspacePathSearch(deps: {
     } finally {
       clearTimeout(deadline);
       clearTimeout(progressTimer);
-      signal?.removeEventListener("abort", abort);
+      signal.removeEventListener("abort", abort);
       await stop();
       await close;
     }

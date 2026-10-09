@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { wireApplication } from "../../src/composition/main.js";
 import {
@@ -21,6 +21,10 @@ export function registerWorkspacePathCases(
   register({
     name: "m10-audit-token-ripgrep-listing: real parent/global/exclude rules, linked worktrees and submodules",
     body: gitWorkspaces,
+  });
+  register({
+    name: "m10-audit-workspace-finder-resolution: real unreadable folders succeed and a plain repository lists its submodules",
+    body: unreadableAndSubmodule,
   });
 }
 
@@ -257,5 +261,51 @@ async function gitWorkspaces() {
     } finally {
       await paths.close();
     }
+  }
+}
+
+async function unreadableAndSubmodule() {
+  const { root, git, search } = fixture();
+  const plain = join(root, "plain");
+  mkdirSync(plain);
+  git(plain, ["init"]);
+  writeFileSync(join(plain, "top.ts"), "");
+  const module = join(root, "module");
+  mkdirSync(module);
+  git(module, ["init"]);
+  writeFileSync(join(module, "module.ts"), "");
+  git(module, ["add", "."]);
+  git(module, ["commit", "-m", "module fixture"]);
+  git(plain, [
+    "-c",
+    "protocol.file.allow=always",
+    "submodule",
+    "add",
+    module,
+    "module",
+  ]);
+  // Windows has no POSIX mode bits, and root reads any folder.
+  const locked =
+    process.platform !== "win32" && process.getuid?.() !== 0
+      ? join(plain, "locked")
+      : undefined;
+  if (locked !== undefined) {
+    mkdirSync(locked);
+    writeFileSync(join(locked, "hidden-by-mode.ts"), "");
+    chmodSync(locked, 0o000);
+  }
+  const paths = await search(plain);
+  try {
+    // ripgrep exits 2 for the unreadable folder; its listed output still counts.
+    assert.deepEqual(await paths.query("top"), [
+      { path: "top.ts", kind: "file" },
+    ]);
+    assert.deepEqual(await paths.query("module.ts"), [
+      { path: "module/module.ts", kind: "file" },
+    ]);
+    assert.deepEqual(await paths.query("hidden-by-mode"), []);
+  } finally {
+    await paths.close();
+    if (locked !== undefined) chmodSync(locked, 0o700);
   }
 }

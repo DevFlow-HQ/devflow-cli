@@ -5,7 +5,8 @@ Read before changing Workspace path completion, Slash discovery, prompt captures
 
 ## Workspace path completion
 
-- `searchWorkspacePaths` filters ignores/dots/symlinks and returns ten paths; unavailable leaves text sendable. It reads no candidate content.
+- `searchWorkspacePaths` ranks ten paths from ripgrep's ignore and no-symlink listing; dot segments show only when named.
+  Unavailable leaves text sendable. It reads no candidate content.
 - `workspace-mentions.ts` keys replies by Run, draft and caret. Its stable token signal survives query edits; closing or replacing the token aborts it (#484).
   The latest query receives bounded progressive matches; stale progress and settled replies are discarded independently. Known Slash names suppress mentions.
 - Selection requires visible rows. A one-row list puts the cap cue in its hint; with no list rows, the ordinary prompt hint and confirmations take priority (#484).

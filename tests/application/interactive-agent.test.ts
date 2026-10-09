@@ -2,7 +2,7 @@ import { findOffer, readRun, requireOffer } from "./run-test-helpers.js";
 
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
-import { readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { type Wiring } from "../../src/composition/main.js";
@@ -1818,6 +1818,113 @@ for (const harness of ["claude-code", "codex"] as const) {
       );
       await awaitRunRest(wired.projectionPort, runId);
       assert.deepEqual(inputs, [{ text }]);
+    } finally {
+      await wired.shutdown();
+    }
+  });
+}
+
+for (const harness of ["claude-code", "codex"] as const) {
+  test(`m10-audit-workspace-finder-resolution: ${harness} Send and Steer deliver typed unlisted paths as identical text`, async (t) => {
+    const inputs: unknown[] = [];
+    const steers: string[] = [];
+    let prepares = 0;
+    const fake = createFake({
+      profile: {
+        ...fakeHarnessProfile(),
+        ...(harness === "codex" ? { harness: "Codex" } : {}),
+        steer: { available: true, evidence: "scripted fake" },
+      },
+      turns: [INTERRUPTIBLE_TURN],
+    })();
+    const adapter = ownPreparations({
+      async prepare(options) {
+        prepares += 1;
+        const prepared = await fake.prepare(options);
+        if (!prepared.ok) return prepared;
+        const runtime = prepared.harness;
+        return {
+          ok: true,
+          harness: {
+            profile: runtime.profile,
+            readDefaults: () => runtime.readDefaults(),
+            startTurn(request) {
+              inputs.push(request.input);
+              const turn = runtime.startTurn(request);
+              return {
+                subscribe: (listener) => turn.subscribe(listener),
+                result: () => turn.result(),
+                steer(input) {
+                  steers.push(input.text);
+                  return turn.steer(input);
+                },
+                interrupt: () => turn.interrupt(),
+                answerRequest: (answer) => turn.answerRequest(answer),
+                answerAgentCall: (answer) => turn.answerAgentCall(answer),
+                changeModel: (choice) => turn.changeModel(choice),
+              };
+            },
+            close: () => runtime.close(),
+          },
+        };
+      },
+    });
+    const { wired, runId, run } = await launchInteractive(
+      t,
+      adapter,
+      undefined,
+      undefined,
+      harness,
+    );
+    // Real paths the finder never lists: hidden, ignored, and a symlink that
+    // leaves the Workspace. Their bytes must never reach the Harness.
+    const secret = "finder-resolution-secret-bytes";
+    const outside = makeTempDir("secant-finder-outside-");
+    writeFileSync(join(outside, "secret.txt"), secret);
+    mkdirSync(join(run.workspacePath, ".hidden"));
+    writeFileSync(join(run.workspacePath, ".hidden", "notes.md"), secret);
+    writeFileSync(join(run.workspacePath, ".gitignore"), "ignored.log\n");
+    writeFileSync(join(run.workspacePath, "ignored.log"), secret);
+    symlinkSync(outside, join(run.workspacePath, "linked"), "junction");
+    const outsidePath = join(outside, "secret.txt").replaceAll("\\", "/");
+    const sent = `read @.hidden/notes.md @ignored.log @missing.ts @"${outsidePath}" @linked/secret.txt#L2`;
+    const steered = `also @linked/ @"my file.ts"#L1-3 @./.hidden/notes.md`;
+    try {
+      const admission = wired.projectionPort.submit({
+        operation: "send-interactive-turn",
+        operationId: "finder-send",
+        input: { runId, stepId: "discuss", text: sent },
+      });
+      assert.ok(admission.admitted, JSON.stringify(admission));
+      assert.equal(
+        (await awaitSettled(wired.projectionPort, "finder-send")).status,
+        "applied",
+      );
+      const live = readRun(wired.projectionPort, runId);
+      const steer = requireOffer(live, "steer-turn");
+      assert.equal(steer.available, true);
+      const steerAdmission = wired.projectionPort.submit({
+        operation: "steer-turn",
+        operationId: "finder-steer",
+        input: { runId, turnId: steer.turnId, text: steered },
+      });
+      assert.ok(steerAdmission.admitted, JSON.stringify(steerAdmission));
+      assert.equal(
+        (await awaitSettled(wired.projectionPort, "finder-steer")).status,
+        "applied",
+      );
+      await interruptTurn(
+        wired,
+        runId,
+        requireOffer(live, "interrupt-turn").turnId,
+        "finder-interrupt",
+      );
+
+      // Exact text only: no attachment field, no content, one preparation.
+      assert.deepEqual(inputs, [{ text: sent }]);
+      assert.deepEqual(steers, [steered]);
+      assert.equal(prepares, 1);
+      assert.equal(JSON.stringify([inputs, steers]).includes(secret), false);
     } finally {
       await wired.shutdown();
     }

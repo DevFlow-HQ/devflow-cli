@@ -1085,11 +1085,10 @@ export function RunWorkbench(props: {
       const result = mentions.result();
       const notice = result?.status === "available" ? result.notice : undefined;
       const indexing = result !== undefined && "indexing" in result;
+      const indexingLine = "Still indexing Workspace…";
       const statuses = [
         ...(notice === undefined ? [] : [notice]),
-        ...(indexing && candidates.length > 0
-          ? ["Still indexing Workspace…"]
-          : []),
+        ...(indexing && candidates.length > 0 ? [indexingLine] : []),
       ];
       // A selectable path, or the empty-result explanation, owns the first row.
       const statusBudget = Math.min(statuses.length, Math.max(0, budget - 1));
@@ -1111,7 +1110,7 @@ export function RunWorkbench(props: {
             result?.status === "unavailable"
               ? "Path search unavailable · enter sends text"
               : indexing
-                ? "Still indexing Workspace…"
+                ? indexingLine
                 : result === undefined
                   ? "Searching Workspace paths…"
                   : "No path suggestions · enter sends text",

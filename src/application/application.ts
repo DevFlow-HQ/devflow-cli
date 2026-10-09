@@ -1,5 +1,6 @@
 import { RunNotices } from "./run-notices.js";
 import { createWorkspacePathSearch } from "./workspace-paths.js";
+import type { WorkspacePathHelper } from "./workspace-path-helper.js";
 import { mergeHarnessInputRules } from "./harness-registry.js";
 export { mergeHarnessInputRules } from "./harness-registry.js";
 import { z } from "zod";
@@ -373,7 +374,7 @@ export interface ApplicationDependencies {
   readonly catalog: Catalog;
   /** Process reaches Preflight through composition. */
   readonly process: ProcessAdapter;
-  readonly workspacePathHelper?: import("./workspace-path-helper.js").WorkspacePathHelper;
+  readonly workspacePathHelper?: WorkspacePathHelper;
   /** The launch Workspace path, typically the raw cwd; Application canonicalises
    *  it (A6): the roots pass the path they were given, this Module owns the
    *  `realpathSync.native` invariant. */

@@ -94,6 +94,8 @@
 - Workspace path progress has one latest-query observer per token; the Promise alone settles it. Callback failures cannot fail listing (#485).
   Check its combined token/shutdown signal even while buffered helper output drains.
 - ripgrep 15.1.0's `--no-require-git` disables linked-worktree `commondir` lookup. Use it only outside Git; native Git rules keep their precedence (#484).
+- Path listing decodes each NUL-terminated entry alone: a non-UTF-8 or over-4,096-byte name is skipped like an unreadable folder;
+  an unterminated tail still fails the listing (#486).
 
 ## Tests
 

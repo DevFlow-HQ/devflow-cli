@@ -130,6 +130,12 @@ jobs:
           -t '^m10-audit-progressive-workspace-matches(:|$)'
           tests/application/workspace-paths.test.ts
           tests/tui/run-workbench-prompt.test.tsx
+      - name: m10-audit-workspace-finder-resolution
+        run: >-
+          bun run test --
+          -t '^m10-audit-workspace-finder-resolution(:|$)'
+          tests/application/workspace-paths.test.ts
+          tests/application/interactive-agent.test.ts
       - name: m10-home-and-preferences
         run: >-
           bun run test --

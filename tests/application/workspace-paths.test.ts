@@ -12,6 +12,7 @@ import {
   statSync,
   mkdirSync,
   symlinkSync,
+  realpathSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import {
@@ -23,7 +24,6 @@ import type { ApplicationDependencies } from "../../src/application/application.
 import type { OwnedProcessOptions } from "../../src/process/process.js";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { realpathSync } from "node:fs";
 import { openFakeRunGroup } from "../run/store/fake-git-process.js";
 import { createApplication } from "../helpers/application.js";
 import { makeTempDir } from "../helpers/tempDir.js";
@@ -499,7 +499,7 @@ for (const [status, text, available] of [
   });
 }
 
-for (const failure of ["launch", "invalid-utf8", "unterminated"] as const) {
+for (const failure of ["launch", "unterminated"] as const) {
   test(`m10-audit-token-ripgrep-listing: ${failure} output never becomes a partial success`, async (t) => {
     const { port, runId } = fixture(t, undefined, {
       script: {
@@ -520,10 +520,7 @@ for (const failure of ["launch", "invalid-utf8", "unterminated"] as const) {
                 emissions: [
                   {
                     kind: "stdout",
-                    bytes:
-                      failure === "invalid-utf8"
-                        ? Uint8Array.of(255, 0)
-                        : Buffer.from("path"),
+                    bytes: Buffer.from("path"),
                   },
                   {
                     kind: "terminal",
@@ -538,6 +535,49 @@ for (const failure of ["launch", "invalid-utf8", "unterminated"] as const) {
     assertUnavailable(await port.searchWorkspacePaths({ runId, query: "" }));
   });
 }
+
+test("m10-audit-workspace-finder-resolution: an unrepresentable or over-long name is skipped without failing its siblings", async (t) => {
+  const long = Buffer.from(`./${"x".repeat(5000)}.ts\0`);
+  const { port, runId } = fixture(t, undefined, {
+    script: {
+      ownedProcesses: [
+        {
+          kind: "launched",
+          emissions: [
+            {
+              kind: "stdout",
+              bytes: Buffer.concat([
+                Buffer.from("./before.ts\0./bad-"),
+                Uint8Array.of(255),
+                Buffer.from(".ts\0"),
+                long.subarray(0, 3000),
+              ]),
+            },
+            {
+              kind: "stdout",
+              bytes: Buffer.concat([
+                long.subarray(3000),
+                Buffer.from("./after.ts\0"),
+              ]),
+            },
+            {
+              kind: "terminal",
+              trigger: "automatic",
+              close: { kind: "exited", status: 0 },
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.deepEqual(await port.searchWorkspacePaths({ runId, query: "" }), {
+    status: "available",
+    candidates: [
+      { path: "after.ts", kind: "file" },
+      { path: "before.ts", kind: "file" },
+    ],
+  });
+});
 
 test("m10-audit-token-ripgrep-listing: split UTF-8 and NUL output reconstruct one path", async (t) => {
   const bytes = Buffer.from("./é.ts\0");

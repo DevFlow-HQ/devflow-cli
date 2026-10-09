@@ -33,9 +33,8 @@ export function embeddedRipgrep(
         readBytes: () => readFile(join(import.meta.dirname, pin.assetName)),
       };
     }
-    const root = assetRoot;
     const manifest = manifestSchema.parse(
-      JSON.parse(readFileSync(join(root, "manifest.json"), "utf8")),
+      JSON.parse(readFileSync(join(assetRoot, "manifest.json"), "utf8")),
     );
     const target =
       process.platform === "win32" && process.arch === "x64"
@@ -52,7 +51,7 @@ export function embeddedRipgrep(
       stateDirectory: join(secantHome, "helpers"),
       version: manifest.version,
       sha256: pin.memberSha256,
-      readBytes: () => readFile(join(root, pin.member)),
+      readBytes: () => readFile(join(assetRoot, pin.member)),
     };
   } catch (cause) {
     return { kind: "unavailable", cause };

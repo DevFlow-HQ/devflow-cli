@@ -81,7 +81,7 @@ per-package prose mislabel within a known family is a named limitation, not caug
 (`verifyClosureNotices`, `verifyChannelLegalDigests`, `packageDirOfSource`, `nativePackageFor`) and spawns no subprocess; only the closure derivation (a
 real build) runs in the `build` job. The embedded ripgrep closure comes from pinned official members and target-specific upstream Cargo trees.
 Build and inventory verify the matching member's complete bytes in each candidate; `dist/legal-inventory.json` records that evidence per target.
-`m10-audit-embedded-ripgrep-release` tests scoped licence admission and complete component notices on all three OSes; runtime extraction lands later.
+`m10-audit-embedded-ripgrep-release` tests scoped licence admission and complete component notices on all three OSes; package smoke proves extraction.
 
 ## PowerShell Installer Consumer
 
