@@ -155,7 +155,13 @@ for (const appearance of ["dark", "light"] as const) {
         assert.ok(span);
         assert.deepEqual(
           [span.fg.r, span.fg.g, span.fg.b].map((v) => Math.round(v * 255)),
-          hexRgb(PALETTES.find((p) => p.name === "everforest")![appearance]),
+          hexRgb(
+            kind === "tool"
+              ? appearance === "dark"
+                ? "#7a8478"
+                : "#a6b0a0"
+              : PALETTES.find((p) => p.name === "everforest")![appearance],
+          ),
         );
       }
       // Short terminals still window full wrapped rows and preserve the prompt's native focus.

@@ -280,7 +280,20 @@ async function refusalWorkbench(
   assert.match(frame, /Tool · file change · running/);
   assert.match(frame, /Thought.*Thinking.*Summary label/);
   assert.doesNotMatch(frame, /Retained summary body/);
+  // Entry prompts now participate in the existing first-visible Ctrl+O route (#443).
   fakeRenderer.key("o", { ctrl: true });
+  await rendered.renderOnce();
+  assert.match(rendered.captureCharFrame(), /Repair the test\./);
+  assert.match(rendered.captureCharFrame(), /Permission required/);
+  fakeRenderer.key("o", { ctrl: true });
+  await rendered.renderOnce();
+  assert.doesNotMatch(rendered.captureCharFrame(), /Repair the test\./);
+  const thoughtLine = rendered
+    .captureCharFrame()
+    .split("\n")
+    .findIndex((line) => line.includes("Thought"));
+  assert.ok(thoughtLine >= 0);
+  await rendered.mockMouse.click(10, thoughtLine);
   await rendered.renderOnce();
   assert.match(
     rendered.captureCharFrame(),
@@ -288,7 +301,7 @@ async function refusalWorkbench(
     "history expansion stays available during approval (#445)",
   );
   assert.match(rendered.captureCharFrame(), /Permission required/);
-  fakeRenderer.key("o", { ctrl: true });
+  await rendered.mockMouse.click(10, thoughtLine);
   await rendered.renderOnce();
   assert.doesNotMatch(rendered.captureCharFrame(), /Retained summary body/);
   assert.match(rendered.captureCharFrame(), /Permission required/);
@@ -314,7 +327,12 @@ async function refusalWorkbench(
   assert.match(rendered.captureCharFrame(), /Tool · file change · unconfirmed/);
   assert.match(rendered.captureCharFrame(), /Thought.*incomplete/);
   assert.doesNotMatch(rendered.captureCharFrame(), /Thinking/);
-  fakeRenderer.key("o", { ctrl: true });
+  const settledThoughtLine = rendered
+    .captureCharFrame()
+    .split("\n")
+    .findIndex((line) => line.includes("Thought"));
+  assert.ok(settledThoughtLine >= 0);
+  await rendered.mockMouse.click(10, settledThoughtLine);
   await rendered.renderOnce();
   assert.match(rendered.captureCharFrame(), /Retained summary body/);
   assert.doesNotMatch(rendered.captureCharFrame(), /Assistant preview/);

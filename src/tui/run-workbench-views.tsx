@@ -23,6 +23,8 @@ import type {
   RunStateName,
   RunStepStatus,
   RunView,
+  SessionHistoryValue,
+  RunTimelineEvent,
 } from "../application/projection-port.js";
 import { clip } from "./clip.js";
 import type { TranscriptTarget } from "./run-transcript.js";
@@ -824,5 +826,82 @@ function PromptField(props: {
       onContentChange={report}
       onCursorChange={report}
     />
+  );
+}
+
+/** One counted history line, with semantics supplied by the row owner. */
+export function HistoryLine(props: {
+  theme: Theme;
+  text: string;
+  value?: SessionHistoryValue;
+  event?: RunTimelineEvent["event"];
+  humanPanel: boolean;
+  width: number;
+  onMouseDown: () => void;
+}) {
+  const tone = () => {
+    const value = props.value;
+    if (value === undefined)
+      return props.event === "agent-call"
+        ? props.theme.success
+        : props.event === "turn-started" || props.event === "turn-settled"
+          ? props.theme.accent
+          : props.event === "materialization-conflict"
+            ? props.theme.error
+            : props.event === "request-raised"
+              ? props.theme.warning
+              : props.theme.text;
+    switch (value.kind) {
+      case "tool":
+        return value.outcome.kind === "failed"
+          ? props.theme.error
+          : value.outcome.kind === "running"
+            ? props.theme.text
+            : props.theme.textMuted;
+      case "entry-prompt":
+        return props.theme.textMuted;
+      case "thought":
+      case "request":
+        return props.theme.warning;
+      case "agent-call":
+        return props.theme.success;
+      case "turn-result":
+        return props.theme.accent;
+      case "message":
+      case "steer":
+      case "turn-diff":
+      case "activity":
+        return props.theme.text;
+      default: {
+        const exhaustive: never = value;
+        return exhaustive;
+      }
+    }
+  };
+  return (
+    <box
+      flexDirection="row"
+      height={1}
+      flexShrink={0}
+      backgroundColor={
+        props.humanPanel ? props.theme.backgroundPanel : undefined
+      }
+      onMouseDown={props.onMouseDown}
+    >
+      <Show when={props.humanPanel}>
+        <text fg={props.theme.accent} width={1} flexShrink={0} wrapMode="none">
+          {"┃"}
+        </text>
+      </Show>
+      <text
+        fg={tone()}
+        bg={props.humanPanel ? props.theme.backgroundPanel : undefined}
+        width={props.humanPanel ? Math.max(1, props.width - 1) : props.width}
+        flexShrink={0}
+        wrapMode="none"
+      >
+        {props.text}
+      </text>
+    </box>
   );
 }

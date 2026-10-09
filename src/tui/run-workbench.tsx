@@ -80,6 +80,7 @@ import {
   FINISHED_HEIGHT,
   FinishedOutcome,
   PromptControl,
+  HistoryLine,
   promptHeight,
   modelChoiceText,
   restingProse,
@@ -1598,21 +1599,25 @@ export function RunWorkbench(props: {
   const [expandedHistory, setExpandedHistory] = createSignal<
     ReadonlySet<string>
   >(new Set());
-  const [thoughtFrame, setThoughtFrame] = createSignal(0);
-  const liveThoughtShown = createMemo(() =>
-    timelineRows().some((row) => row.thought?.live),
+  const [spinnerFrame, setSpinnerFrame] = createSignal(0);
+  const liveSpinnerShown = createMemo(() =>
+    timelineRows().some(
+      (row) =>
+        row.thought?.live ||
+        (row.value?.kind === "tool" && row.value.outcome.kind === "running"),
+    ),
   );
   createEffect(() => {
-    if (!liveThoughtShown() || props.reducedMotion) return;
+    if (!liveSpinnerShown() || props.reducedMotion) return;
     const timer = setInterval(
-      () => setThoughtFrame((frame) => (frame + 1) % 4),
+      () => setSpinnerFrame((frame) => (frame + 1) % 4),
       120,
     );
     timer.unref();
     onCleanup(() => clearInterval(timer));
   });
-  const thoughtMark = () =>
-    props.reducedMotion ? "[.]" : ["|", "/", "-", "\\"][thoughtFrame()];
+  const spinnerMark = () =>
+    props.reducedMotion ? "[.]" : ["|", "/", "-", "\\"][spinnerFrame()];
   createEffect(() => {
     const retained = new Set(timelineRows().map((row) => row.key));
     setExpandedHistory((previous) => {
@@ -1638,20 +1643,34 @@ export function RunWorkbench(props: {
   const beginningVisible = () => win().top === 0;
   const visibleLines = createMemo(() => {
     const w = win();
-    const lines: string[] = [];
+    const lines: {
+      text: string;
+      value?: TimelineRow["value"];
+      event?: TimelineRow["event"];
+      humanPanel: boolean;
+    }[] = [];
     let top = 0;
-    for (const row of timelineWrapped().rows) {
+    for (const [rowIndex, row] of timelineWrapped().rows.entries()) {
       if (top >= w.top + w.visible) break;
       if (top + row.lines.length > w.top) {
         const from = Math.max(0, w.top - top);
         const to = Math.min(row.lines.length, w.top + w.visible - top);
         for (let index = from; index < to; index++) {
           const line = row.lines[index]!;
-          lines.push(
-            index === row.thoughtHeader && !props.reducedMotion
-              ? line.replace("Thinking |", `Thinking ${thoughtMark()}`)
+          const content = index >= row.prefix;
+          const source = timelineRows()[rowIndex]!;
+          lines.push({
+            text: !props.reducedMotion
+              ? index === row.thoughtHeader
+                ? line.replace("Thinking |", `Thinking ${spinnerMark()}`)
+                : index === row.toolHeader
+                  ? line.replace("  | ", `  ${spinnerMark()} `)
+                  : line
               : line,
-          );
+            value: content ? source.value : undefined,
+            event: content ? source.event : undefined,
+            humanPanel: content && row.humanPanel,
+          });
         }
       }
       top += row.lines.length;
@@ -1672,7 +1691,8 @@ export function RunWorkbench(props: {
       row === undefined ||
       (row.thought === undefined &&
         row.inspection === undefined &&
-        row.output === undefined) ||
+        row.output === undefined &&
+        row.value?.kind !== "entry-prompt") ||
       dialog.stack.length > 0 ||
       confirmation() !== undefined ||
       inspection.inspecting() ||
@@ -1697,7 +1717,8 @@ export function RunWorkbench(props: {
       if (
         row?.thought !== undefined ||
         row?.inspection !== undefined ||
-        row?.output !== undefined
+        row?.output !== undefined ||
+        row?.value?.kind === "entry-prompt"
       )
         return row;
     }
@@ -2161,14 +2182,15 @@ export function RunWorkbench(props: {
                   >
                     <Index each={visibleLines()}>
                       {(line, index) => (
-                        <text
-                          fg={theme.text}
-                          flexShrink={0}
-                          wrapMode="none"
+                        <HistoryLine
+                          theme={theme}
+                          text={line().text}
+                          value={line().value}
+                          event={line().event}
+                          humanPanel={line().humanPanel}
+                          width={innerW()}
                           onMouseDown={() => clickTimelineLine(index)}
-                        >
-                          {line()}
-                        </text>
+                        />
                       )}
                     </Index>
                   </Show>

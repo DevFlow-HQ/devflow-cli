@@ -20,6 +20,12 @@ function sameContent(a: TimelineRow, b: TimelineRow): boolean {
   return (
     a.text === b.text &&
     a.oneLine === b.oneLine &&
+    a.value?.kind === b.value?.kind &&
+    (a.value?.kind !== "message" ||
+      (b.value?.kind === "message" && a.value.role === b.value.role)) &&
+    (a.value?.kind !== "entry-prompt" ||
+      (b.value?.kind === "entry-prompt" &&
+        a.value.content === b.value.content)) &&
     (a.inspection !== undefined) === (b.inspection !== undefined) &&
     a.output?.text === b.output?.text &&
     a.output?.live === b.output?.live &&
@@ -57,9 +63,25 @@ function rowText(
   expanded: boolean,
   width: number,
   reducedMotion: boolean,
+  humanPanel: boolean,
 ): ScreenedText {
-  const prefix = "  ";
-  if (row.inspection !== undefined) return screenText(`  ▸ ${row.text}`);
+  const prefix =
+    row.value?.kind === "tool" && row.value.outcome.kind === "running"
+      ? `  ${reducedMotion ? "[.]" : "|"} `
+      : "  ";
+  if (humanPanel) {
+    return screenText(prefix + row.text.replaceAll("\n", "\n  "));
+  }
+  if (row.value?.kind === "entry-prompt") {
+    const header = clipScreened(
+      screenText(`${prefix}${expanded ? "▾" : "▸"} ${row.text}`),
+      width,
+    );
+    return expanded
+      ? { text: `${header.text}\n${screenText(row.value.content).text}` }
+      : header;
+  }
+  if (row.inspection !== undefined) return screenText(`${prefix}▸ ${row.text}`);
   if (row.output !== undefined) {
     const output = screenText(row.output.text).text;
     const heading = screenText(row.text).text;
@@ -107,6 +129,8 @@ export function createHistoryLayout(
     readonly height: number;
     readonly prefix: number;
     readonly thoughtHeader: number;
+    readonly toolHeader: number;
+    readonly humanPanel: boolean;
   };
   type Cached = {
     row: TimelineRow;
@@ -147,11 +171,21 @@ export function createHistoryLayout(
       let layout = variants.get(isExpanded);
       if (layout === undefined) {
         observe({ kind: "history", id: row.key, width });
-        const text = rowText(row, isExpanded, width, reducedMotion);
+        const humanPanel =
+          row.value?.kind === "steer" ||
+          (row.value?.kind === "message" && row.value.role === "user");
+        const contentWidth = humanPanel ? Math.max(1, width - 1) : width;
+        const text = rowText(
+          row,
+          isExpanded,
+          contentWidth,
+          reducedMotion,
+          humanPanel,
+        );
         const leading = wrapRules(rules, width);
         const lines = [
           ...leading,
-          ...wrapScreenedRows([text], width, HANG).lines,
+          ...wrapScreenedRows([text], contentWidth, HANG).lines,
         ];
         const prefix = leading.length;
         const thoughtHeader = row.thought?.live ? leading.length : -1;
@@ -161,6 +195,11 @@ export function createHistoryLayout(
           height: lines.length,
           prefix,
           thoughtHeader,
+          toolHeader:
+            row.value?.kind === "tool" && row.value.outcome.kind === "running"
+              ? prefix
+              : -1,
+          humanPanel,
         };
         variants.set(isExpanded, layout);
       }

@@ -14,6 +14,8 @@ import type { Rule } from "./wrap.js";
 export interface TimelineRow {
   readonly key: string;
   readonly text: string;
+  readonly value?: SessionHistoryValue;
+  readonly event?: RunTimelineEvent["event"];
   readonly at?: string;
   readonly placementRank?: number;
   readonly step?: string;
@@ -122,6 +124,7 @@ function durableTimelineRows(
     return {
       key: `durable:${event.at}:${event.event}:${index}`,
       at: event.at,
+      event: event.event,
       placementRank:
         event.event === "run-created" || event.event === "trust-granted"
           ? 0
@@ -240,6 +243,7 @@ function historyTimelineRows(
       step: row.step,
       session,
       sessionName: name,
+      value: row.value,
       text: historyLabel(row.value, row.source === "preview"),
       inspection: fileInspection(row.value),
       ...(row.value.kind === "agent-call" ? { oneLine: true } : {}),

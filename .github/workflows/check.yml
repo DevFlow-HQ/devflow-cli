@@ -352,6 +352,11 @@ jobs:
           -t '^m10-audit-row-layout-once(:|$)'
           tests/tui/run-workbench-layout.test.tsx
           tests/tui/wrap.test.ts
+      - name: m10-audit-row-presentation
+        run: >-
+          bun run test --
+          -t '^m10-audit-row-presentation(:|$)'
+          tests/tui/run-workbench-row-presentation.test.tsx
       - name: m10-audit-screen-control-bytes
         run: >-
           bun run test --
