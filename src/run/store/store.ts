@@ -480,6 +480,38 @@ export interface TurnEventRecord {
   readonly at: string; // ISO 8601
 }
 
+/** A Turn event's identity, order and settlement facts, read without its body (#522).
+ *  `kind` is absent when no Turn fact schema names the row or its payload is not
+ *  JSON; the row still holds its place in the `turnEventsAt` index. The body's own
+ *  validity is checked only when it is read. */
+export interface TurnEventOutline {
+  readonly turnId: string;
+  readonly kind?: TurnFact["kind"];
+  /** The fact's own id: a tool or Agent call, message, Thought summary, or Steer id. */
+  readonly id?: string;
+  readonly historyOrder?: number;
+  /** A tool fact's outcome kind, or a Steer's settlement kind. */
+  readonly state?: string;
+  /** A `model` fact's model. */
+  readonly model?: string;
+  /** A message nested in tool activity. */
+  readonly nested?: true;
+  /** A Thought whose content is empty or whitespace only. */
+  readonly blank?: true;
+}
+
+/** Every Turn, Turn event and conversation row in history order, without a body. */
+export interface HistoryOutline {
+  readonly turns: readonly Omit<TurnRecord, "input">[];
+  /** In `turnEventsAt` index order. */
+  readonly events: readonly TurnEventOutline[];
+  /** In transcript order. */
+  readonly conversation: readonly Pick<
+    TranscriptEntryRecord,
+    "seq" | "order" | "turnId" | "role" | "kind"
+  >[];
+}
+
 /** One named Session's last observed availability, read back for the Projection. */
 export interface HarnessSessionRecord {
   readonly session: string;
@@ -640,14 +672,26 @@ export interface RunOwner {
   turnEvents(): readonly TurnEventRecord[];
   /** One Turn's normalized durable events, in append order. */
   turnEventsOf(turnId: string): readonly TurnEventRecord[];
-  /** Exact append-only history event, excluding conversation-only rows. */
-  turnEventAt(index: number): TurnEventRecord | undefined;
+  /** Exact append-only history events by their index among `turnEvents`, in one
+   *  pass over an index rather than the payloads. An index past the end is absent. */
+  turnEventsAt(
+    indexes: readonly number[],
+  ): ReadonlyMap<number, TurnEventRecord>;
   /** Every named Session's last observed availability. */
   harnessSessions(): readonly HarnessSessionRecord[];
-  /** Canonical conversation facts for history initialization. */
+  /** What Session history indexes, without reading any Turn input, event payload
+   *  or conversation content; bodies are read per row through `turnEventsAt` and
+   *  `transcriptAt` (#522). */
+  historyOutline(): HistoryOutline;
+  /** Every canonical conversation fact with its content, in transcript order. */
   transcript(): readonly TranscriptEntryRecord[];
   /** Current maximum eligibility position. No conversation content is read. */
   transcriptCutoff(): number;
+  /** Canonical conversation facts by their exact `seq`, through its unique index.
+   *  A `seq` no row holds is absent. */
+  transcriptAt(
+    seqs: readonly number[],
+  ): ReadonlyMap<number, TranscriptEntryRecord>;
   /** Bounded canonical facts, ordered by the requested exclusive boundary. */
   transcriptPage(request: TranscriptPageRequest): TranscriptPage;
   /** The latest Agent-step Attempt's co-sourced identity and optional model, or
@@ -1406,6 +1450,7 @@ export function openRunGroup(
 }
 
 export {
+  outlineTurnFact,
   readTurnFact,
   readAgentCallEvent,
   readSteerEvent,

@@ -54,10 +54,13 @@ import {
   appendTurnEvent,
   readCurrentTurn,
   readHarnessSessions,
+  readHistoryOutline,
   readTranscript,
+  readTranscriptAt,
   readTranscriptCutoff,
   readTranscriptPage,
   readTurnEvents,
+  readTurnEventsAt,
   readTurns,
   settleAbandonedTurns,
   settleTurn,
@@ -1250,8 +1253,8 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     turns() {
       return readTurns(db);
     },
-    turnEventAt(index) {
-      return readTurnEvents(db, { index })[0];
+    turnEventsAt(indexes) {
+      return readTurnEventsAt(db, indexes);
     },
     turnEvents() {
       return readTurnEvents(db);
@@ -1262,11 +1265,17 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     harnessSessions() {
       return readHarnessSessions(db);
     },
+    historyOutline() {
+      return readHistoryOutline(db);
+    },
     transcript() {
       return readTranscript(db);
     },
     transcriptCutoff() {
       return readTranscriptCutoff(db);
+    },
+    transcriptAt(seqs) {
+      return readTranscriptAt(db, seqs);
     },
     transcriptPage(request) {
       return readTranscriptPage(db, request);

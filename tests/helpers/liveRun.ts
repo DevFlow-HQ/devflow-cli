@@ -51,6 +51,9 @@ export async function openLiveRun(
   options: {
     onHistoryRead?: () => void;
     onRetainedEventRead?: () => void;
+    /** Each Store read that returns stored bodies, with how many it returned:
+     *  Turn inputs, Turn event payloads, or conversation contents. */
+    onBodyRead?: (bodies: number) => void;
     historyTextEdges?: Parameters<
       typeof createApplication
     >[0]["historyTextEdges"];
@@ -77,6 +80,10 @@ export async function openLiveRun(
   const storeHome = makeTempDir("secant-lag-store-");
   const rawGroup = openRunGroup(storeHome, workspace);
   let seeded = false;
+  const bodies = <T>(read: readonly T[]): readonly T[] => {
+    options.onBodyRead?.(read.length);
+    return read;
+  };
   const runGroup = {
     ...rawGroup,
     listRuns() {
@@ -101,19 +108,31 @@ export async function openLiveRun(
         },
         turns() {
           options.onHistoryRead?.();
-          return owner.turns();
+          return bodies(owner.turns());
         },
-        turnEventAt(index: number) {
+        turnEventsAt(indexes: readonly number[]) {
           options.onRetainedEventRead?.();
-          return owner.turnEventAt(index);
+          const events = owner.turnEventsAt(indexes);
+          options.onBodyRead?.(events.size);
+          return events;
         },
         turnEvents() {
           options.onHistoryRead?.();
-          return owner.turnEvents();
+          return bodies(owner.turnEvents());
         },
         transcript() {
           options.onHistoryRead?.();
-          return owner.transcript();
+          return bodies(owner.transcript());
+        },
+        transcriptAt(seqs: readonly number[]) {
+          const entries = owner.transcriptAt(seqs);
+          options.onBodyRead?.(entries.size);
+          return entries;
+        },
+        transcriptPage(request: Parameters<RunOwner["transcriptPage"]>[0]) {
+          const page = owner.transcriptPage(request);
+          bodies(page.entries);
+          return page;
         },
         harnessSessions() {
           options.onHistoryRead?.();

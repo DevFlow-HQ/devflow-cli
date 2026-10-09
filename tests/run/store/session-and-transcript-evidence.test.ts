@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import type { ToolCall, TurnFact } from "../../../src/harness/harness.js";
 import { turnFact, type TurnFactData } from "../../helpers/turnFact.js";
 import {
+  outlineTurnFact,
   readTurnFact,
   type AdmitTurnRequest,
   type RunGroup,
@@ -1678,4 +1679,143 @@ test("m10-followup-agent-call-expiry: one Turn's events read alone, in append or
     [{ callId: "b" }],
   );
   assert.deepEqual(owner.turnEventsOf("absent"), []);
+});
+
+test("m10-followup-body-free-history-index: the history outline reads every fact's order and identity without its body", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-outline");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner !== undefined);
+  t.after(() => owner.close());
+  for (const turnId of ["turn-1", "turn-2"])
+    assert.ok(
+      owner.admitTurn({
+        turnId,
+        attemptId: "0.0:write",
+        session: "s",
+        origin: "human",
+        kind: "interactive-agent",
+        input: `Input of ${turnId}`,
+        recoveryCoordinate: "native",
+        harness: "codex",
+        at: AT,
+      }).ok,
+    );
+  // Every code unit JavaScript trims; a Thought of each alone is blank.
+  const whitespace = Array.from({ length: 0x10000 }, (_, code) =>
+    String.fromCharCode(code),
+  ).filter((unit) => unit.trim() === "" && !/[\ud800-\udfff]/.test(unit));
+  const tool = { tool: "command", input: "ls" } as const;
+  const facts: TurnFact[] = [
+    turnFact("assistant-content", {
+      messageId: "m1",
+      content: "Hi",
+      historyOrder: 3,
+    }),
+    turnFact("assistant-content", { content: "No id" }),
+    turnFact("assistant-content", {
+      messageId: "m2",
+      content: "N",
+      parentActivity: "c1",
+    }),
+    ...whitespace.map((unit, i) =>
+      turnFact("thought", {
+        summaryId: `blank-${i}`,
+        content: `${unit}${unit}`,
+      }),
+    ),
+    turnFact("thought", {
+      summaryId: "shown",
+      content: `${whitespace.join("")}x`,
+    }),
+    turnFact("turn-diff", { content: "diff", files: [], historyOrder: 9 }),
+    turnFact("tool-call", {
+      callId: "c1",
+      ...tool,
+      outcome: { kind: "running" },
+    }),
+    turnFact("tool-partial", {
+      callId: "c1",
+      ...tool,
+      output: { text: "out", incomplete: true },
+      outcome: { kind: "running" },
+    }),
+    turnFact("tool-call", {
+      callId: "c1",
+      ...tool,
+      outcome: { kind: "completed" },
+    }),
+    turnFact("steer", {
+      steerId: "s1",
+      text: "Go",
+      sentAt: AT.toISOString(),
+      settlement: { kind: "waiting" },
+    }),
+    turnFact("model", { model: "gpt-5", effort: "high" }),
+    turnFact("agent-call", {
+      callId: "a1",
+      id: "call",
+      reason: "Why",
+      answer: { outcome: "accepted" },
+    }),
+    turnFact("agent-call-expired", { callId: "a1" }),
+    turnFact("tool-activity", { tool: "read" }),
+    turnFact("request-raised", { requestId: "r", tool: "t" }),
+    turnFact("request-answered", { requestId: "r" }),
+    turnFact("request-expired", { requestId: "r" }),
+    turnFact("elicitation-declined", { message: "m" }),
+  ];
+  for (const [i, fact] of facts.entries())
+    assert.ok(
+      owner.appendTurnEvent({
+        turnId: i % 2 === 0 ? "turn-1" : "turn-2",
+        fact,
+        at: AT,
+      }).ok,
+    );
+  const database = new Database(
+    join(groupDirOf(home), created.runId, "run.db"),
+  );
+  database
+    .query(
+      "INSERT INTO turn_event (turn_id, kind, payload, at) VALUES ('turn-2', 'thought', '{not json', ''), ('turn-2', 'unknown', '{}', '')",
+    )
+    .run();
+  database.close();
+
+  const outline = owner.historyOutline();
+  const events = owner.turnEvents();
+  assert.equal(outline.events.length, events.length);
+  assert.deepEqual(
+    outline.events.slice(0, facts.length),
+    events.slice(0, facts.length).map((event) => ({
+      turnId: event.turnId,
+      ...outlineTurnFact(readTurnFact(event)!),
+    })),
+  );
+  assert.equal(
+    outline.events.filter((event) => event.blank).length,
+    whitespace.length,
+  );
+  assert.deepEqual(outline.events.slice(facts.length), [
+    { turnId: "turn-2" },
+    { turnId: "turn-2" },
+  ]);
+  assert.deepEqual(
+    outline.turns,
+    owner.turns().map(({ input: _input, ...turn }) => turn),
+  );
+  assert.deepEqual(
+    outline.conversation,
+    owner.transcript().map(({ seq, order, turnId, role, kind }) => ({
+      seq,
+      order,
+      turnId,
+      role,
+      ...(kind === undefined ? {} : { kind }),
+    })),
+  );
+  assert.ok(outline.conversation.length >= 2);
 });

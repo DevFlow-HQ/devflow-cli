@@ -542,6 +542,27 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // while the Run rests joins here before a later Operation creates or replaces
   // tracking, so it receives future updates for its whole lifetime (#134 A1).
   const runObservers = new Map<string, Set<UpdateStream>>();
+  /** Every requested Store row, or the Run's damage Problem when any is missing. */
+  function readExactly<V>(
+    runId: string,
+    keys: readonly number[],
+    read: (owner: RunOwner) => ReadonlyMap<number, V>,
+  ): ReadonlyMap<number, V> | Problem {
+    try {
+      const acquired = acquireForRead(runId);
+      if (!acquired.ok) return acquired.problem;
+      try {
+        const rows = read(acquired.owner);
+        return keys.every((key) => rows.has(key))
+          ? rows
+          : runStoreDamaged(runId);
+      } finally {
+        if (acquired.transient) acquired.owner.close();
+      }
+    } catch (cause) {
+      return { ...runStoreDamaged(runId), cause };
+    }
+  }
   const history = createSessionHistory({
     textEdges: deps.historyTextEdges,
     retained: deps.observeHistoryRetention,
@@ -576,19 +597,10 @@ export function createApplication(deps: ApplicationDependencies): Application {
         return { ...runStoreDamaged(runId), cause };
       }
     },
-    readEvent(runId, index) {
-      try {
-        const acquired = acquireForRead(runId);
-        if (!acquired.ok) return acquired.problem;
-        try {
-          return acquired.owner.turnEventAt(index) ?? runStoreDamaged(runId);
-        } finally {
-          if (acquired.transient) acquired.owner.close();
-        }
-      } catch (cause) {
-        return { ...runStoreDamaged(runId), cause };
-      }
-    },
+    readEvents: (runId, indexes) =>
+      readExactly(runId, indexes, (owner) => owner.turnEventsAt(indexes)),
+    readConversationAt: (runId, seqs) =>
+      readExactly(runId, seqs, (owner) => owner.transcriptAt(seqs)),
     readConversation(runId, session, before) {
       try {
         const acquired = acquireForRead(runId);
@@ -627,9 +639,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
         return {
           found: true,
           records: {
-            turns: owner.turns(),
-            events: owner.turnEvents(),
-            transcript: owner.transcript(),
+            ...owner.historyOutline(),
             sessions: owner.harnessSessions().map((s) => s.session),
             harness: read.run.selectedHarness,
           },

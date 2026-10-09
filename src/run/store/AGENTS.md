@@ -4,8 +4,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
-- `turnEventAt` indexes the same append-only, conversation-excluded sequence as `turnEvents`; new writes never shift an exact Resource (#489).
+- `turnEventsAt` indexes the same append-only, conversation-excluded sequence as `turnEvents`; new writes never shift an exact Resource (#489).
+  It numbers rows through the covering `turn_event_turn_kind` index, because a large payload fills its row's leaf page (#522).
   `turnEventsOf` reads one Turn's slice of that sequence, so a per-Turn check never scans the Run (#513).
+- `historyOutline` reads history's order, identity and visibility facts in SQL; no Turn input, event payload or conversation content reaches
+  JavaScript. `outlineTurnFact` is its decoded twin, and a Store test holds the two equal (#522).
 
 - Before changing Turn admission, settlement, event payloads, or transcript migration and reads, read
   [Store conversation](../../../docs/agents/run-store-conversation.md).

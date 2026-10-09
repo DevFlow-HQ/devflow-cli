@@ -546,6 +546,12 @@ jobs:
           tests/application/history-bounded-cost.test.ts
           tests/tui/history-bounded-cost.test.ts
           tests/tui/history-text-edges.test.ts
+      - name: m10-followup-body-free-history-index
+        run: >-
+          bun run test --
+          -t '^m10-followup-body-free-history-index(:|$)'
+          tests/application/history-body-free-index.test.ts
+          tests/run/store/session-and-transcript-evidence.test.ts
       - name: m10-followup-agent-call-expiry
         run: >-
           bun run test --

@@ -40,8 +40,10 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
   Trusted TUI composition supplies text edge analysis privately; read callers cannot receive a source iterator. Raw content stays exact.
 - `session-history` (#412–#417) bounds messages/tools/Thoughts/Turn diffs together at 200 with one 50 ms budget for every pending row.
   The index keeps values only for each Session's newest 200 rows; an evicted row keeps order, identity, and its Store coordinate and reads its value
-  again on re-entry; a Store failure on that read fails the whole page, as initialization does. The index and its content versions are
-  released once no observer or live owner holds the Run (#514).
+  again on re-entry. The index is built from the body-free `historyOutline`; a page reads its window's unread event bodies in one `turnEventsAt`
+  pass, and Turn inputs and migrated messages per row (#522). A Store failure on any window read fails the whole page. When a read body fails its
+  schema, the index is rebuilt without that row, as a full build skipped it. The index and its content versions are released once no observer or
+  live owner holds the Run (#514).
   Final output replaces previews; empty clears, absent retains incomplete tails. Partials invalidate previews without settling tools; last observer cancels the timer.
   Transcript Resources retain separate entry ids across reads/prepend, excluded from headless; pages still hold 20 entries.
 - The `run` Projection exposes the immutable stored semantic id as `run.selectedHarness` before any Attempt and

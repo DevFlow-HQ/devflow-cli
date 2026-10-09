@@ -10,6 +10,8 @@ import {
   max,
   ne,
   sql,
+  type Column,
+  type SQL,
 } from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
@@ -19,10 +21,12 @@ import type {
   AdmitTurnRequest,
   AppendTurnEventRequest,
   HarnessSessionRecord,
+  HistoryOutline,
   SettleTurnRequest,
   TranscriptEntryRecord,
   TranscriptPage,
   TranscriptPageRequest,
+  TurnEventOutline,
   TurnEventRecord,
   TurnRecord,
 } from "./store.js";
@@ -44,7 +48,6 @@ const turnRow = z.object({
   requested_model: z.string().nullable(),
   requested_effort: z.string().nullable(),
   sequence: z.number(),
-  input: z.string(),
   admitted_at: z.string(),
   result_kind: z.string().nullable(),
   result_detail: z.string().nullable(),
@@ -111,6 +114,52 @@ export function readTurnFact(
   }
   const fact = checkTurnFact(event.kind, data);
   return fact instanceof Error ? undefined : fact;
+}
+/** The outline `readHistoryOutline` reads in SQL, taken from a decoded fact. */
+export function outlineTurnFact(
+  fact: TurnFact,
+): Omit<TurnEventOutline, "turnId"> & { readonly kind: TurnFact["kind"] } {
+  const outline = {
+    kind: fact.kind,
+    ...(fact.data.historyOrder === undefined
+      ? {}
+      : { historyOrder: fact.data.historyOrder }),
+  };
+  switch (fact.kind) {
+    case "tool-call":
+    case "tool-partial":
+      return {
+        ...outline,
+        id: fact.data.callId,
+        state: fact.data.outcome.kind,
+      };
+    case "agent-call":
+      return { ...outline, id: fact.data.callId };
+    case "assistant-content":
+      return {
+        ...outline,
+        ...(fact.data.messageId === undefined
+          ? {}
+          : { id: fact.data.messageId }),
+        ...(fact.data.parentActivity === undefined ? {} : { nested: true }),
+      };
+    case "thought":
+      return {
+        ...outline,
+        id: fact.data.summaryId,
+        ...(fact.data.content.trim() ? {} : { blank: true }),
+      };
+    case "steer":
+      return {
+        ...outline,
+        id: fact.data.steerId,
+        state: fact.data.settlement.kind,
+      };
+    case "model":
+      return { ...outline, model: fact.data.model };
+    default:
+      return outline;
+  }
 }
 export function readToolCallEvent(
   event: Pick<TurnEventRecord, "kind" | "payload">,
@@ -476,70 +525,68 @@ export function readCurrentTurn(
     : z.object({ turnId: z.string() }).parse(row);
 }
 
+const turnColumns = {
+  turn_id: turns.turn_id,
+  attempt_id: turns.attempt_id,
+  session_key: turns.session_key,
+  origin: turns.origin,
+  kind: turns.kind,
+  requested_model: turns.requested_model,
+  requested_effort: turns.requested_effort,
+  sequence: turns.sequence,
+  admitted_at: turns.admitted_at,
+  result_kind: turns.result_kind,
+  result_detail: turns.result_detail,
+  settled_at: turns.settled_at,
+};
+function turnHead(row: unknown): Omit<TurnRecord, "input"> {
+  const parsed = turnRow.parse(row);
+  return {
+    turnId: parsed.turn_id,
+    attemptId: parsed.attempt_id,
+    session: parsed.session_key,
+    origin: parsed.origin,
+    // A legacy row admitted before the kind column reads it back null: the
+    // kind is genuinely unknown, so omit it rather than fabricate a guess.
+    ...(parsed.kind !== null ? { kind: parsed.kind } : {}),
+    // Effort is read only beside a model: a request never names effort alone.
+    ...(parsed.requested_model !== null
+      ? {
+          modelChoice: {
+            model: parsed.requested_model,
+            ...(parsed.requested_effort !== null
+              ? { effort: parsed.requested_effort }
+              : {}),
+          },
+        }
+      : {}),
+    sequence: parsed.sequence,
+    admittedAt: parsed.admitted_at,
+    ...(parsed.result_kind !== null ? { resultKind: parsed.result_kind } : {}),
+    ...(parsed.result_detail !== null
+      ? { resultDetail: parsed.result_detail }
+      : {}),
+    ...(parsed.settled_at !== null ? { settledAt: parsed.settled_at } : {}),
+  };
+}
 export function readTurns(db: SQLiteBunDatabase): readonly TurnRecord[] {
   return db
-    .select({
-      turn_id: turns.turn_id,
-      attempt_id: turns.attempt_id,
-      session_key: turns.session_key,
-      origin: turns.origin,
-      kind: turns.kind,
-      requested_model: turns.requested_model,
-      requested_effort: turns.requested_effort,
-      sequence: turns.sequence,
-      input: turns.input,
-      admitted_at: turns.admitted_at,
-      result_kind: turns.result_kind,
-      result_detail: turns.result_detail,
-      settled_at: turns.settled_at,
-    })
+    .select({ ...turnColumns, input: turns.input })
     .from(turns)
     .orderBy(asc(turns.sequence))
     .all()
-    .map((row): TurnRecord => {
-      const parsed = turnRow.parse(row);
-      return {
-        turnId: parsed.turn_id,
-        attemptId: parsed.attempt_id,
-        session: parsed.session_key,
-        origin: parsed.origin,
-        // A legacy row admitted before the kind column reads it back null: the
-        // kind is genuinely unknown, so omit it rather than fabricate a guess.
-        ...(parsed.kind !== null ? { kind: parsed.kind } : {}),
-        // Effort is read only beside a model: a request never names effort alone.
-        ...(parsed.requested_model !== null
-          ? {
-              modelChoice: {
-                model: parsed.requested_model,
-                ...(parsed.requested_effort !== null
-                  ? { effort: parsed.requested_effort }
-                  : {}),
-              },
-            }
-          : {}),
-        sequence: parsed.sequence,
-        input: parsed.input,
-        admittedAt: parsed.admitted_at,
-        ...(parsed.result_kind !== null
-          ? { resultKind: parsed.result_kind }
-          : {}),
-        ...(parsed.result_detail !== null
-          ? { resultDetail: parsed.result_detail }
-          : {}),
-        ...(parsed.settled_at !== null ? { settledAt: parsed.settled_at } : {}),
-      };
-    });
+    .map((row): TurnRecord => ({
+      ...turnHead(row),
+      input: z.object({ input: z.string() }).parse(row).input,
+    }));
 }
 
-/** History events in append order: all of them, one Turn's, or the one at `index`. */
+/** History events in append order: all of them, or one Turn's. `readTurnEventsAt`
+ * reads them by index. */
 export function readTurnEvents(
   db: SQLiteBunDatabase,
-  select:
-    | { readonly index?: undefined; readonly turnId?: undefined }
-    | { readonly index: number; readonly turnId?: undefined }
-    | { readonly index?: undefined; readonly turnId: string } = {},
+  { turnId }: { readonly turnId?: string } = {},
 ): readonly TurnEventRecord[] {
-  const { index, turnId } = select;
   return db
     .select({
       turn_id: turnEvents.turn_id,
@@ -556,18 +603,43 @@ export function readTurnEvents(
       ),
     )
     .orderBy(asc(turnEvents.seq))
-    .limit(index === undefined ? -1 : 1)
-    .offset(index ?? 0)
     .all()
-    .map((row): TurnEventRecord => {
-      const parsed = turnEventRow.parse(row);
-      return {
-        turnId: parsed.turn_id,
-        kind: parsed.kind,
-        payload: parsed.payload,
-        at: parsed.at,
-      };
-    });
+    .map(turnEventRecord);
+}
+function turnEventRecord(row: unknown): TurnEventRecord {
+  const parsed = turnEventRow.parse(row);
+  return {
+    turnId: parsed.turn_id,
+    kind: parsed.kind,
+    payload: parsed.payload,
+    at: parsed.at,
+  };
+}
+const indexedEventRow = turnEventRow.extend({
+  position: z.number().int().nonnegative(),
+});
+/** Number the history events through the `(turn_id, kind)` index, which covers
+ * `seq` and `kind`: a payload fills most of its row's leaf page, so stepping the
+ * table itself costs a page per event. Only the requested payloads are read. */
+export function readTurnEventsAt(
+  db: SQLiteBunDatabase,
+  indexes: readonly number[],
+): ReadonlyMap<number, TurnEventRecord> {
+  const rows = db.all(sql`
+    select ordinal.position as position, turn_id, kind, payload, at
+    from (
+      select seq, row_number() over (order by seq) - 1 as position
+      from turn_event indexed by turn_event_turn_kind
+      where kind <> 'turn-input' and kind <> 'legacy-message'
+    ) as ordinal
+    join turn_event on turn_event.seq = ordinal.seq
+    where ordinal.position in (select value from json_each(${JSON.stringify(indexes)}))`);
+  return new Map(
+    rows.map((row) => [
+      indexedEventRow.parse(row).position,
+      turnEventRecord(row),
+    ]),
+  );
 }
 
 export function readHarnessSessions(
@@ -609,7 +681,9 @@ const conversationColumns = {
 // `historyOrder` on every Turn event it writes except `model` and
 // `agent-call-expired`; only an unstamped row counts its historical ordinal, and
 // `coalesce` evaluates that count for it alone. Each such row pays one count.
-function conversationFacts(db: SQLiteBunDatabase) {
+function conversationFacts<
+  Columns extends Record<string, SQL | Column | SQL.Aliased>,
+>(db: SQLiteBunDatabase, columns: Columns) {
   const position = sql<number>`case
     when ${turnEvents.kind} = 'turn-input' then -1
     when ${turnEvents.kind} = 'legacy-message' then ${turnEvents.transcript_seq}
@@ -623,7 +697,7 @@ function conversationFacts(db: SQLiteBunDatabase) {
   return {
     position,
     query: db
-      .select({ ...conversationColumns, position })
+      .select({ ...columns, position })
       .from(turnEvents)
       .innerJoin(turns, eq(turns.turn_id, turnEvents.turn_id)),
   };
@@ -660,7 +734,7 @@ function transcriptRecord(row: unknown): TranscriptEntryRecord {
 export function readTranscript(
   db: SQLiteBunDatabase,
 ): readonly TranscriptEntryRecord[] {
-  const { query, position } = conversationFacts(db);
+  const { query, position } = conversationFacts(db, conversationColumns);
   return query
     .where(isNotNull(turnEvents.transcript_seq))
     .orderBy(asc(turns.sequence), asc(position), asc(turnEvents.transcript_seq))
@@ -668,12 +742,28 @@ export function readTranscript(
     .map(transcriptRecord);
 }
 
+export function readTranscriptAt(
+  db: SQLiteBunDatabase,
+  seqs: readonly number[],
+): ReadonlyMap<number, TranscriptEntryRecord> {
+  const { query } = conversationFacts(db, conversationColumns);
+  return new Map(
+    query
+      .where(
+        sql`${turnEvents.transcript_seq} in (select value from json_each(${JSON.stringify(seqs)}))`,
+      )
+      .all()
+      .map(transcriptRecord)
+      .map((entry) => [entry.seq, entry]),
+  );
+}
+
 export function readTranscriptPage(
   db: SQLiteBunDatabase,
   request: TranscriptPageRequest,
 ): TranscriptPage {
   const limit = Math.max(1, request.limit);
-  const { query, position } = conversationFacts(db);
+  const { query, position } = conversationFacts(db, conversationColumns);
   const rows = query
     .where(
       and(
@@ -710,4 +800,157 @@ export function readTranscriptCutoff(db: SQLiteBunDatabase): number {
       .from(turnEvents)
       .get()?.value ?? 0
   );
+}
+
+// JavaScript's `String.prototype.trim` whitespace, so `blank` matches a decoded Thought.
+const WHITESPACE =
+  "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006" +
+  "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+// Each JSON function call site parses the payload again, so the outline reads every
+// small field it needs through one multi-path `json_extract`, in this order.
+const OUTLINE_PATHS = [
+  "$.callId",
+  "$.messageId",
+  "$.summaryId",
+  "$.steerId",
+  "$.historyOrder",
+  "$.outcome.kind",
+  "$.settlement.kind",
+  "$.model",
+  "$.parentActivity",
+] as const;
+const outlineFields = z.array(z.unknown()).length(OUTLINE_PATHS.length);
+const eventOutlineRow = z.object({
+  turn_id: z.string(),
+  kind: z.string(),
+  // Null for a payload that is not JSON.
+  fields: z.string().nullable(),
+  blank: z.number().nullable(),
+});
+const conversationOutlineRow = z.object({
+  seq: z.number().int().positive(),
+  turnSequence: z.number().int().nonnegative(),
+  position: z.number().int().min(-1),
+  turnId: z.string(),
+  fields: z.string(),
+});
+const text = (value: unknown) =>
+  typeof value === "string" ? value : undefined;
+
+export function readHistoryOutline(db: SQLiteBunDatabase): HistoryOutline {
+  const payload = turnEvents.payload;
+  const paths = sql.join(
+    OUTLINE_PATHS.map((path) => sql`${path}`),
+    sql`, `,
+  );
+  const events = db
+    .select({
+      turn_id: turnEvents.turn_id,
+      kind: turnEvents.kind,
+      // `case` evaluates only its matching branch, so malformed JSON reaches no extract.
+      fields: sql`case when json_valid(${payload})
+        then json_extract(${payload}, ${paths}) end`,
+      // Only a Thought's emptiness is read, never its content.
+      blank: sql`case ${turnEvents.kind} when 'thought' then
+        case when json_valid(${payload}) then
+          trim(json_extract(${payload}, '$.content'), ${WHITESPACE}) = '' end end`,
+    })
+    .from(turnEvents)
+    .where(
+      and(
+        ne(turnEvents.kind, "turn-input"),
+        ne(turnEvents.kind, "legacy-message"),
+      ),
+    )
+    .orderBy(asc(turnEvents.seq))
+    .all()
+    .map((row): TurnEventOutline => {
+      const parsed = eventOutlineRow.parse(row);
+      if (parsed.fields === null || !Object.hasOwn(turnFactChecks, parsed.kind))
+        return { turnId: parsed.turn_id };
+      const kind = parsed.kind as TurnFactKind;
+      const [
+        callId,
+        messageId,
+        summaryId,
+        steerId,
+        order,
+        outcome,
+        settlement,
+        model,
+        parent,
+      ] = outlineFields.parse(JSON.parse(parsed.fields));
+      const id =
+        kind === "tool-call" || kind === "tool-partial" || kind === "agent-call"
+          ? text(callId)
+          : kind === "assistant-content"
+            ? text(messageId)
+            : kind === "thought"
+              ? text(summaryId)
+              : kind === "steer"
+                ? text(steerId)
+                : undefined;
+      const state =
+        kind === "tool-call" || kind === "tool-partial"
+          ? text(outcome)
+          : kind === "steer"
+            ? text(settlement)
+            : undefined;
+      return {
+        turnId: parsed.turn_id,
+        kind,
+        ...(Number.isSafeInteger(order) && (order as number) >= 0
+          ? { historyOrder: order as number }
+          : {}),
+        ...(id === undefined ? {} : { id }),
+        ...(state === undefined ? {} : { state }),
+        ...(kind === "model" && text(model) !== undefined
+          ? { model: text(model) }
+          : {}),
+        ...(kind === "assistant-content" && parent !== null
+          ? { nested: true }
+          : {}),
+        ...(parsed.blank === 1 ? { blank: true } : {}),
+      };
+    });
+  const { query, position } = conversationFacts(db, {
+    seq: turnEvents.transcript_seq,
+    turnSequence: turns.sequence,
+    turnId: turnEvents.turn_id,
+    // Conversation rows are read as JSON by `position` already, as by every transcript read.
+    fields: sql`json_extract(${payload}, '$.role', '$.kind')`,
+  });
+  const conversation = query
+    .where(isNotNull(turnEvents.transcript_seq))
+    .orderBy(asc(turns.sequence), asc(position), asc(turnEvents.transcript_seq))
+    .all()
+    .map((row) => {
+      const parsed = conversationOutlineRow.parse(row);
+      const [role, kindField] = z
+        .tuple([z.unknown(), z.unknown()])
+        .parse(JSON.parse(parsed.fields));
+      const kind = messagePayload.shape.kind.safeParse(kindField ?? undefined);
+      return {
+        seq: parsed.seq,
+        order: {
+          turnSequence: parsed.turnSequence,
+          position: parsed.position,
+          seq: parsed.seq,
+        },
+        turnId: parsed.turnId,
+        // Roles validate at every transcript read ingress, as `messagePayload` does.
+        role: messagePayload.shape.role.parse(role),
+        ...(kind.data === undefined ? {} : { kind: kind.data }),
+      };
+    });
+  return {
+    turns: db
+      .select(turnColumns)
+      .from(turns)
+      .orderBy(asc(turns.sequence))
+      .all()
+      .map(turnHead),
+    events,
+    conversation,
+  };
 }

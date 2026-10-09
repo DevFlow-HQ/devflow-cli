@@ -2,7 +2,7 @@ import type { TurnFact } from "../harness/harness.js";
 import { createHash } from "node:crypto";
 import { fitEncoded } from "./encoded-json.js";
 import { attemptStepId } from "../run/execution/execution.js";
-import type { TurnRecord } from "../run/store/store.js";
+import type { TurnEventOutline, TurnRecord } from "../run/store/store.js";
 import type {
   SessionHistoryRow,
   SessionHistoryValue,
@@ -61,25 +61,43 @@ export function readHistoryKey(key: string): {
 }
 export function storedFactKey(
   turnId: string,
-  fact: TurnFact,
+  fact: Pick<TurnEventOutline, "id"> & { readonly kind: TurnFact["kind"] },
   index: number,
 ): string {
   switch (fact.kind) {
     case "tool-call":
     case "tool-partial":
-      return historyKey(turnId, "tool", fact.data.callId);
+      return historyKey(turnId, "tool", fact.id);
     case "assistant-content":
-      return historyKey(turnId, "message", fact.data.messageId ?? index);
+      return historyKey(turnId, "message", fact.id ?? index);
     case "thought":
-      return historyKey(turnId, "thought", fact.data.summaryId);
+      return historyKey(turnId, "thought", fact.id);
     case "turn-diff":
       return historyKey(turnId, "turn-diff");
     case "steer":
-      return historyKey(turnId, "steer", fact.data.steerId);
+      return historyKey(turnId, "steer", fact.id);
     case "agent-call":
-      return historyKey(turnId, "agent-call", fact.data.callId);
+      return historyKey(turnId, "agent-call", fact.id);
     default:
       return historyKey(turnId, fact.kind, index);
+  }
+}
+/** Whether `storedHistoryValue` gives the outlined fact a row, decided without its body. */
+export function storedFactShown(
+  fact: Omit<TurnEventOutline, "turnId">,
+  modern: boolean,
+): boolean {
+  switch (fact.kind) {
+    case "assistant-content":
+      return modern && fact.id !== undefined && fact.nested === undefined;
+    case "thought":
+      return fact.blank === undefined;
+    case "model":
+    case "agent-call-expired":
+    case undefined:
+      return false;
+    default:
+      return true;
   }
 }
 export function storedHistoryValue(
