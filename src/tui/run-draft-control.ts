@@ -34,10 +34,6 @@ export function createDraftControl(props: {
   ): void;
 }) {
   const run = props.run;
-  const interactiveStep = () => {
-    const current = run();
-    return current?.progress[current.position]?.kind === "interactive-agent";
-  };
   const [draft, setDraft] = createSignal("");
   type CapturedText = {
     readonly order: number;
@@ -222,7 +218,7 @@ export function createDraftControl(props: {
       !steerPending() &&
       !sendPending() &&
       !props.working() &&
-      (interactiveStep() ||
+      (interactiveStep(current) ||
         followUpOfferOf(current) !== undefined ||
         current.state !== "running");
     if (readyForDrops) {
@@ -247,7 +243,7 @@ export function createDraftControl(props: {
         )
           continue;
         if (
-          !interactiveStep() &&
+          !interactiveStep(current) &&
           followUpOfferOf(current) === undefined &&
           sameTarget(flight?.target ?? target, target)
         )
@@ -340,7 +336,13 @@ export function createDraftControl(props: {
   };
 }
 
-function followUpOfferOf(
+/** Whether the Run's current Step is an Interactive agent step. */
+export function interactiveStep(run: RunView | undefined): boolean {
+  return run?.progress[run.position]?.kind === "interactive-agent";
+}
+
+/** The follow-up Offer of an Agent Step waiting after an Interrupt (#354). */
+export function followUpOfferOf(
   run: RunView | undefined,
 ): SendFollowUpTurnOffer | undefined {
   return run?.actionOffers.find(

@@ -1,22 +1,11 @@
-import { screenHistoryPortion } from "./screen-text.js";
 import { createWorkspaceMentions } from "./workspace-mentions.js";
-import { createHistoryContentReaders } from "./run-history-content.js";
-import { createHistoryLayout } from "./run-history-layout.js";
-import { useLayoutObserver } from "./layout-observer.js";
 import { useRenderer } from "@opentui/solid";
-import {
-  historyWindow,
-  reconcileHistoryScroll,
-  scrollHistory,
-  type HistoryScroll,
-} from "./run-history-scroll.js";
 import { TextAttributes } from "@opentui/core";
 import {
   createEffect,
   createMemo,
   mapArray,
   createSignal,
-  untrack,
   For,
   Index,
   onCleanup,
@@ -43,7 +32,12 @@ import type {
   SendInteractiveTurnOffer,
 } from "../application/projection-port.js";
 import type { RendererKeyEvent, RendererPort } from "./renderer/renderer.js";
-import { createDraftControl } from "./run-draft-control.js";
+import {
+  createDraftControl,
+  followUpOfferOf,
+  interactiveStep,
+} from "./run-draft-control.js";
+import { createHistoryViewport } from "./run-history-viewport.js";
 import { useAppCommands, type AppCommand } from "./app-commands.js";
 import { clip } from "./clip.js";
 import { searchCommands } from "./command-search.js";
@@ -94,15 +88,8 @@ import {
   type PromptHint,
   type PromptModel,
 } from "./run-workbench-views.js";
-import { SCROLL_KEYS, type TimelineAction } from "./run-timeline.js";
-import {
-  buildTimelineRows,
-  historyLabel,
-  historyFileSpans,
-  rowContentReference,
-  reportedMetadata,
-  type TimelineRow,
-} from "./run-timeline-rows.js";
+import { SCROLL_KEYS } from "./run-timeline.js";
+import { reportedMetadata } from "./run-timeline-rows.js";
 import { wrap } from "./wrap.js";
 import { createModelChoiceControl } from "./run-model-choice.js";
 import { useExit } from "./vendor/exit.js";
@@ -388,7 +375,6 @@ export function RunWorkbench(props: {
     onLeave: props.onLeave,
   });
 
-  const [scroll, setScroll] = createSignal<HistoryScroll>({ mode: "live" });
   const [focus, setFocus] = createSignal<Focus>("bottom");
   const [detailsOpen, setDetailsOpen] = createSignal(false);
   const [selected, setSelected] = createSignal(0);
@@ -811,10 +797,6 @@ export function RunWorkbench(props: {
   const innerW = () => Math.max(1, fullW() - (wide() ? SIDEBAR_WIDTH + 1 : 0));
   // Output inspection and retained transcript reading have distinct lifetimes.
   // Only the details-opened transcript reader can request older pages.
-  const [inspectionRow, setInspectionRow] = createSignal<{
-    key: string;
-    file?: number;
-  }>();
   const inspection = createInspection({
     readHistoryContent: view.readHistoryContent,
     releaseHistoryRead: view.releaseHistoryRead,
@@ -907,10 +889,6 @@ export function RunWorkbench(props: {
 
   // --- the ordinary prompt's model ------------------------------------------
 
-  const interactiveStep = () => {
-    const current = run();
-    return current?.progress[current.position]?.kind === "interactive-agent";
-  };
   const promptPlaceholder = (
     prompt: Extract<TInteraction, { kind: "prompt" }>,
   ) => {
@@ -926,7 +904,7 @@ export function RunWorkbench(props: {
       default:
         return run()?.state === "halted"
           ? "⏸ The Run is halted — resume it from details"
-          : interactiveStep()
+          : interactiveStep(run())
             ? "◇ Your move — the agent is waiting for your next Turn"
             : "· The Workflow is running — nothing to send yet";
     }
@@ -944,7 +922,7 @@ export function RunWorkbench(props: {
     if (prompt.waiting !== undefined) return prompt.waiting;
     // After an interactive Step's Interrupt the agent waits on the person
     // (story 75), until a later Turn settles.
-    if (prompt.working === undefined && interactiveStep()) {
+    if (prompt.working === undefined && interactiveStep(run())) {
       const step = current?.progress[current.position]?.id;
       const settled = [...(current?.timeline ?? [])]
         .reverse()
@@ -1629,403 +1607,19 @@ export function RunWorkbench(props: {
     return key.name === "return" && invokeSlash();
   };
 
-  const timelineRows = createMemo<readonly TimelineRow[]>(() => {
-    const current = run();
-    if (current === undefined) return [];
-    return buildTimelineRows(current, histories());
+  const history = createHistoryViewport({
+    view,
+    run,
+    histories,
+    width: innerW,
+    height: viewportH,
+    reducedMotion: props.reducedMotion,
+    inspection,
+    covered: () =>
+      inspection.inspecting() !== undefined ||
+      transcript.reader() !== undefined,
+    blocked: () => dialog.stack.length > 0 || confirmation() !== undefined,
   });
-  const [expandedHistory, setExpandedHistory] = createSignal<
-    ReadonlySet<string>
-  >(new Set());
-  let expandedByKey: string | undefined;
-  function visibleHistoryKeys(): Set<string> {
-    const window = win();
-    const visible = new Set<string>();
-    let top = 0;
-    for (const row of timelineWrapped().rows) {
-      if (top >= window.top + window.visible) break;
-      if (top + row.height > window.top) visible.add(row.key);
-      top += row.height;
-    }
-    return visible;
-  }
-  // Visible long messages and Steers read their content; Thoughts, Entry prompts
-  // and command output read only while expanded. Each shows one bounded portion.
-  const rowContent = createHistoryContentReaders(view, 8);
-  const pathContent = createHistoryContentReaders(view, 16);
-  createEffect(() => {
-    const visible = visibleHistoryKeys();
-    const expanded = expandedHistory();
-    rowContent.sync(
-      inspection.inspecting() || transcript.reader()
-        ? []
-        : timelineRows().flatMap((row) => {
-            const reference = visible.has(row.key)
-              ? rowContentReference(row, expanded.has(row.key))
-              : undefined;
-            if (reference === undefined) return [];
-            // While following, a growing preview shows its newest portion.
-            const from =
-              row.preview && untrack(scroll).mode === "live"
-                ? ("last" as const)
-                : ("first" as const);
-            return [{ key: row.key, reference, from }];
-          }),
-    );
-  });
-  createEffect(() => {
-    const visible = visibleHistoryKeys();
-    pathContent.sync(
-      inspection.inspecting() || transcript.reader()
-        ? []
-        : timelineRows().flatMap((row) => {
-            const value = row.value;
-            if (
-              !visible.has(row.key) ||
-              (value?.kind !== "tool" && value?.kind !== "turn-diff")
-            )
-              return [];
-            return (value.files ?? []).flatMap((file, index) =>
-              file.pathContent
-                ? [{ key: `${row.key}:${index}`, reference: file.pathContent }]
-                : [],
-            );
-          }),
-    );
-  });
-  const displayTimelineRows = createMemo(() =>
-    timelineRows().map((row) => {
-      const value = row.value;
-      if (value?.kind === "tool" || value?.kind === "turn-diff") {
-        const files = value.files?.map((file, index) => {
-          const read = pathContent.get(`${row.key}:${index}`)?.state().read;
-          return read?.found && read.type === "history-text"
-            ? {
-                ...file,
-                path:
-                  screenHistoryPortion(read).text +
-                  (read.next ? " · more path, click to read" : ""),
-              }
-            : file;
-        });
-        const shown =
-          value.kind === "turn-diff"
-            ? { ...value, files: files ?? [] }
-            : { ...value, files };
-        row = {
-          ...row,
-          text: historyLabel(shown, row.preview ?? false),
-          fileSpans: historyFileSpans(shown, row.preview ?? false),
-        };
-      }
-      const reader = rowContent.get(row.key);
-      if (!reader) return row;
-      const state = reader.state();
-      const read = state.read;
-      row = {
-        ...row,
-        contentNotice: state.loading
-          ? "Loading retained content…"
-          : read?.found === false
-            ? `Error [${read.problem.code}] · click to retry`
-            : read?.found && read.next
-              ? row.output
-                ? "More retained output below"
-                : "More retained text below"
-              : undefined,
-      };
-      if (!read?.found || read.type !== "history-text") return row;
-      const portion = screenHistoryPortion(read).text;
-      if (row.output)
-        return { ...row, output: { ...row.output, text: portion } };
-      if (row.thought)
-        return { ...row, thought: { ...row.thought, content: portion } };
-      if (value?.kind === "entry-prompt")
-        return { ...row, value: { ...value, content: portion } };
-      if (value?.kind === "message" || value?.kind === "steer") {
-        const shown = { ...value, content: portion };
-        return {
-          ...row,
-          value: shown,
-          text: historyLabel(shown, row.preview ?? false),
-        };
-      }
-      return row;
-    }),
-  );
-  const [spinnerFrame, setSpinnerFrame] = createSignal(0);
-  const liveSpinnerShown = createMemo(() =>
-    timelineRows().some(
-      (row) =>
-        row.thought?.live ||
-        (row.value?.kind === "tool" && row.value.outcome.kind === "running"),
-    ),
-  );
-  createEffect(() => {
-    if (!liveSpinnerShown() || props.reducedMotion) return;
-    const timer = setInterval(
-      () => setSpinnerFrame((frame) => (frame + 1) % 4),
-      120,
-    );
-    timer.unref();
-    onCleanup(() => clearInterval(timer));
-  });
-  const spinnerMark = () =>
-    props.reducedMotion ? "[.]" : ["|", "/", "-", "\\"][spinnerFrame()];
-  createEffect(() => {
-    const retained = new Set(timelineRows().map((row) => row.key));
-    if (expandedByKey !== undefined && !retained.has(expandedByKey))
-      expandedByKey = undefined;
-    setExpandedHistory((previous) => {
-      const next = new Set([...previous].filter((key) => retained.has(key)));
-      return next.size === previous.size ? previous : next;
-    });
-  });
-  const layoutHistory = createHistoryLayout(
-    useLayoutObserver(),
-    props.reducedMotion,
-  );
-  const timelineWrapped = createMemo(() =>
-    layoutHistory(displayTimelineRows(), innerW(), expandedHistory()),
-  );
-  createEffect(
-    on(
-      () => timelineWrapped().rows,
-      (rows) => setScroll((current) => reconcileHistoryScroll(current, rows)),
-    ),
-  );
-  const win = () =>
-    historyWindow(scroll(), timelineWrapped().rows, viewportH());
-  const beginningVisible = () => win().top === 0;
-  const visibleLines = createMemo(() => {
-    const w = win();
-    const lines: {
-      text: string;
-      value?: TimelineRow["value"];
-      event?: TimelineRow["event"];
-      humanPanel: boolean;
-    }[] = [];
-    let top = 0;
-    for (const [rowIndex, row] of timelineWrapped().rows.entries()) {
-      if (top >= w.top + w.visible) break;
-      if (top + row.lines.length > w.top) {
-        const from = Math.max(0, w.top - top);
-        const to = Math.min(row.lines.length, w.top + w.visible - top);
-        for (let index = from; index < to; index++) {
-          const line = row.lines[index]!;
-          const content = index >= row.prefix;
-          const source = timelineRows()[rowIndex]!;
-          lines.push({
-            text: !props.reducedMotion
-              ? index === row.thoughtHeader
-                ? line.replace("Thinking |", `Thinking ${spinnerMark()}`)
-                : index === row.toolHeader
-                  ? line.replace("  | ", `  ${spinnerMark()} `)
-                  : line
-              : line,
-            value: content ? source.value : undefined,
-            event: content ? source.event : undefined,
-            humanPanel: content && row.humanPanel,
-          });
-        }
-      }
-      top += row.lines.length;
-    }
-    return lines;
-  });
-
-  const rowAtLine = (line: number): TimelineRow | undefined => {
-    let top = 0;
-    for (const [index, height] of timelineWrapped().heights.entries()) {
-      if (line >= top && line < top + height) return timelineRows()[index];
-      top += height;
-    }
-    return undefined;
-  };
-  const historyBlocked = (): boolean =>
-    dialog.stack.length > 0 ||
-    confirmation() !== undefined ||
-    inspection.inspecting() !== undefined ||
-    transcript.reader() !== undefined;
-  const openRowDetail = (row: TimelineRow | undefined): void => {
-    if (
-      row === undefined ||
-      (row.thought === undefined &&
-        row.inspection === undefined &&
-        row.output === undefined &&
-        row.value?.kind !== "entry-prompt") ||
-      historyBlocked()
-    )
-      return;
-    if (row.inspection !== undefined) {
-      expandedByKey = undefined;
-      setInspectionRow({ key: row.key });
-      inspection.open(row.inspection);
-      return;
-    }
-    setExpandedHistory((previous) => {
-      const next = new Set(previous);
-      if (next.has(row.key)) {
-        next.delete(row.key);
-        if (expandedByKey === row.key) expandedByKey = undefined;
-      } else next.add(row.key);
-      return next;
-    });
-  };
-  const toggleHistoryDetail = (): void => {
-    const remembered = timelineRows().find((row) => row.key === expandedByKey);
-    expandedByKey = undefined;
-    if (remembered !== undefined && expandedHistory().has(remembered.key)) {
-      openRowDetail(remembered);
-      return;
-    }
-    const window = win();
-    let bottom = timelineWrapped().heights.reduce(
-      (sum, height) => sum + height,
-      0,
-    );
-    for (let index = timelineWrapped().rows.length - 1; index >= 0; index--) {
-      const layout = timelineWrapped().rows[index]!;
-      const top = bottom - layout.height;
-      if (bottom <= window.top) break;
-      if (top < window.top + window.visible && layout.hasDetail) {
-        const row = timelineRows()[index]!;
-        openRowDetail(row);
-        if (row.inspection === undefined && expandedHistory().has(row.key))
-          expandedByKey = row.key;
-        return;
-      }
-      bottom = top;
-    }
-  };
-  createEffect(() => {
-    const key = inspectionRow();
-    if (key === undefined || !inspection.inspecting()) return;
-    const row = timelineRows().find((row) => row.key === key.key);
-    const value = row?.value;
-    const path =
-      (value?.kind === "tool" || value?.kind === "turn-diff") &&
-      key.file !== undefined
-        ? value.files?.[key.file]?.pathContent
-        : undefined;
-    inspection.reconcile(
-      key.file !== undefined
-        ? path
-          ? { label: "Supplied file path", historyContent: path }
-          : undefined
-        : (row?.inspection ??
-            (row?.value?.kind === "tool" && row.value.detail
-              ? {
-                  label: "Tool detail",
-                  historyContent: row.value.detail,
-                  historyFiles: row.value.filesDetail,
-                }
-              : undefined)),
-    );
-  });
-  const clickTimelineLine = (index: number): void => {
-    const line = win().top + index;
-    const row = rowAtLine(line);
-    // Only the drawn Error notice retries; the rest of the row still toggles.
-    const contentRead = row === undefined ? undefined : rowContent.get(row.key);
-    if (contentRead?.state().read?.found === false && !historyBlocked()) {
-      let rowTop = 0;
-      for (const layout of timelineWrapped().rows) {
-        if (layout.key === row?.key) {
-          if (layout.noticeFrom >= 0 && line - rowTop >= layout.noticeFrom) {
-            contentRead.retry();
-            return;
-          }
-          break;
-        }
-        rowTop += layout.height;
-      }
-    }
-    if (row?.value?.kind === "tool" || row?.value?.kind === "turn-diff") {
-      const layout = timelineWrapped().rows.find(
-        (layout) => layout.key === row.key,
-      );
-      let rowTop = 0;
-      for (const candidate of timelineWrapped().rows) {
-        if (candidate.key === row.key) break;
-        rowTop += candidate.height;
-      }
-      const localLine = line - rowTop;
-      const fileIndex =
-        layout?.fileTargets.find(
-          (target) => localLine >= target.from && localLine <= target.to,
-        )?.index ?? -1;
-      const file = row.value.files?.[fileIndex];
-      if (file?.pathContent) {
-        setInspectionRow({ key: row.key, file: fileIndex });
-        inspection.open({
-          label: "Supplied file path",
-          historyContent: file.pathContent,
-        });
-        return;
-      }
-    }
-    if (row?.value?.kind === "tool" && row.value.detail && row.output) {
-      const layouts = timelineWrapped().rows;
-      const i = layouts.findIndex((layout) => layout.key === row.key);
-      const top = layouts
-        .slice(0, i)
-        .reduce((sum, layout) => sum + layout.height, 0);
-      if (line === top + (layouts[i]?.prefix ?? 0)) {
-        setInspectionRow({ key: row.key });
-        inspection.open({
-          label: "Tool detail",
-          historyContent: row.value.detail,
-          historyFiles: row.value.filesDetail,
-        });
-        return;
-      }
-    }
-    openRowDetail(row);
-  };
-  const scrollBy = (action: TimelineAction) => {
-    const down = action === "down" || action === "pageDown";
-    if (down || action === "up" || action === "pageUp") {
-      // A visible row whose drawn edge is in view and has another portion pages in
-      // place, anchored at its top. A page key can jump past an edge, so the edge
-      // need only be visible; loading and failed rows scroll as usual.
-      const shown = win();
-      const bottom = shown.top + shown.visible;
-      const layouts = timelineWrapped().rows;
-      const spans: { key: string; top: number; end: number }[] = [];
-      let top = 0;
-      for (const layout of layouts) {
-        const end = top + layout.height;
-        if (end > shown.top && top < bottom)
-          spans.push({ key: layout.key, top, end });
-        top = end;
-      }
-      if (!down) spans.reverse();
-      for (const span of spans) {
-        const reader = rowContent.get(span.key);
-        const read = reader?.state().read;
-        const edge = down ? span.end <= bottom : span.top >= shown.top;
-        if (
-          reader &&
-          edge &&
-          read?.found &&
-          read[down ? "next" : "previous"] !== undefined &&
-          reader.move(down ? "next" : "previous")
-        ) {
-          setScroll({
-            mode: "paused",
-            id: span.key,
-            offset: 0,
-            prior: layouts.map((row) => row.key),
-          });
-          return;
-        }
-      }
-    }
-    setScroll((prev) =>
-      scrollHistory(prev, action, timelineWrapped().rows, viewportH()),
-    );
-  };
 
   const moveSelection = (delta: number) => {
     const count = openables().length;
@@ -2041,7 +1635,7 @@ export function RunWorkbench(props: {
       setSelectedResource(target);
       if ("transcript" in target) transcript.open(target);
       else {
-        setInspectionRow(undefined);
+        history.detachInspection();
         inspection.open(target);
       }
     }
@@ -2207,7 +1801,7 @@ export function RunWorkbench(props: {
           ? SCROLL_KEYS[name]
           : undefined;
       if (action !== undefined) {
-        scrollBy(action);
+        history.scrollBy(action);
         return;
       }
     }
@@ -2216,7 +1810,7 @@ export function RunWorkbench(props: {
       return;
     }
     if (name === "o" && key.ctrl) {
-      toggleHistoryDetail();
+      history.toggleDetail();
       return;
     }
     // A request or gate owns Esc and every printable key (A33): its private control
@@ -2266,18 +1860,8 @@ export function RunWorkbench(props: {
     const disconnected = historyFollowers().filter(
       ({ followed }) => followed.freshness().kind === "disconnected",
     );
-    if (disconnected.length > 0) setScroll({ mode: "live" });
+    if (disconnected.length > 0) history.scrollBy("latest");
     for (const { followed } of disconnected) followed.reconnect();
-  };
-
-  const timelineStatus = () => {
-    const activity = win();
-    if (activity.atLive) return "";
-    return activity.newActivity > 0
-      ? innerW() < 60
-        ? `  ▼ ${activity.newActivity} · Jump to latest`
-        : `  ▼ ${activity.newActivity} ${activity.newActivity === 1 ? "new activity" : "new activities"} · Jump to latest · alt+end`
-      : "  Paused · alt+end latest";
   };
 
   return (
@@ -2299,7 +1883,8 @@ export function RunWorkbench(props: {
         )
           return;
         const direction = event.scroll?.direction;
-        if (direction === "up" || direction === "down") scrollBy(direction);
+        if (direction === "up" || direction === "down")
+          history.scrollBy(direction);
       }}
       overflow="hidden"
       backgroundColor={theme.background}
@@ -2469,16 +2054,16 @@ export function RunWorkbench(props: {
                   overflow="hidden"
                 >
                   <Show
-                    when={visibleLines().length > 0}
+                    when={history.lines().length > 0}
                     fallback={
                       <text fg={theme.textMuted} flexShrink={0}>
-                        {beginningVisible()
+                        {history.atBeginning()
                           ? "  Beginning of Run history · (no activity yet)"
                           : "  (no activity yet)"}
                       </text>
                     }
                   >
-                    <Index each={visibleLines()}>
+                    <Index each={history.lines()}>
                       {(line, index) => (
                         <HistoryLine
                           theme={theme}
@@ -2487,14 +2072,14 @@ export function RunWorkbench(props: {
                           event={line().event}
                           humanPanel={line().humanPanel}
                           width={innerW()}
-                          onMouseDown={() => clickTimelineLine(index)}
+                          onMouseDown={() => history.click(index)}
                         />
                       )}
                     </Index>
                   </Show>
                 </box>
                 <text fg={theme.textMuted} flexShrink={0} wrapMode="none">
-                  {clip(timelineStatus(), innerW())}
+                  {clip(history.status(), innerW())}
                 </text>
                 <For each={conversationMetadata()}>
                   {(line) => (
@@ -2631,16 +2216,6 @@ function positionText(run: RunView): string {
 
 function formatConfirmedAt(confirmedAt: string): string {
   return confirmedAt.replace("T", " ").replace(".000Z", "Z");
-}
-
-/** The follow-up Offer of an Agent Step waiting after an Interrupt (#354). */
-function followUpOfferOf(
-  run: RunView | undefined,
-): SendFollowUpTurnOffer | undefined {
-  return run?.actionOffers.find(
-    (offer): offer is SendFollowUpTurnOffer =>
-      offer.action === "send-follow-up-turn",
-  );
 }
 
 function NotFoundView(props: {

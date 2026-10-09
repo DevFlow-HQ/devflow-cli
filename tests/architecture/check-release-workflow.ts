@@ -239,6 +239,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-headless-output-parity",
   "m10-followup-bounded-history-cost",
   "m10-followup-agent-call-expiry",
+  "m10-followup-history-viewport",
 ] as const;
 
 function testFilesIn(script: string): string[] {

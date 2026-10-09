@@ -2,7 +2,8 @@ import { createContext, useContext, type ParentProps } from "solid-js";
 
 /** Measurement hook for the presentation layouts, including offscreen rows. */
 export type LayoutObserver = (event: {
-  readonly kind: "history" | "transcript" | "inspection";
+  /** `history-row-at` counts row-at-line lookups; its `id` is the line. */
+  readonly kind: "history" | "transcript" | "inspection" | "history-row-at";
   readonly id: string;
   readonly width: number;
 }) => void;

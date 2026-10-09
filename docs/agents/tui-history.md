@@ -6,6 +6,8 @@ keep history layout caching and reader roots.
 
 ## Rows and scrolling
 
+- The history viewport (`run-history-viewport.ts`, #515) owns content readers, displayed rows, the spinner, the window, clicks, Ctrl+O and paging;
+  the Workbench keeps focus and key dispatch and asks it. Layouts report each row's `top`; `at(line)` is the one row-at-line lookup.
 - Workbench history (#412, #441) consumes keyed complete Session pages and complete preview values. `mapArray` retains only the current Session
   and a distinct live Turn's Session; ordinary Run updates never reopen them. Prior Turn starts/settlements remain Workflow facts, not older conversation.
   `run-content-anchor.ts` shares keyed content-relative offsets with the transcript; each reader keeps its own opaque ids.

@@ -286,6 +286,30 @@ export function createHistoryLayout(
       }
       return layout;
     });
-    return { rows: layouts, heights: layouts.map((row) => row.lines.length) };
+    let top = 0;
+    const placed = layouts.map((layout) => {
+      const row = { ...layout, top };
+      top += layout.height;
+      return row;
+    });
+    return {
+      rows: placed,
+      /** The row drawn at history line `line`, and the line within it. */
+      at(line: number) {
+        // The first row ending below the line; rows are contiguous from line 0.
+        let low = 0;
+        let high = placed.length;
+        while (low < high) {
+          const mid = (low + high) >> 1;
+          if (placed[mid]!.top + placed[mid]!.height > line) high = mid;
+          else low = mid + 1;
+        }
+        const row = placed[low];
+        observe({ kind: "history-row-at", id: String(line), width });
+        return row === undefined || line < row.top
+          ? undefined
+          : { index: low, row, line: line - row.top };
+      },
+    };
   };
 }

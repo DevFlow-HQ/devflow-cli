@@ -26,6 +26,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   never a search for matching text.
 - History layouts (#441) retain row/value/width/expansion work, release evicted rows, and window visible lines; transcript prepends re-layout only new entries
   and changed divider junctions. `App.observeLayout` measures actual cache misses through the Renderer fixture; height-only resize must reuse the layout.
+  Its `history-row-at` events count row-at-line lookups: a click resolves its row once (#515).
 - Workbench Step-ending Offers expose Run and Step ids, not an Attempt id. Resume evidence is ownerPid and acknowledgement; Interrupt exposes turnId
   (#389). Confirmation lifecycle rules live in [Workbench interaction](../../docs/agents/tui-workbench.md).
 - `follow.ts` alone owns Projection observer health and reconnect ordering. A terminal update preserves last-known state as `disconnected`; explicit reconnect
