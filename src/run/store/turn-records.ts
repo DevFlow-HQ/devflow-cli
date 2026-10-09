@@ -578,6 +578,7 @@ export function readTurns(db: SQLiteBunDatabase): readonly TurnRecord[] {
 
 export function readTurnEvents(
   db: SQLiteBunDatabase,
+  index?: number,
 ): readonly TurnEventRecord[] {
   return db
     .select({
@@ -594,6 +595,8 @@ export function readTurnEvents(
       ),
     )
     .orderBy(asc(turnEvents.seq))
+    .limit(index === undefined ? -1 : 1)
+    .offset(index ?? 0)
     .all()
     .map((row): TurnEventRecord => {
       const parsed = turnEventRow.parse(row);

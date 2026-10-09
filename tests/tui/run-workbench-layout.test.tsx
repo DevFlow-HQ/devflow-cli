@@ -225,7 +225,7 @@ test("m10-audit-row-layout-once: the 150th older transcript page lays out only 2
   assert.deepEqual(laidOut, [], "retained entries reuse their prior width");
 });
 
-test("m10-audit-row-layout-once: a supplied 2 MB diff lays out once at each width and keeps complete content through modal keys and resize", async () => {
+test("m10-audit-row-layout-once: a supplied 2 MB diff reuses retained widths, releases evicted layouts and keeps complete content through modal keys and resize", async () => {
   const layouts: number[] = [];
   const wb = await mountWorkbench(
     sessionRun(),
@@ -276,14 +276,23 @@ test("m10-audit-row-layout-once: a supplied 2 MB diff lays out once at each widt
     await wb.t.renderOnce();
     assert.equal(layouts.length, width === 40 ? 2 : width === 120 ? 3 : 4);
   }
-  resizeWorkbench(wb.t, wb.renderer, 100, 26);
+  resizeWorkbench(wb.t, wb.renderer, 120, 26);
   await wb.t.renderOnce();
   await press(wb.t, wb.renderer, "end");
   assert.match(wb.t.captureCharFrame(), /DIFF_LAST/);
   assert.equal(
     layouts.length,
     4,
-    "returning to a retained width reuses the 2 MB layout",
+    "returning to one of the two retained widths reuses its layout",
+  );
+  resizeWorkbench(wb.t, wb.renderer, 100, 26);
+  await wb.t.renderOnce();
+  await press(wb.t, wb.renderer, "end");
+  assert.match(wb.t.captureCharFrame(), /DIFF_LAST/);
+  assert.equal(
+    layouts.length,
+    5,
+    "the evicted width is rebuilt instead of retaining every prior layout",
   );
   await press(wb.t, wb.renderer, "escape");
   assert.doesNotMatch(wb.t.captureCharFrame(), /DIFF_FIRST|DIFF_LAST/);

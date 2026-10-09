@@ -18,12 +18,19 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
   Projection — a launched Run reads `running` from admission.
 - Every opened Projection owns one `UpdateStream` (#306, #488). Session history retains one latest unread complete page and one later preview per
   retained row; a new page replaces all unread history state, and a preview replaces its same-row predecessor and drops evicted previews.
-  Other families remain FIFO, bounded at 1,000 unread updates and 8 Mi payload units; existing oversized-content handling remains for history until
-  #489/#490 supply content reads and encoded accounting. Overflow ends only that subscription through `end("observer-lagged")`, releasing backlog
+  Other families remain FIFO, bounded at 1,000 unread updates and 8 Mi payload units; tool/diff values carry bounded previews and exact-version Resources
+  (#489). Remaining categories retain existing handling until #490
+  adds their consumers and encoded accounting. Overflow ends only that subscription through `end("observer-lagged")`, releasing backlog
   and delivering one `closed` ahead of it. Producers never wait; other observers and the Run continue, and reopen reads current state.
 - `SubscriptionLifecycle` privately creates every stream, including delegated and idle views (#310); termination unregisters its producer and drops retained delivery
   state. Shutdown ends observation before owner cleanup and awaiting work; [run-control](run-control.md) owns its claim rules.
   Keep empty Run observer Sets: live fan-out retains their identity. Later opens remain supported; shutdown memoizes in-flight cleanup only.
+- History content (#489) reads at most 4,096 UTF-16 units or eight normalized items, with at most 32 active traversals per Application.
+  Continuations stay on one exact version. Stored references keep append-only event coordinates, not cached bodies; release drops a traversal's body.
+  Live versions survive only current windows and active traversals. Closing one observer releases only its own reads.
+  Tool previews cap each string at 512 units, each visible path at 128, and file names at the existing ten; full values remain readable.
+  Trusted TUI composition supplies text edge analysis privately; read callers cannot receive a source iterator. Raw content stays exact.
+  #490 owns the remaining category consumers and the universal encoded 8 MiB guarantee.
 - `session-history` (#412–#417) bounds messages/tools/Thoughts/Turn diffs together at 200 with one 50 ms budget for every pending row.
   Final output replaces previews; empty clears, absent retains incomplete tails. Partials invalidate previews without settling tools; last observer cancels the timer.
   Transcript Resources retain separate entry ids across reads/prepend, excluded from headless; pages still hold 20 entries.

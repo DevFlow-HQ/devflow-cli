@@ -104,6 +104,10 @@ function runViewOf(run: RunView): RunWorkbenchView {
       }),
       reconnect() {},
     }),
+    readHistoryContent() {
+      throw new Error("not used");
+    },
+    releaseHistoryRead() {},
     readResource: () => ({
       found: false,
       problem: {
@@ -164,6 +168,10 @@ function disappearingRunView(run: RunView): {
         }),
         reconnect() {},
       }),
+      readHistoryContent() {
+        throw new Error("not used");
+      },
+      releaseHistoryRead() {},
       readResource: base.readResource,
       readTranscript: base.readTranscript,
       answer: base.answer,
@@ -226,6 +234,10 @@ function missingRunView(run: RunView): RunWorkbenchView {
       }),
       reconnect() {},
     }),
+    readHistoryContent() {
+      throw new Error("not used");
+    },
+    releaseHistoryRead() {},
     readResource: base.readResource,
     readTranscript: base.readTranscript,
     answer: base.answer,

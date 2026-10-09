@@ -12,6 +12,7 @@ export interface HistoryFact {
   readonly order: number;
   source: "stored" | "preview";
   value: SessionHistoryValue;
+  eventIndex?: number;
 }
 export function historyKey(
   turnId: string,

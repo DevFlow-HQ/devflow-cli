@@ -6,6 +6,7 @@ import {
   canonicalizeWorkspacePath,
   createApplication,
   type Application,
+  type ApplicationDependencies,
   type PrepareRunInteractiveStep,
   type RunExecution,
   type RunInteractiveStep,
@@ -116,6 +117,7 @@ interface LogSinkOverrides {
  *  passes none: the home, cwd, engine version, and host platform come from the
  *  process. */
 export interface WiringOverrides {
+  readonly historyTextEdges?: ApplicationDependencies["historyTextEdges"];
   readonly secantHome?: string;
   /** Inject a filesystem restriction failure at invocation start. */
   readonly chmodHome?: (path: string, mode: number) => void;
@@ -332,6 +334,7 @@ export function wireApplication(
     );
     lifetime.harnessRegistry = harnessRegistry;
     const application = createApplication({
+      historyTextEdges: overrides.historyTextEdges,
       catalog,
       startupNotices,
       launchWorkspacePath,

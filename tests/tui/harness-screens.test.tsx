@@ -176,6 +176,10 @@ function noRun(): RunWorkbenchView {
     },
     openHistory: unused,
     openRun: unused,
+    readHistoryContent() {
+      throw new Error("not used");
+    },
+    releaseHistoryRead() {},
     readResource: unused,
     readTranscript: unused,
     answer: unused,

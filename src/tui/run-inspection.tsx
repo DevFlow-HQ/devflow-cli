@@ -1,9 +1,16 @@
+import { createHistoryContentReader } from "./run-history-content.js";
 import { useLayoutObserver } from "./layout-observer.js";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, createSignal, For, type Accessor } from "solid-js";
-import { screenText, type ScreenedText } from "./screen-text.js";
+import {
+  screenText,
+  screenHistoryPortion,
+  type ScreenedText,
+} from "./screen-text.js";
 import type {
   DiagnosticReference,
+  HistoryTextReference,
+  ProjectionPort,
   Problem,
   ResourceRead,
   ResourceReference,
@@ -29,6 +36,13 @@ type Theme = ReturnType<typeof useTheme>["theme"];
  *  open real evidence. Exactly one source is set (the union makes that explicit
  *  at the Workbench seam). */
 export type Openable =
+  | {
+      readonly label: string;
+      readonly historyContent: HistoryTextReference;
+      readonly historyFiles?: HistoryTextReference;
+      readonly content?: never;
+      readonly reference?: never;
+    }
   | {
       readonly label: string;
       readonly reference: ResourceReference | DiagnosticReference;
@@ -63,6 +77,7 @@ export interface InspectionController {
   /** Resolve the reference or captured content, strip
    *  escapes, bound the lines. */
   open(target: Openable): void;
+  reconcile(target: Openable | undefined): void;
   /** Handle a key: `ignored` while closed, `quit` for the footer's `q` (#392),
    *  else `consumed`, so every other key stays inside the overlay. */
   handleKey(name: string): InspectionKey;
@@ -71,6 +86,7 @@ export interface InspectionController {
   readonly lines: Accessor<readonly string[]>;
   /** The scrolled window over `lines`. */
   readonly window: Accessor<ReturnType<typeof timelineWindow>>;
+  readonly footer: Accessor<string>;
 }
 
 /** The Workbench's inspection overlay controller. `readResource` resolves an
@@ -81,16 +97,43 @@ export function createInspection(deps: {
   readResource: (
     reference: ResourceReference | DiagnosticReference,
   ) => ResourceRead;
+  readHistoryContent: ProjectionPort["readHistoryContent"];
+  releaseHistoryRead: ProjectionPort["releaseHistoryRead"];
   interiorH: Accessor<number>;
   width: Accessor<number>;
 }): InspectionController {
   const observe = useLayoutObserver();
+  const content = createHistoryContentReader(deps);
+  const [historyTarget, setHistoryTarget] =
+    createSignal<HistoryTextReference>();
+  let patchTarget: HistoryTextReference | undefined;
+  let filesTarget: HistoryTextReference | undefined;
+  let showingFiles = false;
   const [inspecting, setInspecting] = createSignal<
     BlobInspection | undefined
   >();
   const [scroll, setScroll] = createSignal<TimelineScroll>(AT_TOP);
 
   const open = (target: Openable): void => {
+    content.close();
+    setHistoryTarget(undefined);
+    patchTarget = undefined;
+    filesTarget = undefined;
+    showingFiles = false;
+    if ("historyContent" in target) {
+      patchTarget = target.historyContent;
+      filesTarget = target.historyFiles;
+      setHistoryTarget(target.historyContent);
+      setInspecting({
+        kind: "blob",
+        title: target.label,
+        lines: [],
+        truncated: false,
+      });
+      setScroll(AT_TOP);
+      content.open(target.historyContent);
+      return;
+    }
     const read =
       target.content !== undefined
         ? ({ found: true, type: "text", content: target.content } as const)
@@ -125,6 +168,21 @@ export function createInspection(deps: {
   const logicalLines = (): readonly ScreenedText[] => {
     const current = inspecting();
     if (current === undefined) return [];
+    if (historyTarget() !== undefined) {
+      const loaded = content.state();
+      if (loaded.loading && !loaded.read)
+        return [screenText("Loading retained content…")];
+      if (loaded.read?.found === false)
+        return [
+          screenText(
+            `Error [${loaded.read.problem.code}]: ${loaded.read.problem.explanation}`,
+          ),
+          screenText(`${loaded.read.problem.remediation} · r retry`),
+        ];
+      if (loaded.read?.found && loaded.read.type === "history-text")
+        return [screenHistoryPortion(loaded.read)];
+      return [];
+    }
     if (current.problem !== undefined) {
       return [
         screenText(
@@ -150,6 +208,7 @@ export function createInspection(deps: {
         if (current !== undefined)
           observe({ kind: "inspection", id: current.title, width });
         layout = wrapScreenedRows(logical, width);
+        if (widths.size >= 2) widths.delete(widths.keys().next().value!);
         widths.set(width, layout);
       }
       return layout;
@@ -165,21 +224,84 @@ export function createInspection(deps: {
     const current = inspecting();
     if (current === undefined) return "ignored";
     if (name === "escape") {
+      content.close();
+      setHistoryTarget(undefined);
       setInspecting(undefined);
       return "consumed";
     }
     // The footer advertises `q quit`; the overlay stays open so a declined quit
     // confirmation returns to the same view.
     if (name === "q") return "quit";
+    if (historyTarget() && name === "f" && filesTarget && patchTarget) {
+      showingFiles = !showingFiles;
+      const reference = showingFiles ? filesTarget : patchTarget;
+      setHistoryTarget(reference);
+      content.open(reference);
+      setScroll(AT_TOP);
+      return "consumed";
+    }
+    if (historyTarget() && name === "r") {
+      content.retry();
+      return "consumed";
+    }
     const action = SCROLL_KEYS[name];
     if (action === undefined) return "consumed";
+    if (historyTarget() && (action === "latest" || action === "top")) {
+      if (content.move(action === "latest" ? "last" : "first")) {
+        setScroll(action === "latest" ? { mode: "live" } : AT_TOP);
+        return "consumed";
+      }
+    }
+    const before = window();
+    if (
+      historyTarget() &&
+      (((action === "down" || action === "pageDown") &&
+        before.top + before.visible >= lines().length) ||
+        ((action === "up" || action === "pageUp") && before.top === 0))
+    ) {
+      if (
+        content.move(
+          action === "up" || action === "pageUp" ? "previous" : "next",
+        )
+      ) {
+        setScroll(AT_TOP);
+        return "consumed";
+      }
+    }
     setScroll((prev) =>
       scrollTimeline(prev, action, wrapped().heights, viewportH()),
     );
     return "consumed";
   };
 
-  return { inspecting, open, handleKey, lines, window };
+  function reconcile(target: Openable | undefined): void {
+    const previous = historyTarget();
+    if (previous === undefined) return;
+    if (target === undefined || !("historyContent" in target)) {
+      content.close();
+      setHistoryTarget(undefined);
+      setInspecting(undefined);
+      return;
+    }
+    patchTarget = target.historyContent;
+    filesTarget = target.historyFiles;
+    const reference = showingFiles && filesTarget ? filesTarget : patchTarget;
+    if (reference.id === previous.id) return;
+    setHistoryTarget(reference);
+    content.open(reference);
+  }
+  return {
+    inspecting,
+    open,
+    reconcile,
+    handleKey,
+    lines,
+    window,
+    footer: () =>
+      historyTarget()
+        ? `↑/↓ scroll · home/end · ${filesTarget ? "f files · " : ""}r retry · esc close · q quit`
+        : "↑/↓ scroll · esc close · q quit",
+  };
 }
 
 export function InspectionView(props: {
@@ -187,6 +309,7 @@ export function InspectionView(props: {
   lines: Accessor<readonly string[]>;
   window: Accessor<ReturnType<typeof timelineWindow>>;
   width: Accessor<number>;
+  footer: Accessor<string>;
   theme: Theme;
 }) {
   const { theme } = props;
@@ -195,7 +318,7 @@ export function InspectionView(props: {
     const win = props.window();
     return props.lines().slice(win.top, win.top + win.visible);
   };
-  const footer = () => "↑/↓ scroll · esc close · q quit";
+  const footer = props.footer;
   return (
     <box flexDirection="column" flexGrow={1} overflow="hidden">
       <text fg={theme.text} attributes={TextAttributes.BOLD} flexShrink={0}>

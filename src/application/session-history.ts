@@ -1,4 +1,6 @@
 import { compareConversationOrder } from "./conversation-order.js";
+import type { HistoryTextEdgeAnalyser } from "./application.js";
+import { createHistoryContent } from "./history-content.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { readTurnFact } from "../run/store/store.js";
@@ -93,6 +95,12 @@ function lowerBound(facts: readonly HistoryFact[], fact: HistoryFact): number {
 /** Stored facts are indexed once. Event updates touch one item; projections visit only the newest window. */
 export function createSessionHistory(deps: {
   readonly read: (runId: string) => HistoryRead;
+  readonly readEvent: (
+    runId: string,
+    index: number,
+  ) => TurnEventRecord | Problem;
+  readonly available: (runId: string) => true | Problem;
+  readonly textEdges?: HistoryTextEdgeAnalyser;
   readonly observedOwner: (runId: string) => object | undefined;
   readonly subscriptions: SubscriptionLifecycle;
   readonly schedule: (callback: () => void, delayMs: number) => () => void;
@@ -100,6 +108,35 @@ export function createSessionHistory(deps: {
   const runs = new Map<string, RunHistory>();
   const observers = new Set<Observer>();
   let stopped = false;
+  const content = createHistoryContent({
+    available: deps.available,
+    textEdges: deps.textEdges,
+    readStored(runId, index) {
+      const event = deps.readEvent(runId, index);
+      if ("code" in event) return event;
+      const fact = readTurnFact(event);
+      const turn = runs.get(runId)?.turns.get(event.turnId)?.record;
+      const value =
+        fact && turn ? storedHistoryValue(fact, turn, true) : undefined;
+      return value?.kind === "tool" || value?.kind === "turn-diff"
+        ? value
+        : {
+            code: "history-content-missing",
+            explanation: "The retained history fact is unavailable.",
+            remediation: "Retry the current row.",
+            possibleEffects: "none",
+          };
+    },
+  });
+  function pruneContent(): void {
+    content.prune(
+      [...runs.values()].flatMap((run) =>
+        [...run.pages.values()].flatMap((page) =>
+          page.slice(-200).map((fact) => fact.value),
+        ),
+      ),
+    );
+  }
   function put(run: RunHistory, fact: HistoryFact): void {
     const previous = run.facts.get(fact.key);
     if (
@@ -113,12 +150,15 @@ export function createSessionHistory(deps: {
       previous.turn = fact.turn;
       previous.source = fact.source;
       previous.value = fact.value;
+      previous.eventIndex = fact.eventIndex ?? previous.eventIndex;
       return;
     }
     const tail = page.at(-1);
     if (tail === undefined || compare(tail, fact) < 0) page.push(fact);
     else page.splice(lowerBound(page, fact), 0, fact);
     run.facts.set(fact.key, fact);
+    for (const older of page.slice(0, Math.max(0, page.length - 200)))
+      if (older.source === "preview") remove(run, older.key);
   }
   function remove(run: RunHistory, key: string): void {
     const fact = run.facts.get(key);
@@ -175,7 +215,14 @@ export function createSessionHistory(deps: {
       fact.data.outcome.kind === "running"
     )
       return;
-    put(run, { key, turn: turn.record, order, source: "stored", value });
+    put(run, {
+      key,
+      turn: turn.record,
+      order,
+      source: "stored",
+      value,
+      eventIndex: index,
+    });
     run.pending.delete(key);
   }
   function putResult(run: RunHistory, turn: IndexedTurn): void {
@@ -317,7 +364,10 @@ export function createSessionHistory(deps: {
         };
         observer.identities.set(fact.key, identity);
       }
-      return historyRow(fact, identity);
+      return {
+        ...historyRow(fact, identity),
+        value: content.project(observer.runId, fact, observer.prefix),
+      };
     });
     return {
       ...base,
@@ -376,6 +426,7 @@ export function createSessionHistory(deps: {
         observer.last = page;
         if (changed) observer.updates.push({ kind: "durable", snapshot: page });
       }
+    pruneContent();
     const run = runs.get(runId);
     if (run !== undefined) cancelIdle(run);
   }
@@ -447,6 +498,7 @@ export function createSessionHistory(deps: {
             }
             observer.last = page;
           }
+        pruneContent();
       }, 50);
   }
   return {
@@ -458,6 +510,8 @@ export function createSessionHistory(deps: {
       const updates = deps.subscriptions.open<SessionHistorySnapshot>(
         () => () => {
           observers.delete(observer);
+          content.closeScope(observer.prefix);
+          pruneContent();
           if (![...observers].some((current) => current.runId === runId)) {
             const run = runs.get(runId);
             run?.cancel?.();
@@ -625,6 +679,7 @@ export function createSessionHistory(deps: {
             turn: turn.record,
             order: turn.orders.get(key)!,
             source: "stored",
+            eventIndex: row?.eventIndex,
             value,
           });
         run.pending.delete(key);
@@ -632,15 +687,22 @@ export function createSessionHistory(deps: {
       putResult(run, turn);
       cancelIdle(run);
     },
+    readContent: content.read,
+    releaseContent(readId: string): void {
+      content.release(readId);
+      pruneContent();
+    },
     publish,
     closed(runId: string): void {
       for (const observer of observers)
         if (observer.runId === runId) observer.updates.end("subject-gone");
       runs.get(runId)?.cancel?.();
       runs.delete(runId);
+      content.closeRun(runId, true);
     },
     shutdown(): void {
       stopped = true;
+      content.shutdown();
       for (const run of runs.values()) {
         run.cancel?.();
         run.cancel = undefined;

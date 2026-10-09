@@ -15,6 +15,7 @@ export interface TimelineRow {
   readonly key: string;
   readonly text: string;
   readonly value?: SessionHistoryValue;
+  readonly preview?: boolean;
   readonly event?: RunTimelineEvent["event"];
   readonly at?: string;
   readonly placementRank?: number;
@@ -24,6 +25,8 @@ export interface TimelineRow {
   readonly iterationEnd?: true;
   readonly oneLine?: boolean;
   readonly inspection?: Openable;
+  readonly contentNotice?: string;
+  readonly fileSpans?: readonly { index: number; start: number; end: number }[];
   readonly output?: NonNullable<
     Extract<SessionHistoryValue, { kind: "tool" }>["output"]
   > & { readonly live: boolean };
@@ -244,7 +247,9 @@ function historyTimelineRows(
       session,
       sessionName: name,
       value: row.value,
+      preview: row.source === "preview",
       text: historyLabel(row.value, row.source === "preview"),
+      fileSpans: historyFileSpans(row.value, row.source === "preview"),
       inspection: fileInspection(row.value),
       ...(row.value.kind === "agent-call" ? { oneLine: true } : {}),
       ...(row.value.kind === "tool" && row.value.output !== undefined
@@ -259,6 +264,16 @@ function historyTimelineRows(
 }
 /** Formats only supplied patch data. Requested inputs never create an inspection. */
 function fileInspection(value: SessionHistoryValue): Openable | undefined {
+  if (
+    (value.kind === "turn-diff" ||
+      (value.kind === "tool" && value.output === undefined)) &&
+    value.detail !== undefined
+  )
+    return {
+      label: value.kind === "turn-diff" ? "Turn diff" : "Supplied call detail",
+      historyContent: value.detail,
+      historyFiles: value.filesDetail,
+    };
   if (value.kind === "turn-diff")
     return { label: "Turn diff", content: value.content, format: "diff" };
   if (
@@ -299,10 +314,13 @@ function attachDividers(rows: readonly TimelineRow[]): TimelineRow[] {
   });
 }
 
-function historyLabel(value: SessionHistoryValue, preview: boolean): string {
+export function historyLabel(
+  value: SessionHistoryValue,
+  preview: boolean,
+): string {
   switch (value.kind) {
     case "turn-diff":
-      return `Turn diff${preview ? " · updating" : ""}${fileRemainder(value.files)}\n${fileLabels(value.files)}`;
+      return fileLead(value, preview) + fileLabels(value.files);
     case "thought": {
       const label = oneLine(
         value.content
@@ -321,14 +339,13 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
     case "agent-call":
       return `Agent call ${value.call} · ${value.reply.replaceAll("-", " ")}${value.refusal === undefined ? "" : ` · ${value.refusal}`} · ${oneLine(value.reason)} · ${value.disposition}`;
     case "tool": {
-      const label = value.outcome.kind;
       const detail =
         value.outcome.kind === "failed"
           ? value.outcome.error
           : value.outcome.kind === "declined"
             ? value.outcome.reason
             : undefined;
-      return `Tool · ${value.tool.replaceAll("-", " ")} · ${label}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}${fileRemainder(value.files)}${value.tool === "file-change" && value.files !== undefined ? "" : `\n${value.tool === "command" ? "Command · " : ""}${value.input}`}${value.files === undefined ? "" : `\n${fileLabels(value.files)}`}${value.cwd === undefined ? "" : `\nCwd · ${value.cwd}`}${value.exitCode === undefined ? "" : `\nExit · ${value.exitCode}`}${detail === undefined ? "" : `\n${detail}`}${value.nativeOmission === undefined ? "" : `\nHarness omission · ${value.nativeOmission}`}${value.tool === "command" && value.output === undefined ? "\nOutput unavailable" : ""}`;
+      return `${fileLead(value, preview)}${value.files === undefined ? "" : fileLabels(value.files)}${value.cwd === undefined ? "" : `\nCwd · ${value.cwd}`}${value.exitCode === undefined ? "" : `\nExit · ${value.exitCode}`}${detail === undefined ? "" : `\n${detail}`}${value.nativeOmission === undefined ? "" : `\nHarness omission · ${value.nativeOmission}`}${value.tool === "command" && value.output === undefined ? "\nOutput unavailable" : ""}`;
     }
     case "request":
       return `? ${value.description}`;
@@ -339,12 +356,40 @@ function historyLabel(value: SessionHistoryValue, preview: boolean): string {
   }
 }
 
+/** The typed file group owns its label positions; text prefixes never identify a file. */
+function fileLead(
+  value: Extract<SessionHistoryValue, { kind: "tool" | "turn-diff" }>,
+  preview: boolean,
+): string {
+  if (value.kind === "turn-diff")
+    return `Turn diff${preview ? " · updating" : ""}${fileRemainder(value.files, value.fileCount)}\n`;
+  return `Tool · ${value.tool.replaceAll("-", " ")} · ${value.outcome.kind}${value.count === undefined ? "" : ` · ${value.count.value} ${value.count.unit}`}${fileRemainder(value.files, value.fileCount)}${value.tool === "file-change" && value.files !== undefined ? "" : `\n${value.tool === "command" ? "Command · " : ""}${value.input}`}${value.files === undefined ? "" : "\n"}`;
+}
+export function historyFileSpans(
+  value: SessionHistoryValue,
+  preview: boolean,
+): NonNullable<TimelineRow["fileSpans"]> {
+  if (
+    (value.kind !== "tool" && value.kind !== "turn-diff") ||
+    value.files === undefined
+  )
+    return [];
+  let start = fileLead(value, preview).length;
+  return value.files.slice(0, FILE_LIST_LIMIT).map((file, index) => {
+    const end = start + fileLabels([file]).length;
+    const span = { index, start, end };
+    start = end + 1;
+    return span;
+  });
+}
+
 const FILE_LIST_LIMIT = 10;
 
 function fileRemainder(
   files: Extract<SessionHistoryValue, { kind: "tool" }>["files"],
+  count = files?.length ?? 0,
 ): string {
-  const remaining = (files?.length ?? 0) - FILE_LIST_LIMIT;
+  const remaining = count - FILE_LIST_LIMIT;
   return remaining > 0 ? ` · ${remaining} more files` : "";
 }
 

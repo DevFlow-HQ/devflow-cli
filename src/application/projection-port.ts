@@ -1260,11 +1260,12 @@ export interface SessionHistoryRow {
   readonly value: SessionHistoryValue;
 }
 /** Supplied file facts, with no native ids or inferred line totals. */
-interface SessionFileChange {
+export interface SessionFileChange {
   readonly path: string;
   readonly kind?: "create" | "update" | "delete";
   readonly additions?: number;
   readonly removals?: number;
+  readonly pathContent?: HistoryTextReference;
   readonly patch?:
     | { readonly kind: "unified"; readonly content: string }
     | {
@@ -1280,6 +1281,10 @@ interface SessionFileChange {
 }
 /** Complete tool value with Application-derived Turn liveness. No correlation ids cross the Port. */
 interface SessionToolValue {
+  readonly detail?: HistoryTextReference;
+  readonly filesReference?: HistoryItemsReference;
+  readonly filesDetail?: HistoryTextReference;
+  readonly fileCount?: number;
   readonly kind: "tool";
   readonly tool:
     | "read"
@@ -1296,6 +1301,7 @@ interface SessionToolValue {
   readonly nativeOmission?: string;
   readonly output?: {
     readonly text: string;
+    readonly reference?: HistoryTextReference;
     readonly secantDropped?: true;
     readonly incomplete?: true;
   };
@@ -1311,6 +1317,10 @@ interface SessionToolValue {
 export type SessionHistoryValue =
   | {
       readonly kind: "turn-diff";
+      readonly detail?: HistoryTextReference;
+      readonly filesReference?: HistoryItemsReference;
+      readonly filesDetail?: HistoryTextReference;
+      readonly fileCount?: number;
       readonly content: string;
       readonly files: readonly SessionFileChange[];
     }
@@ -1899,7 +1909,86 @@ export type WorkspacePathSearch =
     }
   | { readonly status: "unavailable"; readonly cause: unknown };
 
+/** Exact retained version; ids and continuations are opaque Application values. */
+export interface HistoryTextReference {
+  readonly type: "history-text";
+  readonly runId: string;
+  readonly id: string;
+}
+export interface HistoryItemsReference {
+  readonly type: "history-items";
+  readonly runId: string;
+  readonly id: string;
+}
+type HistoryContentReference = HistoryTextReference | HistoryItemsReference;
+export type HistoryContentItem =
+  | {
+      readonly kind: "file";
+      readonly path: HistoryTextReference;
+      readonly change?: "create" | "update" | "delete";
+      readonly additions?: number;
+      readonly removals?: number;
+      readonly patch?:
+        | { readonly kind: "unified"; readonly content: HistoryTextReference }
+        | {
+            readonly kind: "structured";
+            readonly hunks: HistoryItemsReference;
+          };
+    }
+  | {
+      readonly kind: "hunk";
+      readonly oldStart: number;
+      readonly oldLines: number;
+      readonly newStart: number;
+      readonly newLines: number;
+      readonly lines: HistoryItemsReference;
+    }
+  | { readonly kind: "line"; readonly content: HistoryTextReference };
+export interface HistoryTextEdges {
+  readonly dropLeading: number;
+  readonly dropTrailing: number;
+  /** The last unit before this portion surviving ANSI removal is CR.
+   * Presentation drops one leading LF after ANSI removal, before CRLF screening. */
+  readonly dropLeadingLf: boolean;
+}
+export interface HistoryContentRequest {
+  readonly reference: HistoryContentReference;
+  readonly continuation?: string;
+  /** Abort releases the traversal, including a pinned superseded live version. */
+  readonly signal?: AbortSignal;
+}
+/** Text reads deliver at most 4096 UTF-16 units; item reads at most eight items.
+ * A traversal pins one exact version until release, abort, observer close or shutdown.
+ * Previous/next address bounded portions without retaining previously read bodies. */
+export type HistoryContentRead =
+  | {
+      readonly found: true;
+      readonly type: "history-text";
+      readonly content: string;
+      readonly edges?: HistoryTextEdges;
+      readonly readId: string;
+      readonly first?: string;
+      readonly last?: string;
+      readonly previous?: string;
+      readonly next?: string;
+    }
+  | {
+      readonly found: true;
+      readonly type: "history-items";
+      readonly items: readonly HistoryContentItem[];
+      readonly readId: string;
+      readonly first?: string;
+      readonly last?: string;
+      readonly previous?: string;
+      readonly next?: string;
+    }
+  | { readonly found: false; readonly problem: Problem };
+
 export interface ProjectionPort {
+  readHistoryContent(
+    request: HistoryContentRequest,
+  ): Promise<HistoryContentRead>;
+  releaseHistoryRead(readId: string): void;
   /** Bounded, read-only path cues. Never loads candidate content or grants access. */
   searchWorkspacePaths(input: WorkspacePathQuery): Promise<WorkspacePathSearch>;
   // Selector-typed overloads (#74 A8): each concrete selector resolves to the

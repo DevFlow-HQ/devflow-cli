@@ -178,6 +178,17 @@ export function makeRunView(initial: RunSnapshot) {
   const historyActive = new Set<string>();
   const reconnects: string[] = [];
   const reads = new Map<string, ResourceRead>();
+  let readHistoryContent: RunWorkbenchView["readHistoryContent"] =
+    async () => ({
+      found: false,
+      problem: {
+        code: "missing-content",
+        explanation: "No fixture content",
+        remediation: "Retry",
+        possibleEffects: "none",
+      },
+    });
+  let releaseHistoryRead: RunWorkbenchView["releaseHistoryRead"] = () => {};
   // Transcript pages, keyed by the requested `older` cursor ("" for the newest).
   const transcripts = new Map<string, TranscriptRead>();
   const transcriptReads: (
@@ -322,6 +333,8 @@ export function makeRunView(initial: RunSnapshot) {
         },
       };
     },
+    readHistoryContent: (request) => readHistoryContent(request),
+    releaseHistoryRead: (id) => releaseHistoryRead(id),
     readResource: (reference) =>
       reads.get(refKey(reference)) ?? {
         found: false,
@@ -417,6 +430,13 @@ export function makeRunView(initial: RunSnapshot) {
     setHistoryFreshness,
     setFreshness,
     reconnects,
+    setContentReader: (
+      read: RunWorkbenchView["readHistoryContent"],
+      release: RunWorkbenchView["releaseHistoryRead"],
+    ) => {
+      readHistoryContent = read;
+      releaseHistoryRead = release;
+    },
     setRead: (key: string, read: ResourceRead) => reads.set(key, read),
     setTranscript: (cursor: string, read: TranscriptRead) =>
       transcripts.set(cursor, read),

@@ -1,4 +1,6 @@
+import { screenHistoryPortion } from "./screen-text.js";
 import { createWorkspaceMentions } from "./workspace-mentions.js";
+import { createHistoryContentReader } from "./run-history-content.js";
 import { createHistoryLayout } from "./run-history-layout.js";
 import { useLayoutObserver } from "./layout-observer.js";
 import { useRenderer } from "@opentui/solid";
@@ -14,6 +16,8 @@ import {
   createMemo,
   mapArray,
   createSignal,
+  createRoot,
+  untrack,
   For,
   Index,
   onCleanup,
@@ -94,6 +98,8 @@ import {
 import { SCROLL_KEYS, type TimelineAction } from "./run-timeline.js";
 import {
   buildTimelineRows,
+  historyLabel,
+  historyFileSpans,
   reportedMetadata,
   type TimelineRow,
 } from "./run-timeline-rows.js";
@@ -805,7 +811,13 @@ export function RunWorkbench(props: {
   const innerW = () => Math.max(1, fullW() - (wide() ? SIDEBAR_WIDTH + 1 : 0));
   // Output inspection and retained transcript reading have distinct lifetimes.
   // Only the details-opened transcript reader can request older pages.
+  const [inspectionRow, setInspectionRow] = createSignal<{
+    key: string;
+    file?: number;
+  }>();
   const inspection = createInspection({
+    readHistoryContent: view.readHistoryContent,
+    releaseHistoryRead: view.releaseHistoryRead,
     readResource: view.readResource,
     interiorH,
     width: fullW,
@@ -1627,6 +1639,198 @@ export function RunWorkbench(props: {
     ReadonlySet<string>
   >(new Set());
   let expandedByKey: string | undefined;
+  function visibleHistoryKeys(): Set<string> {
+    const window = win();
+    const visible = new Set<string>();
+    let top = 0;
+    for (const row of timelineWrapped().rows) {
+      if (top >= window.top + window.visible) break;
+      if (top + row.height > window.top) visible.add(row.key);
+      top += row.height;
+    }
+    return visible;
+  }
+  const [outputReaders, setOutputReaders] = createSignal<
+    ReadonlyMap<
+      string,
+      {
+        reference: string;
+        reader: ReturnType<typeof createHistoryContentReader>;
+        dispose: () => void;
+      }
+    >
+  >(new Map());
+  createEffect(() => {
+    const visible = visibleHistoryKeys();
+    const wanted =
+      inspection.inspecting() || transcript.reader()
+        ? []
+        : timelineRows()
+            .filter(
+              (row) =>
+                visible.has(row.key) &&
+                expandedHistory().has(row.key) &&
+                row.output?.reference !== undefined,
+            )
+            .slice(0, 8);
+    const previous = untrack(outputReaders);
+    const next = new Map(previous);
+    for (const [key, entry] of next)
+      if (
+        !wanted.some(
+          (row) =>
+            row.key === key && row.output?.reference?.id === entry.reference,
+        )
+      ) {
+        entry.dispose();
+        next.delete(key);
+      }
+    for (const row of wanted)
+      if (!next.has(row.key) && row.output?.reference) {
+        const reference = row.output.reference;
+        const entry = untrack(() =>
+          createRoot((dispose) => {
+            const reader = createHistoryContentReader(view);
+            reader.open(reference);
+            return { reference: reference.id, reader, dispose };
+          }),
+        );
+        next.set(row.key, entry);
+      }
+    if (
+      next.size !== previous.size ||
+      [...next].some(([key, entry]) => previous.get(key) !== entry)
+    )
+      setOutputReaders(next);
+  });
+  onCleanup(() => {
+    for (const entry of outputReaders().values()) entry.dispose();
+  });
+  const [pathReaders, setPathReaders] = createSignal<
+    ReadonlyMap<
+      string,
+      {
+        row: string;
+        index: number;
+        reference: string;
+        reader: ReturnType<typeof createHistoryContentReader>;
+        dispose: () => void;
+      }
+    >
+  >(new Map());
+  createEffect(() => {
+    const visible = visibleHistoryKeys();
+    const wanted =
+      inspection.inspecting() || transcript.reader()
+        ? []
+        : timelineRows()
+            .flatMap((row) => {
+              const value = row.value;
+              if (
+                !visible.has(row.key) ||
+                (value?.kind !== "tool" && value?.kind !== "turn-diff")
+              )
+                return [];
+              return (value.files ?? []).flatMap((file, index) =>
+                file.pathContent
+                  ? [{ row: row.key, index, reference: file.pathContent }]
+                  : [],
+              );
+            })
+            .slice(0, 16);
+    const previous = untrack(pathReaders);
+    const next = new Map(previous);
+    for (const [key, entry] of next)
+      if (
+        !wanted.some(
+          (item) =>
+            item.row === entry.row &&
+            item.index === entry.index &&
+            item.reference.id === entry.reference,
+        )
+      ) {
+        entry.dispose();
+        next.delete(key);
+      }
+    for (const item of wanted) {
+      const key = `${item.row}:${item.index}`;
+      if (next.has(key)) continue;
+      next.set(
+        key,
+        untrack(() =>
+          createRoot((dispose) => {
+            const reader = createHistoryContentReader(view);
+            reader.open(item.reference);
+            return {
+              row: item.row,
+              index: item.index,
+              reference: item.reference.id,
+              reader,
+              dispose,
+            };
+          }),
+        ),
+      );
+    }
+    if (
+      next.size !== previous.size ||
+      [...next].some(([key, entry]) => previous.get(key) !== entry)
+    )
+      setPathReaders(next);
+  });
+  onCleanup(() => {
+    for (const entry of pathReaders().values()) entry.dispose();
+  });
+  const displayTimelineRows = createMemo(() =>
+    timelineRows().map((row) => {
+      const value = row.value;
+      if (value?.kind === "tool" || value?.kind === "turn-diff") {
+        const files = value.files?.map((file, index) => {
+          const read = pathReaders()
+            .get(`${row.key}:${index}`)
+            ?.reader.state().read;
+          return read?.found && read.type === "history-text"
+            ? {
+                ...file,
+                path:
+                  screenHistoryPortion(read).text +
+                  (read.next ? " · more path, click to read" : ""),
+              }
+            : file;
+        });
+        const shown =
+          value.kind === "turn-diff"
+            ? { ...value, files: files ?? [] }
+            : { ...value, files };
+        row = {
+          ...row,
+          text: historyLabel(shown, row.preview ?? false),
+          fileSpans: historyFileSpans(shown, row.preview ?? false),
+        };
+      }
+      const entry = outputReaders().get(row.key);
+      if (!entry || !row.output) return row;
+      const state = entry.reader.state();
+      const read = state.read;
+      return {
+        ...row,
+        output: {
+          ...row.output,
+          text:
+            read?.found && read.type === "history-text"
+              ? screenHistoryPortion(read).text
+              : row.output.text,
+        },
+        contentNotice: state.loading
+          ? "Loading retained content…"
+          : read?.found === false
+            ? `Error [${read.problem.code}] · click to retry`
+            : read?.found && read.next
+              ? "More retained output below"
+              : undefined,
+      };
+    }),
+  );
   const [spinnerFrame, setSpinnerFrame] = createSignal(0);
   const liveSpinnerShown = createMemo(() =>
     timelineRows().some(
@@ -1660,7 +1864,7 @@ export function RunWorkbench(props: {
     props.reducedMotion,
   );
   const timelineWrapped = createMemo(() =>
-    layoutHistory(timelineRows(), innerW(), expandedHistory()),
+    layoutHistory(displayTimelineRows(), innerW(), expandedHistory()),
   );
   createEffect(
     on(
@@ -1716,6 +1920,11 @@ export function RunWorkbench(props: {
     }
     return undefined;
   };
+  const historyBlocked = (): boolean =>
+    dialog.stack.length > 0 ||
+    confirmation() !== undefined ||
+    inspection.inspecting() !== undefined ||
+    transcript.reader() !== undefined;
   const openRowDetail = (row: TimelineRow | undefined): void => {
     if (
       row === undefined ||
@@ -1723,14 +1932,12 @@ export function RunWorkbench(props: {
         row.inspection === undefined &&
         row.output === undefined &&
         row.value?.kind !== "entry-prompt") ||
-      dialog.stack.length > 0 ||
-      confirmation() !== undefined ||
-      inspection.inspecting() ||
-      transcript.reader()
+      historyBlocked()
     )
       return;
     if (row.inspection !== undefined) {
       expandedByKey = undefined;
+      setInspectionRow({ key: row.key });
       inspection.open(row.inspection);
       return;
     }
@@ -1769,14 +1976,135 @@ export function RunWorkbench(props: {
       bottom = top;
     }
   };
+  createEffect(() => {
+    const key = inspectionRow();
+    if (key === undefined || !inspection.inspecting()) return;
+    const row = timelineRows().find((row) => row.key === key.key);
+    const value = row?.value;
+    const path =
+      (value?.kind === "tool" || value?.kind === "turn-diff") &&
+      key.file !== undefined
+        ? value.files?.[key.file]?.pathContent
+        : undefined;
+    inspection.reconcile(
+      key.file !== undefined
+        ? path
+          ? { label: "Supplied file path", historyContent: path }
+          : undefined
+        : (row?.inspection ??
+            (row?.value?.kind === "tool" && row.value.detail
+              ? {
+                  label: "Tool detail",
+                  historyContent: row.value.detail,
+                  historyFiles: row.value.filesDetail,
+                }
+              : undefined)),
+    );
+  });
   const clickTimelineLine = (index: number): void => {
-    const row = rowAtLine(win().top + index);
+    const line = win().top + index;
+    const row = rowAtLine(line);
+    // Only the drawn Error notice retries; the rest of the row still toggles.
+    const outputRead =
+      row === undefined ? undefined : outputReaders().get(row.key)?.reader;
+    if (outputRead?.state().read?.found === false && !historyBlocked()) {
+      let rowTop = 0;
+      for (const layout of timelineWrapped().rows) {
+        if (layout.key === row?.key) {
+          if (layout.noticeFrom >= 0 && line - rowTop >= layout.noticeFrom) {
+            outputRead.retry();
+            return;
+          }
+          break;
+        }
+        rowTop += layout.height;
+      }
+    }
+    if (row?.value?.kind === "tool" || row?.value?.kind === "turn-diff") {
+      const layout = timelineWrapped().rows.find(
+        (layout) => layout.key === row.key,
+      );
+      let rowTop = 0;
+      for (const candidate of timelineWrapped().rows) {
+        if (candidate.key === row.key) break;
+        rowTop += candidate.height;
+      }
+      const localLine = line - rowTop;
+      const fileIndex =
+        layout?.fileTargets.find(
+          (target) => localLine >= target.from && localLine <= target.to,
+        )?.index ?? -1;
+      const file = row.value.files?.[fileIndex];
+      if (file?.pathContent) {
+        setInspectionRow({ key: row.key, file: fileIndex });
+        inspection.open({
+          label: "Supplied file path",
+          historyContent: file.pathContent,
+        });
+        return;
+      }
+    }
+    if (row?.value?.kind === "tool" && row.value.detail && row.output) {
+      const layouts = timelineWrapped().rows;
+      const i = layouts.findIndex((layout) => layout.key === row.key);
+      const top = layouts
+        .slice(0, i)
+        .reduce((sum, layout) => sum + layout.height, 0);
+      if (line === top + (layouts[i]?.prefix ?? 0)) {
+        setInspectionRow({ key: row.key });
+        inspection.open({
+          label: "Tool detail",
+          historyContent: row.value.detail,
+          historyFiles: row.value.filesDetail,
+        });
+        return;
+      }
+    }
     openRowDetail(row);
   };
-  const scrollBy = (action: TimelineAction) =>
+  const scrollBy = (action: TimelineAction) => {
+    const row = rowAtLine(
+      action === "down" || action === "pageDown"
+        ? win().top + win().visible - 1
+        : win().top,
+    );
+    const reader =
+      row === undefined ? undefined : outputReaders().get(row.key)?.reader;
+    if (
+      reader &&
+      (action === "down" ||
+        action === "pageDown" ||
+        action === "up" ||
+        action === "pageUp")
+    ) {
+      const layouts = timelineWrapped().rows;
+      const index = layouts.findIndex((layout) => layout.key === row?.key);
+      const top = layouts
+        .slice(0, index)
+        .reduce((sum, layout) => sum + layout.height, 0);
+      const boundary =
+        action === "down" || action === "pageDown"
+          ? win().top + win().visible >= top + (layouts[index]?.height ?? 0)
+          : win().top <= top;
+      if (
+        boundary &&
+        reader.move(
+          action === "up" || action === "pageUp" ? "previous" : "next",
+        )
+      ) {
+        setScroll({
+          mode: "paused",
+          id: row?.key,
+          offset: 0,
+          prior: layouts.map((row) => row.key),
+        });
+        return;
+      }
+    }
     setScroll((prev) =>
       scrollHistory(prev, action, timelineWrapped().rows, viewportH()),
     );
+  };
 
   const moveSelection = (delta: number) => {
     const count = openables().length;
@@ -1791,7 +2119,10 @@ export function RunWorkbench(props: {
     if (target !== undefined) {
       setSelectedResource(target);
       if ("transcript" in target) transcript.open(target);
-      else inspection.open(target);
+      else {
+        setInspectionRow(undefined);
+        inspection.open(target);
+      }
     }
   };
 
@@ -2071,6 +2402,7 @@ export function RunWorkbench(props: {
           {(current) => (
             <InspectionView
               inspection={current()}
+              footer={inspection.footer}
               lines={inspection.lines}
               window={inspection.window}
               width={fullW}

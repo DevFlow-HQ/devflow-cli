@@ -91,12 +91,18 @@ Before changing completion, Slash discovery, drafts, prompt captures, or restora
   Thoughts/Entry prompts and output with no hidden lines or characters. It remembers an in-place opened row; the next press only closes it, even off-screen
   or after arrivals. A click closing it or window eviction clears the memory. Supplied patch inspection clears it, consumes Ctrl+O, and closes with Esc.
   Live readers follow the opened end; paused content keeps its anchor, as for a click. Expand-all stays rejected.
-- Ctrl+O/click opens a history detail: output and Thoughts toggle by row id; call patches and Turn diffs open complete supplied content (#415–#417).
+- Output/Thoughts toggle by row id. Call patches and Turn diffs inspect complete supplied content in bounded exact-version portions (#489).
   Output collapses before wrapping at ten logical lines or `10 * Math.max(20, width - 6)` code points, whichever comes first; the omission count names
-  lines or characters truthfully. It never auto-expands; diff inspection stays uncapped. Thought ticks change headings; modal/input key ownership stays unchanged.
+  lines or characters truthfully. It never auto-expands. Referenced output loads one portion at a time; scrolling at its boundary reads the adjacent portion.
+  Diff inspection has no content cap; Home/End read first/last portions, `r` retries locally, and `f` toggles supplied file metadata. Thought ticks change
+  headings; modal/input key ownership stays unchanged.
 - Turn-diff and file-change rows show the first ten structured file names in reported order, wrapped without shortening (#502). Append `N more files`
   after the title's status when names remain; live updates never expand the list. A file-change row with structured files omits its repeated input.
-  Only names are capped; Ctrl+O/click still opens the complete supplied diff or call patches. Presentation never parses input text for names.
+  Large visible names read bounded text on demand; clicking a wrapped name inspects the complete path.
+  Ctrl+O/click still opens complete supplied diff or call detail through bounded reads. Clicking a command heading inspects its full metadata. Presentation
+  never parses input text for names.
+- History detail caches retain one portion per reader: at most eight expanded outputs and sixteen large paths in the current viewport.
+  Collapse, eviction, overlay navigation, and disposal release reads. Version replacement cancels the old read; dismissed replies never update a row.
 - The retained transcript reader anchors Resource entry ids, independently of live history row ids. Its reserved notice line never moves content.
 - Transcript and timeline content wraps, never clips: `wrap.ts` breaks each row in display columns, and each line renders as its own `wrapMode="none"`
   `<text>`. Never let OpenTUI wrap counted content: its word wrap can break a line that exactly fills the width, so its count and ours drift.

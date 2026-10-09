@@ -1,3 +1,7 @@
+import {
+  readHistoryText,
+  readHistoryFiles,
+} from "./history-content-fixture.js";
 import type { SessionHistoryRow } from "../../src/application/projection-port.js";
 import { Database } from "bun:sqlite";
 import { readdirSync } from "node:fs";
@@ -1351,9 +1355,18 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
   );
   assert.equal(rows[1]?.id, identity.id);
   assert.equal(rows[1]?.position, identity.position);
-  assert.deepEqual(rows[1]?.value, { kind: "turn-diff", ...diff });
+  assert.ok(rows[1]?.value.kind === "turn-diff" && rows[1].value.detail);
+  assert.equal(
+    await readHistoryText(run.port, rows[1].value.detail),
+    diff.content,
+  );
+  assert.deepEqual(rows[1].value.files, diff.files);
   assert.ok(rows[2]?.value.kind === "tool");
-  assert.deepEqual(rows[2].value.files, call.files);
+  assert.ok(rows[2].value.filesReference);
+  assert.deepEqual(
+    await readHistoryFiles(run.port, rows[2].value.filesReference),
+    call.files,
+  );
   timer.flush();
   run.channel.observe({
     diff: { turnId: "turn", session: "s", files: [], content: "Late stale" },
@@ -1366,10 +1379,10 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
     session: "s",
   });
   assert.ok(late.snapshot.result.found);
-  assert.deepEqual(late.snapshot.result.history.rows[1]?.value, {
-    kind: "turn-diff",
-    ...diff,
-  });
+  const lateDiff = late.snapshot.result.history.rows[1]?.value;
+  assert.ok(lateDiff?.kind === "turn-diff" && lateDiff.detail);
+  assert.equal(await readHistoryText(run.port, lateDiff.detail), diff.content);
+  assert.deepEqual(lateDiff.files, diff.files);
   const transcript = run.port.readTranscript(
     update.value.snapshot.result.history.transcriptExport,
   );
@@ -1389,17 +1402,21 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
     1,
   );
   await run.finish();
+  const reopenedPort = run.reopen();
   const reopened = openHistory({
     t,
-    port: run.reopen(),
+    port: reopenedPort,
     runId: run.runId,
     session: "s",
   });
   assert.ok(reopened.snapshot.result.found);
-  assert.deepEqual(reopened.snapshot.result.history.rows[1]?.value, {
-    kind: "turn-diff",
-    ...diff,
-  });
+  const reopenedDiff = reopened.snapshot.result.history.rows[1]?.value;
+  assert.ok(reopenedDiff?.kind === "turn-diff" && reopenedDiff.detail);
+  assert.equal(
+    await readHistoryText(reopenedPort, reopenedDiff.detail),
+    diff.content,
+  );
+  assert.deepEqual(reopenedDiff.files, diff.files);
 });
 
 test("m10-session-history: cumulative diff shares preview fairness and the exact mixed 200/201 bound, without resurrection after eviction", async (t) => {
@@ -1624,10 +1641,15 @@ for (const size of [29_999, 30_000, 30_001])
         const value = update.value.row.value;
         assert.equal(value.kind, "tool");
         assert.ok(value.kind === "tool");
-        assert.deepEqual(value.output, {
-          text: size > 30_000 ? "a".repeat(29_999) + "Z" : text,
-          ...(size > 30_000 ? { secantDropped: true } : {}),
-        });
+        assert.ok(value.output?.reference);
+        assert.equal(
+          await readHistoryText(run.port, value.output.reference),
+          size > 30_000 ? "a".repeat(29_999) + "Z" : text,
+        );
+        assert.equal(
+          value.output.secantDropped,
+          size > 30_000 ? true : undefined,
+        );
         assert.equal(value.nativeOmission, "Harness omitted stdout");
       } else assert.equal(update.value.row.value.kind, "message");
     }
@@ -1916,24 +1938,32 @@ test("m10-session-history: command tails, uncapped supplied patches, Turn diffs 
     command.value?.kind === "history-preview" &&
       command.value.row.value.kind === "tool",
   );
-  assert.deepEqual(command.value.row.value.output, {
-    text: "x".repeat(30_000),
-    secantDropped: true,
-  });
+  assert.ok(command.value.row.value.output?.reference);
+  assert.equal(
+    await readHistoryText(run.port, command.value.row.value.output.reference),
+    "x".repeat(30_000),
+  );
+  assert.equal(command.value.row.value.output.secantDropped, true);
   const file = await reader.next();
   assert.ok(
     file.value?.kind === "history-preview" &&
       file.value.row.value.kind === "tool",
   );
-  assert.deepEqual(file.value.row.value.files, [
-    { path: "observed.ts", patch: { kind: "unified", content } },
-  ]);
+  assert.ok(file.value.row.value.filesReference);
+  assert.deepEqual(
+    await readHistoryFiles(run.port, file.value.row.value.filesReference),
+    [{ path: "observed.ts", patch: { kind: "unified", content } }],
+  );
   const diff = await reader.next();
   assert.ok(
     diff.value?.kind === "history-preview" &&
       diff.value.row.value.kind === "turn-diff",
   );
-  assert.equal(diff.value.row.value.content, content);
+  assert.ok(diff.value.row.value.detail);
+  assert.equal(
+    await readHistoryText(run.port, diff.value.row.value.detail),
+    content,
+  );
   const message = await reader.next();
   assert.ok(message.value?.kind === "history-preview");
   assert.deepEqual(message.value.row.value, {

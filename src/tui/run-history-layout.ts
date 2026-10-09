@@ -19,6 +19,7 @@ function sameRules(a: readonly Rule[], b: readonly Rule[]): boolean {
 function sameContent(a: TimelineRow, b: TimelineRow): boolean {
   return (
     a.text === b.text &&
+    a.contentNotice === b.contentNotice &&
     a.oneLine === b.oneLine &&
     a.value?.kind === b.value?.kind &&
     (a.value?.kind !== "message" ||
@@ -64,7 +65,11 @@ function rowText(
   width: number,
   reducedMotion: boolean,
   humanPanel: boolean,
-): ScreenedText & { readonly hasDetail: boolean } {
+): ScreenedText & {
+  readonly hasDetail: boolean;
+  /** The text before a trailing content notice, when one is drawn. */
+  readonly beforeNotice?: ScreenedText;
+} {
   const prefix =
     row.value?.kind === "tool" && row.value.outcome.kind === "running"
       ? `  ${reducedMotion ? "[.]" : "|"} `
@@ -99,9 +104,12 @@ function rowText(
       : row.output.incomplete
         ? "potentially incomplete"
         : "final";
+    const body = `${prefix}${heading}\n  ${expanded ? "▾" : "▸"} Output · ${label}${output === "" ? " · empty" : ""}${row.output.reference && !expanded ? " · more retained output, expand" : preview.hidden === "" ? "" : ` · ${preview.hidden}`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${output === "" ? "" : `\n${preview.text}`}`;
     return {
-      hasDetail: collapsed.hidden !== "",
-      text: `${prefix}${heading}\n  ${expanded ? "▾" : "▸"} Output · ${label}${output === "" ? " · empty" : ""}${preview.hidden === "" ? "" : ` · ${preview.hidden}`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${output === "" ? "" : `\n${preview.text}`}`,
+      // A bounded preview can be complete while retained output is not.
+      hasDetail: collapsed.hidden !== "" || row.output.reference !== undefined,
+      text: row.contentNotice ? `${body}\n${row.contentNotice}` : body,
+      ...(row.contentNotice ? { beforeNotice: { text: body } } : {}),
     };
   }
   if (row.thought === undefined)
@@ -143,6 +151,13 @@ export function createHistoryLayout(
     readonly toolHeader: number;
     readonly humanPanel: boolean;
     readonly hasDetail: boolean;
+    /** First row-local line of a trailing content notice, or -1. */
+    readonly noticeFrom: number;
+    readonly fileTargets: readonly {
+      index: number;
+      from: number;
+      to: number;
+    }[];
   };
   type Cached = {
     row: TimelineRow;
@@ -178,6 +193,8 @@ export function createHistoryLayout(
       let variants = cached.widths.get(width);
       if (variants === undefined) {
         variants = new Map();
+        if (cached.widths.size >= 2)
+          cached.widths.delete(cached.widths.keys().next().value!);
         cached.widths.set(width, variants);
       }
       let layout = variants.get(isExpanded);
@@ -200,6 +217,30 @@ export function createHistoryLayout(
           ...wrapScreenedRows([text], contentWidth, HANG).lines,
         ];
         const prefix = leading.length;
+        const rowPrefix =
+          row.value?.kind === "tool" && row.value.outcome.kind === "running"
+            ? `  ${reducedMotion ? "[.]" : "|"} `
+            : "  ";
+        const labelPrefix = rowPrefix + (row.inspection ? "▸ " : "");
+        const fileTargets = (row.fileSpans ?? []).map((span) => ({
+          index: span.index,
+          from:
+            prefix +
+            wrapScreenedRows(
+              [screenText(labelPrefix + row.text.slice(0, span.start))],
+              contentWidth,
+              HANG,
+            ).lines.length -
+            1,
+          to:
+            prefix +
+            wrapScreenedRows(
+              [screenText(labelPrefix + row.text.slice(0, span.end))],
+              contentWidth,
+              HANG,
+            ).lines.length -
+            1,
+        }));
         const thoughtHeader = row.thought?.live ? leading.length : -1;
         layout = {
           key: row.key,
@@ -213,6 +254,13 @@ export function createHistoryLayout(
               : -1,
           humanPanel,
           hasDetail: text.hasDetail,
+          noticeFrom:
+            text.beforeNotice === undefined
+              ? -1
+              : prefix +
+                wrapScreenedRows([text.beforeNotice], contentWidth, HANG).lines
+                  .length,
+          fileTargets,
         };
         variants.set(isExpanded, layout);
       }

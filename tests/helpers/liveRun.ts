@@ -51,6 +51,10 @@ export async function openLiveRun(
   t: TestContext,
   options: {
     onHistoryRead?: () => void;
+    onRetainedEventRead?: () => void;
+    historyTextEdges?: Parameters<
+      typeof createApplication
+    >[0]["historyTextEdges"];
     onCensusRead?: () => void;
     scheduleRunUpdate?: (callback: () => void, delayMs: number) => () => void;
     /** Populate canonical fixture facts before Application observes this owner. */
@@ -95,6 +99,10 @@ export async function openLiveRun(
         turns() {
           options.onHistoryRead?.();
           return owner.turns();
+        },
+        turnEventAt(index: number) {
+          options.onRetainedEventRead?.();
+          return owner.turnEventAt(index);
         },
         turnEvents() {
           options.onHistoryRead?.();

@@ -3,6 +3,7 @@
 ## Invariants
 
 - Transcript cursors bind Run, Session, cutoff and order boundary; entry ids still hash the eligibility position (#497).
+- History Resource tokens bind a stored event or a live version. An observer scope owns reads; closing it cannot release another observer (#489).
 
 - `UpdateStream` appends replacing history previews after pruning them, so the last delivered window cutoff and earlier marker stay current (#488).
 - Before changing Run reads, history, observer delivery, progress, context/usage, or Workspace path search, read

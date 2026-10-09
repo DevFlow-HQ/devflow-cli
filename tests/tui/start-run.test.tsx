@@ -688,6 +688,10 @@ function noRunView(): RunWorkbenchView {
     async searchWorkspacePaths() {
       return { status: "available", candidates: [] };
     },
+    readHistoryContent() {
+      throw new Error("not used");
+    },
+    releaseHistoryRead() {},
     readResource() {
       throw new Error("run workbench not opened in this test");
     },
@@ -771,6 +775,10 @@ function succeedingRunView(): RunWorkbenchView {
     async searchWorkspacePaths() {
       return { status: "available", candidates: [] };
     },
+    readHistoryContent() {
+      throw new Error("not used");
+    },
+    releaseHistoryRead() {},
     readResource() {
       throw new Error("no reference read in this test");
     },
@@ -2249,6 +2257,10 @@ function fakePort(config: {
     async searchWorkspacePaths() {
       return { status: "available", candidates: [] };
     },
+    readHistoryContent() {
+      throw new Error("not used");
+    },
+    releaseHistoryRead() {},
     readResource() {
       throw new Error("not used");
     },

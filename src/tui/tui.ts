@@ -62,3 +62,5 @@ export { harnessFocusStatus, harnessModelLine } from "./harness-format.js";
 // OpenTUI's native colour type, so its rendering is tested through the Workbench
 // (#308).
 export { SCANNER_FRAMES, scannerGlyphs } from "./working-scanner.js";
+
+export { historyTextEdges, screenHistoryPortion } from "./screen-text.js";

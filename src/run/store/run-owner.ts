@@ -1247,6 +1247,9 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     turns() {
       return readTurns(db);
     },
+    turnEventAt(index) {
+      return readTurnEvents(db, index)[0];
+    },
     turnEvents() {
       return readTurnEvents(db);
     },

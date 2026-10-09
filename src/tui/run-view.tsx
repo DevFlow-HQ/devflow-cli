@@ -10,6 +10,8 @@ import type {
   SendFollowUpTurnOffer,
   ApprovalDecisionName,
   DiagnosticReference,
+  HistoryContentRequest,
+  HistoryContentRead,
   OpenedProjection,
   ProjectionPort,
   ProjectionUpdate,
@@ -76,6 +78,10 @@ export interface RunWorkbenchView {
     readonly freshness: Accessor<TRunViewFreshness>;
     reconnect(): void;
   };
+  readHistoryContent(
+    request: HistoryContentRequest,
+  ): Promise<HistoryContentRead>;
+  releaseHistoryRead(readId: string): void;
   /** Resolves one output or diagnostic reference to its bytes, or a Problem. */
   readResource(
     reference: ResourceReference | DiagnosticReference,
@@ -209,6 +215,8 @@ export function createLiveRunWorkbenchView(
       };
     },
     searchWorkspacePaths: (input) => port.searchWorkspacePaths(input),
+    readHistoryContent: (request) => port.readHistoryContent(request),
+    releaseHistoryRead: (id) => port.releaseHistoryRead(id),
     readResource: (reference) => port.readResource(reference),
     readTranscript: (reference) => port.readTranscript(reference),
     // The Gate answer: the same submit-and-settle protocol headless `run

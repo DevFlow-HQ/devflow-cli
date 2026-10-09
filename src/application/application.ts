@@ -175,6 +175,7 @@ import type {
   ProjectionPort,
   ProjectionSelector,
   Problem,
+  HistoryTextEdges,
   DiagnosticReference,
   ResourceRead,
   ResourceReference,
@@ -358,7 +359,15 @@ interface InteractiveContext extends ClaimedRun {
 // stream also carries the durable change to any `workspace` Projection observing
 // when the launch Workspace becomes approved.
 
+/** Trusted presentation composition analyses bounded transient segments without
+ * retaining them. Projection Port callers receive only content and edge counts. */
+export type HistoryTextEdgeAnalyser = (
+  source: Iterable<string>,
+  start: number,
+  end: number,
+) => HistoryTextEdges;
 export interface ApplicationDependencies {
+  readonly historyTextEdges?: HistoryTextEdgeAnalyser;
   /** Invocation-start notices supplied by composition to both clients. */
   readonly startupNotices?: readonly Problem[];
   readonly catalog: Catalog;
@@ -532,6 +541,7 @@ export function createApplication(deps: ApplicationDependencies): Application {
   // tracking, so it receives future updates for its whole lifetime (#134 A1).
   const runObservers = new Map<string, Set<UpdateStream>>();
   const history = createSessionHistory({
+    textEdges: deps.historyTextEdges,
     observedOwner: (runId) => {
       const tracking = runs.get(runId);
       return tracking !== undefined && !tracking.done
@@ -546,6 +556,35 @@ export function createApplication(deps: ApplicationDependencies): Application {
         timer.unref();
         return () => clearTimeout(timer);
       }),
+    available(runId) {
+      try {
+        if (runGroup === undefined) return runSupportUnavailable();
+        const read = runGroup.readRun(runId);
+        if (!read.ok)
+          return read.problem.kind === "unknown-run"
+            ? runNotFound(runId)
+            : runStoreDamaged(runId);
+        const foreign = liveElsewhere(runId);
+        return foreign === undefined
+          ? true
+          : runLiveElsewhere(runId, foreign.ownerPid);
+      } catch (cause) {
+        return { ...runStoreDamaged(runId), cause };
+      }
+    },
+    readEvent(runId, index) {
+      try {
+        const acquired = acquireForRead(runId);
+        if (!acquired.ok) return acquired.problem;
+        try {
+          return acquired.owner.turnEventAt(index) ?? runStoreDamaged(runId);
+        } finally {
+          if (acquired.transient) acquired.owner.close();
+        }
+      } catch (cause) {
+        return { ...runStoreDamaged(runId), cause };
+      }
+    },
     read(runId) {
       if (runGroup === undefined)
         return { found: false, problem: runSupportUnavailable() };
@@ -4045,6 +4084,8 @@ export function createApplication(deps: ApplicationDependencies): Application {
       }
     },
 
+    readHistoryContent: history.readContent,
+    releaseHistoryRead: history.releaseContent,
     readResource(
       reference:
         ResourceReference | DiagnosticReference | HarnessDiagnosticReference,

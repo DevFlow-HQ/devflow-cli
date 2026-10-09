@@ -226,6 +226,10 @@ function noRunView(): RunWorkbenchView {
     openRun() {
       throw new Error("run workbench not used in this test");
     },
+    readHistoryContent() {
+      throw new Error("not used");
+    },
+    releaseHistoryRead() {},
     readResource() {
       throw new Error("run workbench not used in this test");
     },

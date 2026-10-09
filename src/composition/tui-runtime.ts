@@ -10,7 +10,7 @@ import {
   type RendererPort,
   type StdinRelease,
 } from "../tui/renderer/renderer.js";
-import { mountTui } from "../tui/tui.js";
+import { mountTui, historyTextEdges } from "../tui/tui.js";
 import { runSecantInvocation, type OperationalLog } from "./operational-log.js";
 import { withWiredApplication, type WiringOverrides } from "./wiring.js";
 
@@ -120,7 +120,7 @@ async function launchTui(
   startupNotices: readonly Problem[],
 ): Promise<number> {
   return withWiredApplication(
-    { ...overrides, supportsInteractiveTurns: true },
+    { ...overrides, supportsInteractiveTurns: true, historyTextEdges },
     log,
     async (wired) => {
       const {

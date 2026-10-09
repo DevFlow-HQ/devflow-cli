@@ -204,6 +204,13 @@ jobs:
           tests/run/store/session-and-transcript-evidence.test.ts
           tests/headless/run.test.ts
           tests/tui/run-workbench-full-transcript.test.tsx
+      - name: m10-audit-history-tool-content
+        run: >-
+          bun run test --
+          -t '^m10-audit-history-tool-content(:|$)'
+          tests/application/history-tool-content.test.ts
+          tests/tui/history-tool-content.test.tsx
+          tests/tui/history-text-edges.test.ts
       - name: m10-audit-history-index
         run: >-
           bun run test --

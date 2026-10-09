@@ -4,6 +4,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Invariants
 
+- History text edge analysis scans transient portions without retaining them; exact reads stay raw and `screenText` still owns filtering (#489).
+- History demand readers own independent Solid roots; viewport membership changes dispose those roots without resetting retained readers (#489).
+
 - Before changing Start a Run fields, focus, launch assessment, or refusal routing, read [launch presentation](../../docs/agents/tui-launch.md).
 - OpenTUI `<text>` lays out multiple children as separate inline spans, which garbles a line (fragments drop or overlap). Give every `<text>` a single
   concatenated string child, not a mix of literals and `{expr}` siblings.
