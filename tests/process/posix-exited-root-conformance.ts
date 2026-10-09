@@ -83,7 +83,14 @@ export function registerPosixExitedRootCases(
   });
   register({
     name: "m10-audit-runtime-failure-causes: zero cleanup budget cannot confirm unread pipe drain",
-    body: zeroBudgetDrain,
+    body: () => unreadDrain(0),
+  });
+  // A zero budget usually times out before the forced exit is observed, so it
+  // rarely reaches the drain decision. This budget observes the SIGKILL exit
+  // inside its final stage, so a drain claim over unread output fails every time.
+  register({
+    name: "m10-audit-runtime-failure-causes: an observed forced exit cannot confirm unread pipe drain",
+    body: () => unreadDrain(3000),
   });
   // Command escalation retains its existing three-second grace. Each path gets
   // its own scenario so both native outcomes fit the supervisor's 20s bound.
@@ -102,7 +109,7 @@ export function registerPosixExitedRootCases(
   }
 }
 
-async function zeroBudgetDrain(): Promise<void> {
+async function unreadDrain(budgetMs: number): Promise<void> {
   let pid: number | undefined;
   const reaped = Promise.withResolvers<ChildFact>();
   const adapter = createProcessAdapter(
@@ -119,7 +126,7 @@ async function zeroBudgetDrain(): Promise<void> {
     args: [
       "-e",
       // Keep the root live until SIGKILL, so Darwin's zombie-only group refusal
-      // cannot replace the zero-budget drain failure this case exercises. Ready
+      // cannot replace the drain failure this case exercises. Ready
       // is reported only after a stdout byte reached the kernel, and stdout is
       // never read: bytes left in the child's own buffer would die with it.
       "process.on('SIGTERM',()=>{});process.stdout.write('x',()=>process.stderr.write('ready'));setInterval(()=>{},1000);",
@@ -137,18 +144,20 @@ async function zeroBudgetDrain(): Promise<void> {
     const ready = await child.stderr[Symbol.asyncIterator]().next();
     assert.ok(!ready.done);
     assert.equal(Buffer.from(ready.value).toString(), "ready");
-    assert.deepEqual(await child.closeStdin(0), { kind: "cleanup-timeout" });
+    assert.deepEqual(await child.closeStdin(budgetMs), {
+      kind: "cleanup-timeout",
+    });
     const close = await child.closed();
     assert.equal(close.kind, "cleanup-error");
     if (close.kind !== "cleanup-error")
       throw new Error("expected failed drain");
     assert.ok(close.cause instanceof Error);
     assert.match(close.cause.message, /POSIX stdin cleanup timeout/);
-    await waitForDeath(adapter, pid, "zero-budget child survived cleanup");
+    await waitForDeath(adapter, pid, "unread-drain child survived cleanup");
     const terminal = await withTimeout(
       reaped.promise,
       5000,
-      "zero-budget root was not reaped",
+      "unread-drain root was not reaped",
     );
     assert.ok(terminal.kind === "reap");
     assert.equal(terminal.signal, "SIGKILL");
