@@ -1,0 +1,660 @@
+{
+  "checkedAt": "2026-10-09T07:31:39Z",
+  "method": "All Check runs created after M12 (#467) closed at 2026-10-08T06:28:09Z, every run attempt, completed assigned-runner non-skipped jobs, each job runtime rounded up to a whole minute; public-runner runtime, not a private invoice",
+  "summary": {
+    "period_start": "2026-10-08T06:28:09Z",
+    "period_end": "2026-10-09T07:31:39Z",
+    "period_hours": 25.06,
+    "run_count": 43,
+    "attempt_count": 46,
+    "included_job_count": 321,
+    "run_conclusions": {
+      "success": 34,
+      "failure": 7,
+      "cancelled": 2
+    },
+    "minutes_by_os": {
+      "linux": 532,
+      "windows": 798,
+      "macos": 509
+    },
+    "gross_list_usd": 42.73,
+    "list_rates_usd_per_min": {
+      "linux": 0.006,
+      "windows": 0.01,
+      "macos": 0.062
+    },
+    "minutes_by_job": {
+      "build": {
+        "linux": 59
+      },
+      "check": {
+        "linux": 341,
+        "windows": 538,
+        "macos": 369
+      },
+      "consumer": {
+        "windows": 260,
+        "macos": 140,
+        "linux": 132
+      }
+    }
+  },
+  "billingCrossCheck": {
+    "endpoint": "GET /organizations/secantdev/settings/billing/usage?year=2026&month=10&day=9",
+    "billing_minutes": {
+      "linux": 177,
+      "windows": 286,
+      "macos": 164
+    },
+    "census_minutes_runs_created_2026-10-09": {
+      "linux": 175,
+      "windows": 286,
+      "macos": 163
+    }
+  },
+  "runs": [
+    {
+      "id": 37897606765,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T07:11:26Z",
+      "sha": "3c9a2a4",
+      "minutes": {
+        "linux": 15,
+        "windows": 22,
+        "macos": 13
+      }
+    },
+    {
+      "id": 37896004542,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T06:54:19Z",
+      "sha": "97a94cd",
+      "minutes": {
+        "linux": 12,
+        "windows": 21,
+        "macos": 12
+      }
+    },
+    {
+      "id": 37893913816,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "failure",
+      "created": "2026-10-09T06:30:51Z",
+      "sha": "962a5b9",
+      "minutes": {
+        "macos": 12,
+        "linux": 14,
+        "windows": 15
+      }
+    },
+    {
+      "id": 37893224075,
+      "branch": "450-implement",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "cancelled",
+      "created": "2026-10-09T06:22:53Z",
+      "sha": "473995f",
+      "minutes": {
+        "linux": 12,
+        "macos": 10,
+        "windows": 19
+      }
+    },
+    {
+      "id": 37889404881,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T05:36:45Z",
+      "sha": "4103860",
+      "minutes": {
+        "macos": 12,
+        "linux": 14,
+        "windows": 22
+      }
+    },
+    {
+      "id": 37888209682,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T05:21:44Z",
+      "sha": "62a5fda",
+      "minutes": {
+        "linux": 13,
+        "windows": 21,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37886577132,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T05:01:07Z",
+      "sha": "0b93273",
+      "minutes": {
+        "linux": 10,
+        "macos": 12,
+        "windows": 22
+      }
+    },
+    {
+      "id": 37880868321,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T03:47:17Z",
+      "sha": "ae16696",
+      "minutes": {
+        "linux": 14,
+        "macos": 13,
+        "windows": 21
+      }
+    },
+    {
+      "id": 37877964866,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "failure",
+      "created": "2026-10-09T03:09:25Z",
+      "sha": "09bcf38",
+      "minutes": {
+        "linux": 11,
+        "windows": 21,
+        "macos": 13
+      }
+    },
+    {
+      "id": 37876696583,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T02:53:20Z",
+      "sha": "688092a",
+      "minutes": {
+        "linux": 13,
+        "macos": 12,
+        "windows": 21
+      }
+    },
+    {
+      "id": 37875676414,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T02:40:22Z",
+      "sha": "857283a",
+      "minutes": {
+        "linux": 10,
+        "windows": 18,
+        "macos": 10
+      }
+    },
+    {
+      "id": 37874733968,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T02:28:26Z",
+      "sha": "281ddf1",
+      "minutes": {
+        "linux": 13,
+        "macos": 12,
+        "windows": 20
+      }
+    },
+    {
+      "id": 37873925507,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-09T02:18:12Z",
+      "sha": "b5a833d",
+      "minutes": {
+        "linux": 12,
+        "macos": 10,
+        "windows": 22
+      }
+    },
+    {
+      "id": 37871961189,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "failure",
+      "created": "2026-10-09T01:53:50Z",
+      "sha": "4675451",
+      "minutes": {
+        "linux": 12,
+        "macos": 11,
+        "windows": 21
+      }
+    },
+    {
+      "id": 37824786498,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T18:30:17Z",
+      "sha": "544fc71",
+      "minutes": {
+        "linux": 13,
+        "windows": 18,
+        "macos": 14
+      }
+    },
+    {
+      "id": 37816155928,
+      "branch": "main",
+      "event": "push",
+      "attempts": 2,
+      "conclusion": "success",
+      "created": "2026-10-08T17:23:18Z",
+      "sha": "41b1579",
+      "minutes": {
+        "windows": 32,
+        "linux": 26,
+        "macos": 12
+      }
+    },
+    {
+      "id": 37807914419,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T16:19:46Z",
+      "sha": "326e2f6",
+      "minutes": {
+        "windows": 16,
+        "macos": 12,
+        "linux": 13
+      }
+    },
+    {
+      "id": 37797872870,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T15:05:35Z",
+      "sha": "81082da",
+      "minutes": {
+        "linux": 11,
+        "windows": 18,
+        "macos": 9
+      }
+    },
+    {
+      "id": 37792544614,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T14:26:58Z",
+      "sha": "e58a06e",
+      "minutes": {
+        "linux": 13,
+        "macos": 12,
+        "windows": 14
+      }
+    },
+    {
+      "id": 37789734492,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T14:06:19Z",
+      "sha": "7cedd83",
+      "minutes": {
+        "linux": 10,
+        "windows": 16,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37786099244,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T13:39:36Z",
+      "sha": "21bea23",
+      "minutes": {
+        "linux": 11,
+        "windows": 18,
+        "macos": 12
+      }
+    },
+    {
+      "id": 37783261361,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T13:18:02Z",
+      "sha": "b609817",
+      "minutes": {
+        "linux": 11,
+        "windows": 17,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37781609736,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "failure",
+      "created": "2026-10-08T13:05:09Z",
+      "sha": "924194b",
+      "minutes": {
+        "macos": 14,
+        "windows": 17,
+        "linux": 11
+      }
+    },
+    {
+      "id": 37778286970,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "failure",
+      "created": "2026-10-08T12:38:13Z",
+      "sha": "deac3bb",
+      "minutes": {
+        "linux": 11,
+        "macos": 13,
+        "windows": 17
+      }
+    },
+    {
+      "id": 37775636773,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T12:15:50Z",
+      "sha": "861930a",
+      "minutes": {
+        "linux": 12,
+        "macos": 11,
+        "windows": 17
+      }
+    },
+    {
+      "id": 37772815775,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T11:51:15Z",
+      "sha": "fc4c1ca",
+      "minutes": {
+        "linux": 11,
+        "macos": 10,
+        "windows": 16
+      }
+    },
+    {
+      "id": 37769833274,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T11:24:29Z",
+      "sha": "76cbb55",
+      "minutes": {
+        "linux": 10,
+        "windows": 16,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37769142085,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T11:18:07Z",
+      "sha": "dc2c3bc",
+      "minutes": {
+        "linux": 10,
+        "windows": 17,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37766617056,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T10:54:59Z",
+      "sha": "a4bd516",
+      "minutes": {
+        "linux": 12,
+        "macos": 10,
+        "windows": 13
+      }
+    },
+    {
+      "id": 37764166369,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T10:32:43Z",
+      "sha": "ec26f16",
+      "minutes": {
+        "linux": 10,
+        "windows": 13,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37763768417,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T10:29:08Z",
+      "sha": "6de39dc",
+      "minutes": {
+        "windows": 17,
+        "linux": 9,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37761836980,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T10:11:31Z",
+      "sha": "59b7a29",
+      "minutes": {
+        "linux": 11,
+        "windows": 15,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37757969004,
+      "branch": "main",
+      "event": "push",
+      "attempts": 2,
+      "conclusion": "success",
+      "created": "2026-10-08T09:37:43Z",
+      "sha": "8b31c67",
+      "minutes": {
+        "windows": 34,
+        "linux": 20,
+        "macos": 22
+      }
+    },
+    {
+      "id": 37756483866,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T09:24:57Z",
+      "sha": "3cd2328",
+      "minutes": {
+        "linux": 12,
+        "macos": 10,
+        "windows": 16
+      }
+    },
+    {
+      "id": 37755839850,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T09:19:24Z",
+      "sha": "eb129ca",
+      "minutes": {
+        "linux": 11,
+        "windows": 17,
+        "macos": 9
+      }
+    },
+    {
+      "id": 37753508862,
+      "branch": "research/native-observed-facts",
+      "event": "push",
+      "attempts": 2,
+      "conclusion": "success",
+      "created": "2026-10-08T08:59:13Z",
+      "sha": "6f99ee3",
+      "minutes": {
+        "linux": 20,
+        "windows": 31,
+        "macos": 23
+      }
+    },
+    {
+      "id": 37753349547,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T08:57:48Z",
+      "sha": "db842db",
+      "minutes": {
+        "linux": 11,
+        "windows": 16,
+        "macos": 11
+      }
+    },
+    {
+      "id": 37751918423,
+      "branch": "research/native-observed-facts",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "failure",
+      "created": "2026-10-08T08:45:06Z",
+      "sha": "7f64b13",
+      "minutes": {
+        "linux": 11,
+        "windows": 13,
+        "macos": 10
+      }
+    },
+    {
+      "id": 37749577778,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "failure",
+      "created": "2026-10-08T08:24:02Z",
+      "sha": "392046e",
+      "minutes": {
+        "macos": 9,
+        "linux": 11,
+        "windows": 15
+      }
+    },
+    {
+      "id": 37747427530,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T08:04:25Z",
+      "sha": "dcbc01c",
+      "minutes": {
+        "linux": 12,
+        "macos": 12,
+        "windows": 15
+      }
+    },
+    {
+      "id": 37744924496,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T07:40:48Z",
+      "sha": "95d6a70",
+      "minutes": {
+        "linux": 12,
+        "macos": 11,
+        "windows": 15
+      }
+    },
+    {
+      "id": 37741730959,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "success",
+      "created": "2026-10-08T07:09:34Z",
+      "sha": "4c08400",
+      "minutes": {
+        "linux": 11,
+        "windows": 17,
+        "macos": 12
+      }
+    },
+    {
+      "id": 37740912289,
+      "branch": "main",
+      "event": "push",
+      "attempts": 1,
+      "conclusion": "cancelled",
+      "created": "2026-10-08T07:01:21Z",
+      "sha": "0050196",
+      "minutes": {
+        "linux": 11,
+        "macos": 11,
+        "windows": 16
+      }
+    }
+  ]
+}
