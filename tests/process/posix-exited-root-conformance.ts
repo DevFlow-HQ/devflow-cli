@@ -119,8 +119,10 @@ async function zeroBudgetDrain(): Promise<void> {
     args: [
       "-e",
       // Keep the root live until SIGKILL, so Darwin's zombie-only group refusal
-      // cannot replace the zero-budget drain failure this case exercises.
-      "process.on('SIGTERM',()=>{});process.stdout.write('x'.repeat(1024*1024));setInterval(()=>{},1000);",
+      // cannot replace the zero-budget drain failure this case exercises. Ready
+      // is reported only after a stdout byte reached the kernel, and stdout is
+      // never read: bytes left in the child's own buffer would die with it.
+      "process.on('SIGTERM',()=>{});process.stdout.write('x',()=>process.stderr.write('ready'));setInterval(()=>{},1000);",
     ],
     cwd: process.cwd(),
     env: process.env,
@@ -130,9 +132,11 @@ async function zeroBudgetDrain(): Promise<void> {
   assert.ok(pid !== undefined);
   const child = launched.process;
   try {
-    // Readiness consumes one chunk; retained unread bytes prevent a drain claim.
-    const first = await child.stdout[Symbol.asyncIterator]().next();
-    assert.ok(!first.done && first.value.byteLength > 0);
+    // Readiness reads stderr only. One read may take every buffered byte, so
+    // reading stdout could leave nothing unread; unread stdout prevents a drain claim.
+    const ready = await child.stderr[Symbol.asyncIterator]().next();
+    assert.ok(!ready.done);
+    assert.equal(Buffer.from(ready.value).toString(), "ready");
     assert.deepEqual(await child.closeStdin(0), { kind: "cleanup-timeout" });
     const close = await child.closed();
     assert.equal(close.kind, "cleanup-error");
