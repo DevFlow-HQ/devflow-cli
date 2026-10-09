@@ -394,6 +394,12 @@ jobs:
           tests/tui/run-workbench-file-cap.test.tsx
           tests/harness/observed-facts.test.ts
           tests/headless/run.test.ts
+      - name: m10-audit-ctrl-o-one-row
+        run: >-
+          bun run test --
+          -t '^m10-audit-ctrl-o-one-row(:|$)'
+          tests/tui/run-workbench-ctrl-o.test.tsx
+          tests/tui/run-workbench-inspection.test.tsx
       - name: m10-audit-anchor-content-offset
         run: >-
           bun run test --

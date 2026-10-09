@@ -278,12 +278,26 @@ async function refusalWorkbench(
   assert.match(frame, /Tool · file change · running/);
   assert.match(frame, /Thought.*Thinking.*Summary label/);
   assert.doesNotMatch(frame, /Retained summary body/);
-  // Entry prompts now participate in the existing first-visible Ctrl+O route (#443).
+  // The bottom-most qualifying row is the Thought, while the earlier Entry prompt stays collapsed (#503).
   fakeRenderer.key("o", { ctrl: true });
+  await rendered.renderOnce();
+  assert.match(rendered.captureCharFrame(), /Retained summary body/);
+  assert.doesNotMatch(rendered.captureCharFrame(), /Repair the test\./);
+  assert.match(rendered.captureCharFrame(), /Permission required/);
+  fakeRenderer.key("o", { ctrl: true });
+  await rendered.renderOnce();
+  assert.doesNotMatch(rendered.captureCharFrame(), /Retained summary body/);
+  // A click still opens the Entry prompt while the Request owns the bottom (#443/#445).
+  const entryLine = rendered
+    .captureCharFrame()
+    .split("\n")
+    .findIndex((line) => line.includes("Secant started the Step"));
+  assert.ok(entryLine >= 0);
+  await rendered.mockMouse.click(10, entryLine);
   await rendered.renderOnce();
   assert.match(rendered.captureCharFrame(), /Repair the test\./);
   assert.match(rendered.captureCharFrame(), /Permission required/);
-  fakeRenderer.key("o", { ctrl: true });
+  await rendered.mockMouse.click(10, entryLine);
   await rendered.renderOnce();
   assert.doesNotMatch(rendered.captureCharFrame(), /Repair the test\./);
   const thoughtLine = rendered

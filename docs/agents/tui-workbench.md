@@ -37,7 +37,7 @@ decide the screen and its routes.
 - The prompt is a `<textarea>` with Enter bound to `submit`, so only the dispatcher sends; Shift+Enter and Ctrl+J insert newlines. The Port key carries `shift`,
   so the dispatcher never treats Shift+Enter as Enter. The textarea owns its text after mount: write back only a changed draft (a clear, a restore).
 - Keys (ADR 0036/0040): Enter sends at a Turn boundary and steers a working Turn; Esc Esc Interrupts; Ctrl+E is End Step only; Ctrl+N Continue; Ctrl+O
-  expands the first visible detail; Ctrl+G details; Ctrl+P the palette; Ctrl+R reconnects a disconnected view, else retries a failed appearance save; Ctrl+C
+  toggles the bottom-most qualifying visible detail; Ctrl+G details; Ctrl+P the palette; Ctrl+R reconnects a disconnected view, else retries a failed appearance save; Ctrl+C
   clears a nonempty draft, then requests guarded Quit. End Stage has no key. No bare letter is a Workbench command beside the prompt. Alt+arrows/Home/End and
   PageUp/Down scroll history; native arrows/Home/End edit. Checkpoints keep Left/Right choices while modified navigation and the wheel scroll history;
   Esc at a Turn boundary leaves after dismissing an open Slash list.
@@ -73,7 +73,7 @@ Before changing completion, Slash discovery, drafts, prompt captures, or restora
 - After shell shortcuts, output inspection and the details-opened Session reader own every key but Ctrl+C. Esc returns to the selected details resource;
   `q` enters guarded Exit (#392). Keep Running preserves the content, scroll, and focus.
 - Immediate durable Turn settlement clears the Run control overlay (`reduceRunUpdate`, `run-view.tsx`); a trailing `settling` observation cannot restore it (#412).
-  History ids survive wrapping/settlement. Ctrl+O opens first visible detail; click opens its row. Output/Thoughts toggle; supplied diffs open uncapped inspection.
+  History ids survive wrapping/settlement. Ctrl+O targets one qualifying visible row; click opens its row. Output/Thoughts toggle; supplied diffs open uncapped inspection.
   History-only observer loss is visible and reconnectable; reopening issues fresh ids and resets the viewport. Workflow facts follow their Turn, including equal-time
   ties.
 
@@ -87,6 +87,10 @@ Before changing completion, Slash discovery, drafts, prompt captures, or restora
   Passive changes stay paused. Up starts at the actual anchor, including blank space below short pages; only latest or deliberate Down resumes following.
   A removed anchor chooses the nearest prior survivor, ties later, at its first displayed line; a short or empty page stays paused. Dividers count toward their content row.
   Negative offsets name the leading divider lines.
+- Ctrl+O targets the bottom-most row with any line visible and detail hidden by its collapsed form, using cached drawing measurements. It skips empty
+  Thoughts/Entry prompts and output with no hidden lines or characters. It remembers an in-place opened row; the next press only closes it, even off-screen
+  or after arrivals. A click closing it or window eviction clears the memory. Supplied patch inspection clears it, consumes Ctrl+O, and closes with Esc.
+  Live readers follow the opened end; paused content keeps its anchor, as for a click. Expand-all stays rejected.
 - Ctrl+O/click opens a history detail: output and Thoughts toggle by row id; call patches and Turn diffs open complete supplied content (#415–#417).
   Output collapses before wrapping at ten logical lines or `10 * Math.max(20, width - 6)` code points, whichever comes first; the omission count names
   lines or characters truthfully. It never auto-expands; diff inspection stays uncapped. Thought ticks change headings; modal/input key ownership stays unchanged.

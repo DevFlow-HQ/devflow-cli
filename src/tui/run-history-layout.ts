@@ -64,44 +64,53 @@ function rowText(
   width: number,
   reducedMotion: boolean,
   humanPanel: boolean,
-): ScreenedText {
+): ScreenedText & { readonly hasDetail: boolean } {
   const prefix =
     row.value?.kind === "tool" && row.value.outcome.kind === "running"
       ? `  ${reducedMotion ? "[.]" : "|"} `
       : "  ";
   if (humanPanel) {
-    return screenText(prefix + row.text.replaceAll("\n", "\n  "));
+    return {
+      ...screenText(prefix + row.text.replaceAll("\n", "\n  ")),
+      hasDetail: false,
+    };
   }
   if (row.value?.kind === "entry-prompt") {
     const header = clipScreened(
       screenText(`${prefix}${expanded ? "▾" : "▸"} ${row.text}`),
       width,
     );
-    return expanded
-      ? { text: `${header.text}\n${screenText(row.value.content).text}` }
-      : header;
+    const body = screenText(row.value.content).text;
+    return {
+      text: expanded ? `${header.text}\n${body}` : header.text,
+      hasDetail: body.length > 0,
+    };
   }
-  if (row.inspection !== undefined) return screenText(`${prefix}▸ ${row.text}`);
+  if (row.inspection !== undefined)
+    return { ...screenText(`${prefix}▸ ${row.text}`), hasDetail: true };
   if (row.output !== undefined) {
     const output = screenText(row.output.text).text;
     const heading = screenText(row.text).text;
     // Apply both limits before wrapping. Hidden output is never laid out.
-    const preview = expanded
-      ? { text: output, hidden: "" }
-      : collapsedOutput(output, width);
+    const collapsed = collapsedOutput(output, width);
+    const preview = expanded ? { text: output, hidden: "" } : collapsed;
     const label = row.output.live
       ? "live"
       : row.output.incomplete
         ? "potentially incomplete"
         : "final";
     return {
+      hasDetail: collapsed.hidden !== "",
       text: `${prefix}${heading}\n  ${expanded ? "▾" : "▸"} Output · ${label}${output === "" ? " · empty" : ""}${preview.hidden === "" ? "" : ` · ${preview.hidden}`}${row.output.secantDropped ? "\nSecant · earlier output dropped" : ""}${output === "" ? "" : `\n${preview.text}`}`,
     };
   }
   if (row.thought === undefined)
-    return row.oneLine
-      ? clipScreened(screenText(prefix + row.text), width)
-      : screenText(prefix + row.text);
+    return {
+      ...(row.oneLine
+        ? clipScreened(screenText(prefix + row.text), width)
+        : screenText(prefix + row.text)),
+      hasDetail: false,
+    };
   const label = row.thought.live
     ? row.text.replace(
         "Thought · Thinking",
@@ -112,9 +121,11 @@ function rowText(
     screenText(`  ${expanded ? "▾" : "▸"} ${label}`),
     width,
   );
-  return expanded
-    ? { text: `${header.text}\n${screenText(row.thought.content).text}` }
-    : header;
+  const body = screenText(row.thought.content).text;
+  return {
+    text: expanded ? `${header.text}\n${body}` : header.text,
+    hasDetail: body.length > 0,
+  };
 }
 
 /** Row identity owns per-width and expansion layouts of its current value.
@@ -131,6 +142,7 @@ export function createHistoryLayout(
     readonly thoughtHeader: number;
     readonly toolHeader: number;
     readonly humanPanel: boolean;
+    readonly hasDetail: boolean;
   };
   type Cached = {
     row: TimelineRow;
@@ -200,6 +212,7 @@ export function createHistoryLayout(
               ? prefix
               : -1,
           humanPanel,
+          hasDetail: text.hasDetail,
         };
         variants.set(isExpanded, layout);
       }

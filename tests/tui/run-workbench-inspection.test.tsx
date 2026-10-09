@@ -669,7 +669,7 @@ test("m10-session-history: tool rows expose color-independent outcomes, input an
   assert.match(t.captureCharFrame(), /read/);
 });
 
-test("m10-session-history: Thought collapse, keyboard expansion, final replacement and resize preserve full content", async () => {
+test("m10-audit-ctrl-o-one-row: bottom-most Thought collapse, keyboard expansion, final replacement and resize preserve full content", async () => {
   const run = runOf({
     sessions: [
       { session: "conversation", name: "Conversation", availability: "open" },
@@ -688,6 +688,14 @@ test("m10-session-history: Thought collapse, keyboard expansion, final replaceme
       found: true,
       history: {
         rows: [
+          {
+            id: "older-thought",
+            position: "earlier",
+            source: "stored",
+            turnStartedAt: "2026-10-05T00:00:00Z",
+            turn: "older-turn",
+            value: { kind: "thought", content: "Older heading\nOLDER_BODY" },
+          },
           {
             id: "opaque-thought",
             position: "opaque-position",
@@ -722,6 +730,7 @@ test("m10-session-history: Thought collapse, keyboard expansion, final replaceme
   assert.match(wb.t.captureCharFrame(), /Thought.*Thinking.*Summary label/);
   assert.doesNotMatch(wb.t.captureCharFrame(), /Full body only/);
   await press(wb.t, wb.renderer, "o", { ctrl: true });
+  assert.doesNotMatch(wb.t.captureCharFrame(), /OLDER_BODY/);
   assert.match(wb.t.captureCharFrame(), /Full body only after expansion/);
   wb.control.setHistory(
     page(
@@ -739,12 +748,15 @@ test("m10-session-history: Thought collapse, keyboard expansion, final replaceme
   noOverflow(wb.t.captureCharFrame(), 40);
   assert.match(wb.t.captureCharFrame(), /Authoritative replacement/);
   await press(wb.t, wb.renderer, "o", { ctrl: true });
+  assert.doesNotMatch(wb.t.captureCharFrame(), /OLDER_BODY/);
   assert.doesNotMatch(wb.t.captureCharFrame(), /Authoritative replacement/);
   assert.match(wb.t.captureCharFrame(), /Summary/);
   const heading = wb.t
     .captureCharFrame()
     .split("\n")
-    .findIndex((line) => line.includes("▸ Thought"));
+    .findIndex(
+      (line) => line.includes("▸ Thought") && line.includes("Summary"),
+    );
   assert.ok(heading >= 0);
   await wb.t.mockMouse.click(10, heading);
   await wb.t.renderOnce();
@@ -834,7 +846,7 @@ for (const visible of [false, true]) {
   });
 }
 
-test("m10-session-history: cumulative diff collapse and keyboard/click inspection retain the complete large patch across resize", async () => {
+test("m10-audit-ctrl-o-one-row: bottom-most cumulative diff collapse and keyboard/click inspection retain the complete large patch across resize", async () => {
   const run = runOf({
     sessions: [
       { session: "conversation", name: "Conversation", availability: "open" },
@@ -851,6 +863,14 @@ test("m10-session-history: cumulative diff collapse and keyboard/click inspectio
       found: true,
       history: {
         rows: [
+          {
+            id: "older-thought",
+            position: "earlier",
+            source: "stored",
+            turnStartedAt: "2026-10-05T00:00:00Z",
+            turn: "older-turn",
+            value: { kind: "thought", content: "Older heading\nOLDER_BODY" },
+          },
           {
             id: "opaque-diff",
             position: "position",
@@ -891,6 +911,7 @@ test("m10-session-history: cumulative diff collapse and keyboard/click inspectio
     /DIFF_FIRST|supplied patch line/,
   );
   await press(wb.t, wb.renderer, "o", { ctrl: true });
+  assert.doesNotMatch(wb.t.captureCharFrame(), /OLDER_BODY/);
   assert.match(wb.t.captureCharFrame(), /DIFF_FIRST/);
   await press(wb.t, wb.renderer, "end");
   assert.match(wb.t.captureCharFrame(), /DIFF_LAST/);
@@ -1007,7 +1028,7 @@ test("m10-session-history: per-call structured patches inspect supplied coordina
 });
 
 for (const appearance of ["dark", "light"] as const)
-  test(`m10-session-history: ${appearance} command output stays at ten logical lines until Ctrl+O or click, retaining expansion through final replacement`, async () => {
+  test(`m10-audit-ctrl-o-one-row: ${appearance} bottom-most command output stays at ten logical lines until Ctrl+O or click, retaining expansion through final replacement`, async () => {
     const run = runOf({
       sessions: [{ session: "s", name: "Conversation", availability: "open" }],
     });
@@ -1043,6 +1064,14 @@ for (const appearance of ["dark", "light"] as const)
         found: true,
         history: {
           rows: [
+            {
+              id: "older-thought",
+              position: "earlier",
+              source: "stored",
+              turnStartedAt: "2026-10-05T00:00:00Z",
+              turn: "older-turn",
+              value: { kind: "thought", content: "Older heading\nOLDER_BODY" },
+            },
             {
               id: "command",
               position: "one",
@@ -1096,6 +1125,7 @@ for (const appearance of ["dark", "light"] as const)
     assert.match(wb.t.captureCharFrame(), /Secant.*earlier output dropped/);
     assert.match(wb.t.captureCharFrame(), /Harness cut stdout/);
     await press(wb.t, wb.renderer, "o", { ctrl: true });
+    assert.doesNotMatch(wb.t.captureCharFrame(), /OLDER_BODY/);
     assert.match(wb.t.captureCharFrame(), /OUTPUT_13/);
     wb.control.setHistory(
       page("stored", text.replaceAll("OUTPUT", "FINAL"), {
@@ -1109,6 +1139,7 @@ for (const appearance of ["dark", "light"] as const)
     assert.match(wb.t.captureCharFrame(), /Reported failure/);
     assert.match(wb.t.captureCharFrame(), /Exit.*2/);
     await press(wb.t, wb.renderer, "o", { ctrl: true });
+    assert.doesNotMatch(wb.t.captureCharFrame(), /OLDER_BODY/);
     assert.doesNotMatch(wb.t.captureCharFrame(), /FINAL_11/);
     const heading = wb.t
       .captureCharFrame()
@@ -1119,6 +1150,7 @@ for (const appearance of ["dark", "light"] as const)
     await wb.t.renderOnce();
     assert.match(wb.t.captureCharFrame(), /FINAL_13/);
     await press(wb.t, wb.renderer, "o", { ctrl: true });
+    assert.doesNotMatch(wb.t.captureCharFrame(), /OLDER_BODY/);
     resizeWorkbench(wb.t, wb.renderer, 40, 44);
     wb.control.setHistory(
       page(

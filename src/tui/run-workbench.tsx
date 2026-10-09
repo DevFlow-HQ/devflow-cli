@@ -1599,6 +1599,7 @@ export function RunWorkbench(props: {
   const [expandedHistory, setExpandedHistory] = createSignal<
     ReadonlySet<string>
   >(new Set());
+  let expandedByKey: string | undefined;
   const [spinnerFrame, setSpinnerFrame] = createSignal(0);
   const liveSpinnerShown = createMemo(() =>
     timelineRows().some(
@@ -1620,6 +1621,8 @@ export function RunWorkbench(props: {
     props.reducedMotion ? "[.]" : ["|", "/", "-", "\\"][spinnerFrame()];
   createEffect(() => {
     const retained = new Set(timelineRows().map((row) => row.key));
+    if (expandedByKey !== undefined && !retained.has(expandedByKey))
+      expandedByKey = undefined;
     setExpandedHistory((previous) => {
       const next = new Set([...previous].filter((key) => retained.has(key)));
       return next.size === previous.size ? previous : next;
@@ -1700,29 +1703,44 @@ export function RunWorkbench(props: {
     )
       return;
     if (row.inspection !== undefined) {
+      expandedByKey = undefined;
       inspection.open(row.inspection);
       return;
     }
     setExpandedHistory((previous) => {
       const next = new Set(previous);
-      if (next.has(row.key)) next.delete(row.key);
-      else next.add(row.key);
+      if (next.has(row.key)) {
+        next.delete(row.key);
+        if (expandedByKey === row.key) expandedByKey = undefined;
+      } else next.add(row.key);
       return next;
     });
   };
-  const firstVisibleDetail = () => {
-    const window = win();
-    for (let line = window.top; line < window.top + window.visible; line++) {
-      const row = rowAtLine(line);
-      if (
-        row?.thought !== undefined ||
-        row?.inspection !== undefined ||
-        row?.output !== undefined ||
-        row?.value?.kind === "entry-prompt"
-      )
-        return row;
+  const toggleHistoryDetail = (): void => {
+    const remembered = timelineRows().find((row) => row.key === expandedByKey);
+    expandedByKey = undefined;
+    if (remembered !== undefined && expandedHistory().has(remembered.key)) {
+      openRowDetail(remembered);
+      return;
     }
-    return undefined;
+    const window = win();
+    let bottom = timelineWrapped().heights.reduce(
+      (sum, height) => sum + height,
+      0,
+    );
+    for (let index = timelineWrapped().rows.length - 1; index >= 0; index--) {
+      const layout = timelineWrapped().rows[index]!;
+      const top = bottom - layout.height;
+      if (bottom <= window.top) break;
+      if (top < window.top + window.visible && layout.hasDetail) {
+        const row = timelineRows()[index]!;
+        openRowDetail(row);
+        if (row.inspection === undefined && expandedHistory().has(row.key))
+          expandedByKey = row.key;
+        return;
+      }
+      bottom = top;
+    }
   };
   const clickTimelineLine = (index: number): void => {
     const row = rowAtLine(win().top + index);
@@ -1919,7 +1937,7 @@ export function RunWorkbench(props: {
       return;
     }
     if (name === "o" && key.ctrl) {
-      openRowDetail(firstVisibleDetail());
+      toggleHistoryDetail();
       return;
     }
     // A request or gate owns Esc and every printable key (A33): its private control

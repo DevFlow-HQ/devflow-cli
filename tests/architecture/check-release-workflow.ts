@@ -207,6 +207,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-screen-control-bytes",
   "m10-audit-changed-file-cap",
   "m10-audit-truthful-keys",
+  "m10-audit-ctrl-o-one-row",
   "m10-audit-anchor-content-offset",
   "m10-audit-windows-release-check",
   "m10-audit-guidance-refresh",

@@ -20,6 +20,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   never a search for matching text.
 - History layouts (#441) retain row/value/width/expansion work, release evicted rows, and window visible lines; transcript prepends re-layout only new entries
   and changed divider junctions. `App.observeLayout` measures actual cache misses through the Renderer fixture; height-only resize must reuse the layout.
+- Ctrl+O eligibility is cached with the drawn collapse (#503). Its remembered row uses the history id, clears on click-close or eviction, and never
+  names a modal inspection. Visibility includes counted prefixes and partial rows.
 - Before changing history rendering, scrolling, or row inspection, read [Workbench history](../../docs/agents/tui-workbench.md#history).
 - Workbench Step-ending Offers expose Run and Step ids, not an Attempt id. Resume evidence is ownerPid and acknowledgement; Interrupt exposes turnId
   (#389). Confirmation lifecycle rules live in [Workbench interaction](../../docs/agents/tui-workbench.md).
