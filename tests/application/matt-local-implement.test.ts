@@ -58,7 +58,6 @@ function completed(content: string): TurnScript {
     result: {
       kind: "completed",
       detail: {
-        finalContent: content,
         effectiveModel: { known: true, model: "fake-model" },
         session: { state: "detached", coordinate: { opaque: "coord" } },
       },

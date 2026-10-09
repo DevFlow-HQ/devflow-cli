@@ -55,7 +55,6 @@ const COMPLETED: FakeScript["turns"][number] = {
   result: {
     kind: "completed",
     detail: {
-      finalContent: "ok",
       effectiveModel: { known: true, model: "fake-model" },
       session: { state: "detached", coordinate: { opaque: "coord-spec" } },
     },

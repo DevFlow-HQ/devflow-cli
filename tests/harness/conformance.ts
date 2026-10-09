@@ -33,6 +33,17 @@ import {
 } from "../../src/harness/harness.js";
 import type { TestHarnessAdapterFactory } from "./test-adapters.js";
 
+/** The latest authoritative assistant content retained by a Turn. */
+export function assistantContent(turn: HarnessTurn): string | undefined {
+  let content: string | undefined;
+  turn
+    .subscribe((event) => {
+      if (event.kind === "assistant-content") content = event.content;
+    })
+    .unsubscribe();
+  return content;
+}
+
 /**
  * How a conformance behaviour is registered. Under the test runner the caller
  * passes `test` from `node:test`; the standalone runtime-conformance runner

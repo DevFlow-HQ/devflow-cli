@@ -480,12 +480,7 @@ test("a reused child that does not answer is relaunched with the choice for this
   assert.equal(flagValue(relaunch, "--effort"), "high");
   assert.deepEqual(controls(scripted, 0).at(-1), "set_model");
   assert.ok(controls(scripted, 1).includes("user"));
-  assert.ok(
-    second.events.some(
-      (event) =>
-        event.kind === "activity" && /did not answer/.test(event.description),
-    ),
-  );
+
   scripted.emit(result);
   assert.equal((await second.turn.result()).kind, "completed");
   assert.equal((await harness.close()).clean, true);

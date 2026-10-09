@@ -87,7 +87,6 @@ function completedScript(model: string | undefined): FakeScript {
         result: {
           kind: "completed",
           detail: {
-            finalContent: "done",
             effectiveModel:
               model !== undefined ? { known: true, model } : { known: false },
             session: { state: "open" },
@@ -500,7 +499,6 @@ test("each effective model and effort a Turn observes is recorded as a Turn even
         result: {
           kind: "completed",
           detail: {
-            finalContent: "done",
             effectiveModel: rerouted,
             session: { state: "open" },
           },

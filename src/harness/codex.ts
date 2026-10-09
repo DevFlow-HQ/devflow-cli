@@ -1411,7 +1411,6 @@ class CodexTurn implements HarnessTurn {
   private readonly summaryParts = new Map<string, Map<number, string>>();
   /** Codex refused the first `thread/read`; the Turn's next item reads again. */
   private rereadPending = false;
-  private finalContent: string | undefined;
   private terminalError: string | undefined;
   private readonly pendingNotifications: RuntimeNotification[] = [];
   private lastObservation = "no authoritative Codex Turn observation";
@@ -1766,10 +1765,6 @@ class CodexTurn implements HarnessTurn {
       cause instanceof CodexRpcResponseError ||
       cause instanceof CodexExchangeTimeoutError
     ) {
-      this.emit({
-        kind: "activity",
-        description: `${diagnostics} ${cause.message}`,
-      });
       return { outcome: "rejected", reason: "expired" };
     }
     this.controlFailure({
@@ -2196,7 +2191,6 @@ class CodexTurn implements HarnessTurn {
         if (notification.event !== undefined) {
           if (notification.event.kind === "assistant-content") {
             this.producer.clearPreview(notification.event.messageId);
-            this.finalContent = notification.event.content;
             this.lastObservation =
               "Codex completed an authoritative agent message";
           }
@@ -2223,12 +2217,11 @@ class CodexTurn implements HarnessTurn {
         if (!notification.willRetry) {
           this.terminalError = notification.message;
         }
-        this.emit({
-          kind: "activity",
-          description: notification.willRetry
+        this.lastObservation = redactText(
+          notification.willRetry
             ? `Codex is retrying after an error: ${notification.message}`
             : `Codex reported an error: ${notification.message}`,
-        });
+        );
         return;
       case "turn-completed":
         this.acceptTerminal(notification);
@@ -2414,10 +2407,10 @@ class CodexTurn implements HarnessTurn {
     cause: unknown,
     { reread }: { readonly reread: boolean } = { reread: false },
   ): void {
-    this.emit({
-      kind: "activity",
-      description: `Codex did not report this Turn's effective model and effort${reread ? " yet, so its next item reads them again" : ""}: ${cause instanceof Error ? cause.message : String(cause)}`,
-    });
+    if (this.settled || this.producer.sealed) return;
+    this.lastObservation = redactText(
+      `Codex did not report this Turn's effective model and effort${reread ? " yet, so its next item reads them again" : ""}: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
   }
 
   private observeModel(model: string, effort: string | undefined): void {
@@ -2579,12 +2572,10 @@ class CodexTurn implements HarnessTurn {
         this.acceptTurn(started);
         return;
       }
-      if (started !== empty) {
-        this.emit({
-          kind: "activity",
-          description: `Codex refused to re-deliver a Steer. ${started.message}`,
-        });
-      }
+      if (started !== empty)
+        this.lastObservation = redactText(
+          `Codex refused to re-deliver a Steer. ${started.message}`,
+        );
       // The native terminal stands; the Steers stay in history, delivered.
       this.settleTerminal(terminal);
     } catch (cause) {
@@ -2622,9 +2613,6 @@ class CodexTurn implements HarnessTurn {
         {
           kind: "completed",
           detail: {
-            ...(this.finalContent !== undefined
-              ? this.producer.redact({ finalContent: this.finalContent })
-              : {}),
             effectiveModel: this.model,
             session: { state: "open" },
           },

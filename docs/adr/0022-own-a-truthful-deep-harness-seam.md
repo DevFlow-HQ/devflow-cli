@@ -34,8 +34,9 @@ reasoning and may cross the Seam; the raw chain of thought stays private.)
 native command previews, patches, and summary rows, inherits Harness summary settings, and limits context to reported facts rather than calculations.
 Unknown protocol methods and accounting notices do not become generic activity; meaningful tool work remains displayable.)
 The Adapter drains the native transport independently of a slow TUI, coalesces only replaceable previews, closes the producer after all final facts
-are queued, and only then settles the result; no event can follow it. The result alone carries terminal status, authoritative final assistant content
-when available, the effective-model observation, post-Turn Session availability, and structured failure.
+are queued, and only then settles the result; no event can follow it. The result carries terminal status, the effective-model observation,
+post-Turn Session availability, and structured failure. Authoritative assistant content crosses as `assistant-content` events.
+(Edited 2026-10-09 for [M10 audit A13](https://github.com/secantdev/secant/issues/440): retire generic activity events and the unread final-content result field.)
 
 Controls are closed and stateful. `steer` means native same-Turn input only; `answer-request` addresses one exact ephemeral approval or structured
 clarification; `interrupt` means Harness-confirmed termination of the active Turn and its native work. Ordinary turn-taking calls `startTurn` again,

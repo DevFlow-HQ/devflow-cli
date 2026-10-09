@@ -192,8 +192,14 @@ const DEFAULT_CLEANUP: CleanupReport = {
 /** The history/live barrier a load-with-replay resume emits once, after every
  *  replayed history event and before any live event. */
 export const REPLAY_BARRIER: TurnEvent = {
-  kind: "activity",
-  description: "history/live barrier: replayed history ends here",
+  kind: "session",
+  availability: { state: "open" },
+  facts: {
+    recoveryCoordinate: { opaque: "fake-replay-barrier" },
+    tools: [],
+    mcp: [],
+    commands: [],
+  },
 };
 
 /** The settled message, tool, partial-output, and Thought facts replayed as

@@ -24,7 +24,7 @@ import {
   TURN_RESULT_KINDS,
 } from "../../src/harness/harness.js";
 
-test("the closed vocabulary sets are exactly what the Interface fixes", () => {
+test("m10-audit-retired-seam-vocabulary: the closed vocabulary sets are exactly what the Interface fixes", () => {
   assert.deepEqual([...HARNESS_PLATFORMS], ["windows", "macos", "linux"]);
   assert.deepEqual([...TURN_ORIGINS], ["managed", "human"]);
   assert.deepEqual([...APPROVAL_DECISIONS], ["allow", "deny"]);
@@ -60,7 +60,6 @@ test("the closed vocabulary sets are exactly what the Interface fixes", () => {
       "thought-preview",
       "context",
       "usage",
-      "activity",
       "model",
       "steer",
     ],

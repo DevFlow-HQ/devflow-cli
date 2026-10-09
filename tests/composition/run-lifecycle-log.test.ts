@@ -75,7 +75,7 @@ const FAILED: TurnResult = {
   },
 };
 
-/** Many streamed events: transcript content, previews, and activity. */
+/** Many streamed events: transcript content, previews, and usage. */
 function streamed(count: number): TurnEvent[] {
   return Array.from({ length: count }, (_, index): TurnEvent => {
     switch (index % 3) {
@@ -88,7 +88,7 @@ function streamed(count: number): TurnEvent[] {
           content: SEEDED_CONTENT,
         };
       default:
-        return { kind: "activity", description: SEEDED_CONTENT };
+        return { kind: "usage", observation: { summary: SEEDED_CONTENT } };
     }
   });
 }

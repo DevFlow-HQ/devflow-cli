@@ -287,6 +287,12 @@ jobs:
           tests/headless/run.test.ts
           tests/headless/agent-step.test.ts
           tests/tui/run-view.test.ts
+      - name: m10-audit-retired-seam-vocabulary
+        run: >-
+          bun run test
+          -t '^m10-audit-retired-seam-vocabulary(:|$)'
+          tests/harness/harness.test.ts
+          tests/harness/retired-seam-vocabulary.test.ts
       - name: m10-audit-claude-fact-translation
         run: >-
           bun run test --

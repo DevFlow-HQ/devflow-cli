@@ -80,7 +80,6 @@ function plainScript(): FakeScript {
         result: {
           kind: "completed",
           detail: {
-            finalContent: "hello",
             effectiveModel: { known: true, model: PLAIN_EFFECTIVE_MODEL },
             session: { state: "open" },
           },
@@ -322,7 +321,6 @@ test("[selected-versus-observed-evidence] headless distinguishes durable selecti
         result: {
           kind: "completed",
           detail: {
-            finalContent: "done",
             effectiveModel: { known: true, model: "gpt-6" },
             session: { state: "open" },
           },
@@ -1232,7 +1230,6 @@ function lockedScript(): FakeScript {
         result: {
           kind: "completed",
           detail: {
-            finalContent: "done",
             effectiveModel: {
               known: true,
               model: "observed-model",

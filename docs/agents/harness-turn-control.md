@@ -5,7 +5,7 @@ Native mechanics live in [Harness adapters](./harness-adapters.md).
 
 ## Interrupt, recovery, and cleanup
 
-- Codex control timeouts and native RPC errors refuse the call while native terminal truth owns the Turn; unexpected refusals emit a live activity diagnostic.
+- Codex control timeouts and native RPC errors refuse the call while native terminal truth owns the Turn; the control phase retains refusal diagnostics.
   A timed-out Interrupt stays sent: retries and Steer are refused, and later connection loss leaves interruption unknown. A native RPC error resets it to idle.
   Refusal alone preserves attachment; malformed responses and transport failures still lose and detach the Turn.
 - A Turn settles `interrupted` only on confirmed interruption: a matching native terminal is `active-turn` (Codex; Claude Code since #346), a graceful

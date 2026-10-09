@@ -77,7 +77,6 @@ function completedScript(
         result: {
           kind: "completed",
           detail: {
-            finalContent: "done",
             effectiveModel:
               model !== undefined ? { known: true, model } : { known: false },
             session: { state: "open" },
@@ -718,7 +717,6 @@ test("[selected-versus-observed-evidence] resume preserves selection while a lat
           result: {
             kind: "completed",
             detail: {
-              finalContent: "resumed",
               effectiveModel: { known: false },
               session: { state: "open" },
             },
@@ -784,7 +782,6 @@ test("a reopened Run's steer Offer uses the recorded profile evidence (#134 A12)
         result: {
           kind: "completed",
           detail: {
-            finalContent: "done",
             effectiveModel: { known: false },
             session: { state: "open" },
           },

@@ -20,7 +20,6 @@ export const SEEDED_COORDINATE = "seeded-coordinate-a1b2c3";
 export const COMPLETED: TurnResult = {
   kind: "completed",
   detail: {
-    finalContent: SEEDED_CONTENT,
     effectiveModel: { known: false },
     session: { state: "detached", coordinate: { opaque: SEEDED_COORDINATE } },
   },

@@ -116,7 +116,6 @@ const INTERRUPTED_DETACHED: TurnResult = {
 const COMPLETED_OPEN: TurnResult = {
   kind: "completed",
   detail: {
-    finalContent: "done",
     effectiveModel: { known: false },
     session: { state: "open" },
   },

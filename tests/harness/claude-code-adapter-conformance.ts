@@ -1,3 +1,4 @@
+import { assistantContent } from "./conformance.js";
 // The Claude-Code-specific Adapter conformance cases: redaction, lenient frame
 // parsing, authentication classification, discovery order and refusals, the M3
 // profile facts and posture, launch/resume/--model argv, that no forbidden flag
@@ -13,6 +14,8 @@
 // the runner; a `skip` option drops a case on the platform it does not apply to.
 
 import assert from "node:assert/strict";
+import { createProcessAdapter } from "../../src/process/process.js";
+import { withRunnerObserver } from "../helpers/standalone.js";
 import { z } from "zod";
 import { execFileSync } from "node:child_process";
 import {
@@ -505,7 +508,7 @@ async function runProtocolTurn(caseName: string, id: string) {
   });
   turn.subscribe((event) => events.push(event));
   const result = await turn.result();
-  return { harness: prepared.harness, events, result, replayer };
+  return { harness: prepared.harness, turn, events, result, replayer };
 }
 
 test("a not-logged-in result yields the exact authentication failure and leaks no credential", async () => {
@@ -533,13 +536,13 @@ test("a success result that quotes a login phrase but is not an error stays comp
   // answer whose text merely quotes "please run /login": that result settles with
   // is_error:false, so it stays completed, not authentication-failed. Only a
   // success result flagged is_error:true is the real not-logged-in signal.
-  const { harness, result } = await runProtocolTurn(
+  const { harness, turn, result } = await runProtocolTurn(
     "completed-quotes-login",
     "88888888-8888-4888-8888-888888888888",
   );
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
-  assert.match(result.detail.finalContent ?? "", /please run \/login/);
+  assert.match(assistantContent(turn) ?? "", /please run \/login/);
   await harness.close();
 });
 
@@ -770,7 +773,7 @@ test("a known frame with an unrecognised extra field, or with a required field o
 
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
-  assert.equal(result.detail.finalContent, "done");
+  assert.equal(assistantContent(turn), "hello");
   const messages = events.filter((event) => event.kind === "assistant-content");
   assert.equal(messages.length, 1);
   const message = messages[0];
@@ -790,21 +793,20 @@ test("a known frame with an unrecognised extra field, or with a required field o
     replay.filter((event) => event.kind === "assistant-content"),
     messages,
   );
-  const activity = events.flatMap((event) =>
-    event.kind === "activity" ? [event.description] : [],
-  );
   assert.equal(
-    activity.length,
-    1,
-    "only the existing Session description is activity",
+    events.some((event) => String(event.kind) === "activity"),
+    false,
   );
-  assert.doesNotMatch(activity.join("\n"), /Claude Code activity/);
 });
 
 test("CRLF-delimited Claude Code frames preserve a UTF-8 scalar split across chunks", async () => {
   const scripted = scriptedProcess({
     frames: [
       scriptedInit,
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "done → intact" }] },
+      },
       {
         type: "result",
         subtype: "success",
@@ -821,7 +823,7 @@ test("CRLF-delimited Claude Code frames preserve a UTF-8 scalar split across chu
 
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
-  assert.equal(result.detail.finalContent, "done → intact");
+  assert.equal(assistantContent(turn), "done → intact");
 });
 
 test("a close before a result carries its cause with the bearer redacted", async () => {
@@ -942,13 +944,13 @@ function tokenOf(scripted: ScriptedProcess): string {
 test("the recorded plain Turn completes with its assistant text, model, and usage", async () => {
   // The real recording of a no-tools Turn: byte-faithful init, partial stream,
   // assistant text, and success result captured from the installed Claude Code.
-  const { harness, events, result } = await runProtocolTurn(
+  const { harness, turn, events, result } = await runProtocolTurn(
     "plain",
     "11111111-1111-4111-8111-111111111111",
   );
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
-  assert.equal(result.detail.finalContent, "hello");
+  assert.equal(assistantContent(turn), "hello");
   assert.equal(result.detail.effectiveModel.known, true);
   if (!result.detail.effectiveModel.known) throw new Error("unreachable");
   assert.match(result.detail.effectiveModel.model, /^claude-/);
@@ -1068,19 +1070,18 @@ test("a confirmed native interrupt recovers the exact Session after Windows reap
   }
 
   // The next Turn resumes the coordinate on the same live process.
-  const next = await prepared.harness
-    .startTurn({
-      session: "blocking",
-      origin: "managed",
-      correlationKey: { opaque: "next" },
-      input: { text: "continue" },
-      recorder,
-      resume: result.detail.session.coordinate,
-    })
-    .result();
+  const nextTurn = prepared.harness.startTurn({
+    session: "blocking",
+    origin: "managed",
+    correlationKey: { opaque: "next" },
+    input: { text: "continue" },
+    recorder,
+    resume: result.detail.session.coordinate,
+  });
+  const next = await nextTurn.result();
   assert.equal(next.kind, "completed");
   if (next.kind !== "completed") throw new Error("unreachable");
-  assert.match(next.detail.finalContent ?? "", /^continued/);
+  assert.match(assistantContent(nextTurn) ?? "", /^continued/);
   await prepared.harness.close();
 
   const [invocation, ...relaunches] = replayer
@@ -1129,15 +1130,48 @@ test("a confirmed native interrupt recovers the exact Session after Windows reap
 
 /** Prepare the Claude Code Adapter over one recorded case. */
 async function preparedOver(caseName: string, sessionId: string) {
+  let compacting!: () => void;
+  const compactionRead = new Promise<void>((resolve) => {
+    compacting = resolve;
+  });
+  const native = createProcessAdapter(withRunnerObserver());
+  const processAdapter = processWithSpawn(async (options) => {
+    const launched = await native.spawnOwnedProcess(options);
+    if (!launched.ok) return launched;
+    const owned = launched.process;
+    return {
+      ...launched,
+      process: {
+        stderr: owned.stderr,
+        closed: () => owned.closed(),
+        writeStdin: (bytes) => owned.writeStdin(bytes),
+        closeStdin: (ms) => owned.closeStdin(ms),
+        interrupt: (ms) => owned.interrupt(ms),
+        stdout: {
+          async *[Symbol.asyncIterator]() {
+            let text = "";
+            for await (const bytes of owned.stdout) {
+              text += new TextDecoder().decode(bytes);
+              yield bytes;
+              if (text.includes('"status":"compacting"')) compacting();
+            }
+          },
+        },
+      },
+    };
+  });
   const replayer = installReplayer(VERSION, protocolCase(caseName));
   const prepared = await createClaudeCodeAdapter({
     path: replayer.path,
     env: {},
     sessionId: () => sessionId,
-  }).prepare({ workspace: makeTempDir("secant-claude-workspace-") });
+  }).prepare({
+    workspace: makeTempDir("secant-claude-workspace-"),
+    process: processAdapter,
+  });
   assert.equal(prepared.ok, true);
   if (!prepared.ok) throw new Error("unreachable");
-  return { replayer, harness: prepared.harness };
+  return { replayer, harness: prepared.harness, compactionRead };
 }
 
 function recordedTurn(text: string): TurnRequest {
@@ -1174,7 +1208,7 @@ test("a recorded Steer written while text streams runs as the next native exchan
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
   // The Turn ends at the Steer's own exchange, not the prompt's.
-  assert.equal(result.detail.finalContent, "MANGO");
+  assert.equal(assistantContent(turn), "MANGO");
   const steers = events.filter((event) => event.kind === "steer");
   assert.equal(steers.length, 1);
   assert.deepEqual(steers[0]?.kind === "steer" && steers[0].settlement, {
@@ -1207,7 +1241,7 @@ test("a recorded Steer written while text streams runs as the next native exchan
 });
 
 test("a recorded compaction the Interrupt cancels settles interrupted active-turn, and the next compaction completes", async () => {
-  const { replayer, harness } = await preparedOver(
+  const { replayer, harness, compactionRead } = await preparedOver(
     process.platform === "win32" ? "compaction-recovery" : "compaction",
     "c0c0c0c0-c0c0-4c0c-8c0c-c0c0c0c0c0c0",
   );
@@ -1217,12 +1251,7 @@ test("a recorded compaction the Interrupt cancels settles interrupted active-tur
   );
 
   const cancelled = harness.startTurn(recordedTurn("/compact"));
-  await new Promise<void>((resolve) => {
-    cancelled.subscribe((event) => {
-      if (event.kind === "activity" && event.description.includes("compacting"))
-        resolve();
-    });
-  });
+  await compactionRead;
   assert.deepEqual(await cancelled.interrupt(), { outcome: "accepted" });
   const stopped = await cancelled.result();
   assert.equal(stopped.kind, "interrupted");
@@ -1410,7 +1439,7 @@ test("one stream-json Turn yields normalized events and an authoritative complet
 
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
-  assert.equal(result.detail.finalContent, "hello");
+  assert.equal(assistantContent(turn), "hello");
   assert.deepEqual(result.detail.effectiveModel, {
     known: true,
     model: "claude-sonnet-4-5",
@@ -1424,7 +1453,6 @@ test("one stream-json Turn yields normalized events and an authoritative complet
     [
       "session",
       "model",
-      "activity",
       "assistant-content",
       "tool-call",
       "tool-call",
@@ -1481,10 +1509,7 @@ test("one stream-json Turn yields normalized events and an authoritative complet
     false,
   );
   assert.equal(
-    events.some(
-      (event) =>
-        event.kind === "activity" && event.description.includes("stderr"),
-    ),
+    events.some((event) => String(event.kind) === "activity"),
     false,
   );
   assert.equal(admissions.length, 1);
@@ -2289,7 +2314,7 @@ test("a recorded live change applies inside the Turn and a refused next choice k
   const settled = await first.turn.result();
   assert.equal(settled.kind, "completed");
   if (settled.kind !== "completed") throw new Error("unreachable");
-  assert.equal(settled.detail.finalContent, "PINEAPPLE.");
+  assert.equal(assistantContent(first.turn), "PINEAPPLE.");
   const applied = {
     known: true,
     model: "claude-sonnet-5-5",
@@ -2312,7 +2337,7 @@ test("a recorded live change applies inside the Turn and a refused next choice k
   const next = await second.turn.result();
   assert.equal(next.kind, "completed");
   if (next.kind !== "completed") throw new Error("unreachable");
-  assert.equal(next.detail.finalContent, "done.");
+  assert.equal(assistantContent(second.turn), "done.");
   assert.deepEqual(
     modelChanges(second.events).map((event) => event.change),
     [
@@ -2387,7 +2412,7 @@ test("a change Claude Code never answers relaunches the exact Session with --res
   const resumed = await second.turn.result();
   assert.equal(resumed.kind, "completed");
   if (resumed.kind !== "completed") throw new Error("unreachable");
-  assert.equal(resumed.detail.finalContent, "resumed.");
+  assert.equal(assistantContent(second.turn), "resumed.");
   assert.equal((await harness.close()).clean, true);
 
   const launches = replayer

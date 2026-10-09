@@ -23,6 +23,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - No Routing, Step kind, retry budget, or Run policy knowledge lives here; those are above the Seam. A Turn is one mechanical exchange, not a
   judgement that a Step succeeded — the closed Turn results (`not-started`, `completed`, `failed`, `interrupted`, `lost`) are mechanical truth, and the
   Step kind decides the Attempt outcome above the Seam.
+- Assistant content crosses only as retained `assistant-content`, never a completed-result copy (#440). Native stop fallback reasons use
+  control-phase diagnostics; cleanup failure keeps its own category and the Turn keeps its termination outcome.
 - Terminal ordering is exact: an Adapter publishes remaining events, drops pending Steers, expires requests and unanswered Agent calls, then closes
   the producer and settles the authoritative result. No event is observable afterward; both Adapters and the fake enforce this order.
   Turn diffs drain once; requested edits never prove changes. `tool-partial` drains incomplete command tails with a running outcome; unqualified fields stay absent.
@@ -36,7 +38,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `close` is idempotent and returns the same report. Claude retirement retains incomplete cleanup until final exit; failure survives recovery and preserves Turn truth.
 - Codex MCP Turn metadata is nested under `x-codex-turn-metadata` (#370), as an object or JSON string. Helpers keep their own ids and only
   their immediate parent; their inherited token remains authoritative. MCP approval input includes the opaque tool arguments, not only the caption.
-- The shared Turn-event producer redacts every event and completed result content before publication or retention. It owns command delta accumulation
+- The shared Turn-event producer redacts every event before publication or retention. It owns command delta accumulation
   and redacts before the 30,000-character tail cut; an unfinished secret prefix survives that cut for the next delta. Message previews redact accumulated
   text, never individual deltas. Only exact registered Secant secrets are replaced; user look-alikes stay exact, and old Run bytes are never rewritten.
   Failures and diagnostics keep their existing redaction. Excluding raw protocol, private reasoning, and duplicate transcript content is Interface design;

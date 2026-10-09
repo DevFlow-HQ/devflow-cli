@@ -79,7 +79,6 @@ function completedScript(
         result: {
           kind: "completed",
           detail: {
-            finalContent: "done",
             effectiveModel: { known: false },
             session: { state: "open" },
           },

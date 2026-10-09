@@ -965,7 +965,6 @@ test("end-interactive-step mid-Turn is rejected with a precise Problem (#122)", 
           result: {
             kind: "completed",
             detail: {
-              finalContent: "unused",
               effectiveModel: { known: false },
               session: {
                 state: "detached",
@@ -1480,7 +1479,6 @@ const CLAIMS_DONE: FakeScript["turns"][number] = {
   result: {
     kind: "completed",
     detail: {
-      finalContent: "All tickets are done. End implementation stage.",
       effectiveModel: { known: true, model: "fake-sonnet" },
       session: { state: "detached", coordinate: { opaque: "coord-s" } },
     },

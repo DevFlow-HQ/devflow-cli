@@ -1,3 +1,4 @@
+import { assistantContent } from "./conformance.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { HarnessPhaseFact, TurnEvent } from "../../src/harness/harness.js";
@@ -363,11 +364,19 @@ test("Claude fallback cleanup retains owner: final close preserves an authoritat
   const scripted = scriptedClaude({
     answer: "ignore",
     closeStdin: async () => {
-      scripted.emit({
-        type: "result",
-        subtype: "success",
-        result: "completed before exit",
-      });
+      scripted.emit(
+        {
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "completed before exit" }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          result: "completed before exit",
+        },
+      );
       await new Promise<void>((resolve) => setImmediate(resolve));
       return { kind: "exited", status: 0 };
     },
@@ -379,6 +388,6 @@ test("Claude fallback cleanup retains owner: final close preserves an authoritat
   const result = await first.turn.result();
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
-  assert.equal(result.detail.finalContent, "completed before exit");
+  assert.equal(assistantContent(first.turn), "completed before exit");
   assert.equal(cleanup.clean, true);
 });

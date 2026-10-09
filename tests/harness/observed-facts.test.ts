@@ -126,7 +126,7 @@ test("m10-observed-harness-facts: authentic Codex total and last usage are not c
     },
   });
   assert.equal(
-    events.some((event) => event.kind === "activity"),
+    events.some((event) => String(event.kind) === "activity"),
     false,
   );
   assert.ok(events.some((event) => event.kind === "tool-call"));
@@ -209,9 +209,8 @@ test("m10-observed-harness-facts: Claude noise stays private, unfamiliar tools s
   turn.subscribe((event) => events.push(event));
   assert.equal((await turn.result()).kind, "completed");
   assert.equal(
-    events.filter((event) => event.kind === "activity").length,
-    1,
-    "only the existing Session description is activity",
+    events.filter((event) => String(event.kind) === "activity").length,
+    0,
   );
   const calls = events
     .filter((event) => event.kind === "tool-call")
@@ -297,7 +296,7 @@ for (const [description, tokenUsage, context, summary] of [
       observation: { summary },
     });
     assert.equal(
-      events.some((event) => event.kind === "activity"),
+      events.some((event) => String(event.kind) === "activity"),
       false,
     );
   });
@@ -358,14 +357,8 @@ test("m10-observed-harness-facts: Codex ignores foreign accounting and unknown/r
     observation: { limitTokens: 258400 },
   });
   assert.deepEqual(
-    events.filter((event) => event.kind === "activity"),
-    [
-      {
-        kind: "activity",
-        description:
-          "Codex is retrying after an error: retrying genuine failure",
-      },
-    ],
+    events.filter((event) => String(event.kind) === "activity"),
+    [],
   );
   assert.equal(
     events.some(

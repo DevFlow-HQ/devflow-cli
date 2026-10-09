@@ -33,7 +33,6 @@ export function turnEventRefusalScript(
     result: {
       kind: "completed",
       detail: {
-        finalContent: "Still reading after refusal",
         effectiveModel: { known: false },
         session: { state: "open" },
       },

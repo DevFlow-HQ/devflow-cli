@@ -50,7 +50,6 @@ const SCRIPT: FakeScript = {
       result: {
         kind: "completed",
         detail: {
-          finalContent: "done",
           effectiveModel: { known: true, model: "fake-sonnet" },
           session: { state: "detached", coordinate: { opaque: "coord" } },
         },

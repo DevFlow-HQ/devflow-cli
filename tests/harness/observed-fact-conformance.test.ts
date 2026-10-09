@@ -76,7 +76,6 @@ function fakePendingFacts() {
         result: {
           kind: "completed",
           detail: {
-            finalContent: "",
             effectiveModel: { known: false },
             session: { state: "open" },
           },
@@ -239,7 +238,6 @@ runObservedFactCases(
             result: {
               kind: "completed",
               detail: {
-                finalContent: "done",
                 effectiveModel: { known: false },
                 session: { state: "open" },
               },

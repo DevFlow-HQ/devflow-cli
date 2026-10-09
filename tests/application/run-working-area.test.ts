@@ -52,7 +52,6 @@ function script(kind: "completed" | "failed"): FakeScript {
             ? {
                 kind: "completed",
                 detail: {
-                  finalContent: "done",
                   effectiveModel: { known: false },
                   session: { state: "open" },
                 },

@@ -550,7 +550,6 @@ export type TurnEvent =
     }
   | { readonly kind: "context"; readonly observation: ContextObservation }
   | { readonly kind: "usage"; readonly observation: UsageObservation }
-  | { readonly kind: "activity"; readonly description: string }
   // Each observation replaces the Turn's last one (a reroute is a second); the
   // result's `effectiveModel` is the last observed. A change's outcome rides on
   // the observation it leaves (#348): the reported value when applied, the
@@ -586,7 +585,6 @@ export const TURN_EVENT_KINDS = exhaustive<TurnEvent["kind"]>()([
   "thought-preview",
   "context",
   "usage",
-  "activity",
   "model",
   "steer",
 ] as const);
@@ -679,7 +677,6 @@ interface NotStartedDetail {
 
 /** An authoritative Harness boundary was reached. */
 interface CompletedDetail {
-  readonly finalContent?: string;
   readonly effectiveModel: ModelObservation;
   readonly session: SessionAvailability;
   readonly usage?: UsageObservation;

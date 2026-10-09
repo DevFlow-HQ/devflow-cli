@@ -1,3 +1,4 @@
+import { assistantContent } from "./conformance.js";
 // The Codex-specific Adapter conformance cases: native approval mapping and
 // fail-closed shapes, malformed/truncated/CRLF runtime framing, native
 // steer/interrupt control arbitration and error codes, exact-thread recovery,
@@ -24,6 +25,8 @@ import {
   type CodexRecordingObserver,
   type DurableTurnRecorder,
   type HarnessPlatform,
+  type HarnessPhaseFact,
+  translateCause,
   type ModelChoice,
   type ModelObservation,
   type PrepareOptions,
@@ -447,15 +450,32 @@ for (const fault of [
         process: {
           stdout: {
             async *[Symbol.asyncIterator]() {
+              let pending = "";
+              const decoder = new TextDecoder();
               for await (const bytes of owned.stdout) {
-                const text = new TextDecoder()
-                  .decode(bytes)
-                  .replaceAll("NATIVE_BEARER", bearer ?? "NATIVE_BEARER")
-                  .replaceAll(
-                    "failed to read thread: rollout is empty",
-                    `echoed ${bearer ?? "unavailable"}`,
-                  );
-                yield new TextEncoder().encode(text);
+                pending += decoder.decode(bytes, { stream: true });
+                let end: number;
+                while ((end = pending.indexOf("\n")) >= 0) {
+                  const line = pending
+                    .slice(0, end + 1)
+                    .replaceAll("NATIVE_BEARER", bearer ?? "NATIVE_BEARER")
+                    .replaceAll(
+                      "failed to read thread: rollout is empty",
+                      `echoed ${bearer ?? "unavailable"}`,
+                    );
+                  pending = pending.slice(end + 1);
+                  yield new TextEncoder().encode(line);
+                  if (
+                    (fault === "thread/read" && line.includes("echoed ")) ||
+                    (fault === "native-error" &&
+                      line.includes('"method":"error"'))
+                  ) {
+                    // Dispatch the diagnostic, then lose terminal truth so its existing observation path is visible.
+                    await new Promise<void>((resolve) => setImmediate(resolve));
+                    await owned.closeStdin(5_000);
+                    return;
+                  }
+                }
               }
             },
           },
@@ -494,7 +514,7 @@ for (const fault of [
           { id: "step_done", description: "Done", maxReasonLength: 400 },
         ],
       });
-      const events = observeEvents(turn);
+      observeEvents(turn);
       const terminal = await turn.result();
       assert.ok(bearer);
       const secret = bearer;
@@ -510,15 +530,16 @@ for (const fault of [
         assert.equal(cause.stack?.includes(bearer), false);
         assert.match(cause.message, /redacted/);
       } else {
-        assert.equal(terminal.kind, "completed");
-        const descriptions = events.flatMap((event) =>
-          event.kind === "activity" ? [event.description] : [],
+        assert.equal(terminal.kind, "lost");
+        if (terminal.kind !== "lost") throw new Error("unreachable");
+        assert.match(terminal.detail.lastObservation, /redacted-bearer-token/);
+        assert.match(
+          terminal.detail.lastObservation,
+          fault === "thread/read"
+            ? /effective model and effort/
+            : /retrying after an error/,
         );
-        assert.ok(descriptions.some((text) => text.includes("redacted")));
-        assert.equal(
-          descriptions.some((text) => text.includes(secret)),
-          false,
-        );
+        assert.equal(JSON.stringify(terminal).includes(secret), false);
       }
     } finally {
       await result.harness.close();
@@ -1146,11 +1167,7 @@ test("supported Codex item lifecycles use semantic Harness events", async () => 
     .map((event) => event.call.tool);
   assert.deepEqual(new Set(tools), new Set(["command", "file-change", "mcp"]));
   assert.equal(
-    events.some(
-      (event) =>
-        event.kind === "activity" &&
-        event.description.includes("futureDisplayItem"),
-    ),
+    events.some((event) => String(event.kind) === "activity"),
     false,
   );
   assert.equal(
@@ -1165,20 +1182,16 @@ test("supported Codex item lifecycles use semantic Harness events", async () => 
   await prepared.close();
 });
 
-test("retrying errors remain nonterminal activity", async () => {
+test("retrying errors remain nonterminal without activity", async () => {
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({ retryingError: "temporary overload" });
   const prepared = await prepareCodex(installed.path);
   const turn = prepared.startTurn(turnRequest());
   const events = observeEvents(turn);
   assert.equal((await turn.result()).kind, "completed");
-  assert.ok(
-    events.some(
-      (event) =>
-        event.kind === "activity" &&
-        event.description.includes("retrying") &&
-        event.description.includes("temporary overload"),
-    ),
+  assert.equal(
+    events.some((event) => String(event.kind) === "activity"),
+    false,
   );
   await prepared.close();
 });
@@ -1482,31 +1495,24 @@ test("codex-live-controls native Interrupt mismatch is expired", async () => {
 });
 
 test("codex-live-controls refuses a near-miss Interrupt error without losing the Turn", async () => {
+  const phases: HarnessPhaseFact[] = [];
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     withholdTerminal: true,
     interruptRpcError: "near-miss",
     steerTerminal: "completed",
   });
-  const prepared = await prepareCodex(installed.path);
+  const prepared = await prepareCodex(installed.path, undefined, phases);
   const turn = prepared.startTurn(turnRequest());
-  const events = observeEvents(turn);
   await waitForSession(turn);
 
   assert.deepEqual(await turn.interrupt(), {
     outcome: "rejected",
     reason: "expired",
   });
-  assert.deepEqual(
-    events.filter((event) => event.kind === "activity"),
-    [
-      {
-        kind: "activity",
-        description:
-          "Codex turn/interrupt control failed. turn/interrupt returned RPC error -32600: expected active turn id turn-1 but found turn-2 unexpectedly",
-      },
-    ],
-  );
+  assert.deepEqual(controlCauses(phases), [
+    "turn/interrupt returned RPC error -32600: expected active turn id turn-1 but found turn-2 unexpectedly",
+  ]);
   assert.deepEqual(
     await turn.steer({
       steerId: "conformance-steer",
@@ -1521,31 +1527,24 @@ test("codex-live-controls refuses a near-miss Interrupt error without losing the
 });
 
 test("codex-live-controls native internal control error preserves its diagnostic and permits later input", async () => {
+  const phases: HarnessPhaseFact[] = [];
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     withholdTerminal: true,
     interruptRpcError: "internal",
     steerTerminal: "completed",
   });
-  const prepared = await prepareCodex(installed.path);
+  const prepared = await prepareCodex(installed.path, undefined, phases);
   const turn = prepared.startTurn(turnRequest());
-  const events = observeEvents(turn);
   await waitForSession(turn);
 
   assert.deepEqual(await turn.interrupt(), {
     outcome: "rejected",
     reason: "expired",
   });
-  assert.deepEqual(
-    events.filter((event) => event.kind === "activity"),
-    [
-      {
-        kind: "activity",
-        description:
-          "Codex turn/interrupt control failed. turn/interrupt returned RPC error -32603: internal error",
-      },
-    ],
-  );
+  assert.deepEqual(controlCauses(phases), [
+    "turn/interrupt returned RPC error -32603: internal error",
+  ]);
   assert.deepEqual(
     await turn.steer({
       steerId: "conformance-steer",
@@ -1679,15 +1678,15 @@ for (const controlCase of [
 }
 
 test("codex-live-controls refuses a near-miss Steer error until native interruption", async () => {
+  const phases: HarnessPhaseFact[] = [];
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     withholdTerminal: true,
     steerRpcError: "near-miss",
     interruptTerminal: "interrupted",
   });
-  const prepared = await prepareCodex(installed.path);
+  const prepared = await prepareCodex(installed.path, undefined, phases);
   const turn = prepared.startTurn(turnRequest());
-  const events = observeEvents(turn);
   await waitForSession(turn);
 
   assert.deepEqual(
@@ -1700,16 +1699,9 @@ test("codex-live-controls refuses a near-miss Steer error until native interrupt
       reason: "expired",
     },
   );
-  assert.deepEqual(
-    events.filter((event) => event.kind === "activity"),
-    [
-      {
-        kind: "activity",
-        description:
-          "Codex turn/steer control failed. turn/steer returned RPC error -32600: expected active turn id `turn-1` but found `turn-2` unexpectedly",
-      },
-    ],
-  );
+  assert.deepEqual(controlCauses(phases), [
+    "turn/steer returned RPC error -32600: expected active turn id `turn-1` but found `turn-2` unexpectedly",
+  ]);
   assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
   assert.equal((await turn.result()).kind, "interrupted");
   await prepared.close();
@@ -1745,6 +1737,7 @@ test("codex-live-controls malformed Steer response fails closed without throwing
 });
 
 test("codex-live-controls Steer timeout keeps the Turn until native interruption", async () => {
+  const phases: HarnessPhaseFact[] = [];
   const installed = installSyntheticCodexReplayer();
   installed.configureTurn({
     withholdTerminal: true,
@@ -1755,12 +1748,11 @@ test("codex-live-controls Steer timeout keeps the Turn until native interruption
     path: installed.path,
     env: {},
     controlTimeoutMs: 1_000,
-  }).prepare({ workspace: process.cwd() });
+  }).prepare({ workspace: process.cwd(), phases: (fact) => phases.push(fact) });
   assert.equal(preparedResult.ok, true);
   if (!preparedResult.ok) throw new Error("unreachable");
   const prepared = preparedResult.harness;
   const turn = prepared.startTurn(turnRequest());
-  const events = observeEvents(turn);
   await waitForSession(turn);
 
   assert.deepEqual(
@@ -1770,16 +1762,9 @@ test("codex-live-controls Steer timeout keeps the Turn until native interruption
       reason: "expired",
     },
   );
-  assert.deepEqual(
-    events.filter((event) => event.kind === "activity"),
-    [
-      {
-        kind: "activity",
-        description:
-          "Codex turn/steer control failed. turn/steer control exchange timed out",
-      },
-    ],
-  );
+  assert.deepEqual(controlCauses(phases), [
+    "turn/steer control exchange timed out",
+  ]);
   assert.deepEqual(await turn.interrupt(), { outcome: "accepted" });
   assert.equal((await turn.result()).kind, "interrupted");
   await prepared.close();
@@ -1820,6 +1805,7 @@ for (const control of ["steer", "interrupt"] as const) {
       "close",
     ] as const) {
       test(`codex-live-controls refused ${control} ${refusal} waits for native ${terminal}`, async () => {
+        const phases: HarnessPhaseFact[] = [];
         const installed = installSyntheticCodexReplayer();
         installed.configureTurn({
           approvals: [
@@ -1845,7 +1831,10 @@ for (const control of ["steer", "interrupt"] as const) {
           path: installed.path,
           env: {},
           controlTimeoutMs: 1_000,
-        }).prepare({ workspace: process.cwd() });
+        }).prepare({
+          workspace: process.cwd(),
+          phases: (fact) => phases.push(fact),
+        });
         assert.equal(preparedResult.ok, true);
         if (!preparedResult.ok) throw new Error("unreachable");
         const prepared = preparedResult.harness;
@@ -1874,15 +1863,15 @@ for (const control of ["steer", "interrupt"] as const) {
           false,
           "the refused call must not settle the Turn",
         );
-        const activities = events.filter((event) => event.kind === "activity");
-        assert.equal(activities.length, 1);
+        const causes = controlCauses(phases);
+        assert.equal(causes.length, 1);
         assert.equal(
-          activities[0]?.description,
+          causes[0],
           refusal === "timeout"
-            ? `Codex turn/${control} control failed. turn/${control} control exchange timed out`
+            ? `turn/${control} control exchange timed out`
             : control === "steer"
-              ? "Codex turn/steer control failed. turn/steer returned RPC error -32600: expected active turn id `turn-1` but found `turn-2` unexpectedly"
-              : "Codex turn/interrupt control failed. turn/interrupt returned RPC error -32603: internal error",
+              ? "turn/steer returned RPC error -32600: expected active turn id `turn-1` but found `turn-2` unexpectedly"
+              : "turn/interrupt returned RPC error -32603: internal error",
         );
         if (control === "interrupt" && refusal === "timeout") {
           assert.deepEqual(await turn.interrupt(), {
@@ -2046,7 +2035,10 @@ for (const control of ["steer", "interrupt"] as const) {
       events.filter((event) => event.kind === "request-expired").length,
       1,
     );
-    assert.equal(events.filter((event) => event.kind === "activity").length, 0);
+    assert.equal(
+      events.filter((event) => String(event.kind) === "activity").length,
+      0,
+    );
     const eventCount = events.length;
     controlled.emitTerminal();
     await prepared.close();
@@ -3171,9 +3163,20 @@ async function prepareDetachedCodex(
 
 // --- Shared helpers (hoisted; used by every group) ---------------------------
 
+function controlCauses(phases: readonly HarnessPhaseFact[]): string[] {
+  return phases.flatMap((fact) =>
+    fact.kind === "phase-end" &&
+    fact.phase === "control" &&
+    fact.outcome === "failed"
+      ? [translateCause(fact.failure.cause)?.message ?? ""]
+      : [],
+  );
+}
+
 async function prepareCodex(
   path: string,
   recordingObserver?: CodexRecordingObserver,
+  phases?: HarnessPhaseFact[],
 ): Promise<PreparedHarness> {
   const result = await createCodexAdapter({
     path,
@@ -3181,6 +3184,7 @@ async function prepareCodex(
     ...(recordingObserver !== undefined ? { recordingObserver } : {}),
   }).prepare({
     workspace: process.cwd(),
+    phases: phases === undefined ? undefined : (fact) => phases.push(fact),
   });
   assert.equal(result.ok, true);
   if (!result.ok) throw new Error("unreachable");
@@ -3447,7 +3451,7 @@ test("[codex-recorded-conformance] completion replays exact client traffic", asy
   const result = await turn.result();
   assert.equal(result.kind, "completed");
   if (result.kind !== "completed") throw new Error("unreachable");
-  assert.equal(result.detail.finalContent, "recorded completion.");
+  assert.equal(assistantContent(turn), "recorded completion.");
   // A Turn requesting no Model choice observes the configured model and effort
   // thread/read recorded (codex-cli 0.160.0, #345).
   assert.deepEqual(result.detail.effectiveModel, {
@@ -3554,7 +3558,7 @@ for (const recorded of [
     const result = await turn.result();
     assert.equal(result.kind, "completed");
     if (result.kind !== "completed") throw new Error("unreachable");
-    assert.equal(result.detail.finalContent, "recorded re-delivery.");
+    assert.equal(assistantContent(turn), "recorded re-delivery.");
     assert.deepEqual(
       events.flatMap((event) =>
         event.kind === "steer" ? [event.settlement] : [],
@@ -3716,15 +3720,9 @@ test("m10-observed-harness-facts: [codex-recorded-conformance] Test Repair appli
     observation: { limitTokens: 258400 },
   });
   assert.equal(events.filter((event) => event.kind === "usage").length, 5);
-  const activities = events.filter((event) => event.kind === "activity");
   assert.equal(
-    activities.length,
-    1,
-    "the recorded thread/read failure keeps its semantic diagnostic",
-  );
-  assert.match(
-    activities[0]?.description ?? "",
-    /Codex did not report this Turn's effective model and effort yet/,
+    events.some((event) => String(event.kind) === "activity"),
+    false,
   );
   assert.doesNotMatch(
     JSON.stringify(events),
@@ -3906,7 +3904,7 @@ test("Codex profile is truthful and user-compatible", async () => {
 });
 
 /** Prepare the synthetic Codex replayer, run one Turn requesting `modelChoice`,
- *  and return its result, its `model` and `activity` events, and the stdin frames
+ *  and return its result, its `model` events, and the stdin frames
  *  of its app-server (#345). */
 async function effectiveValuesTurn(
   configure: (installed: InstalledCodexReplayer) => void,
@@ -3940,9 +3938,6 @@ async function effectiveValuesTurn(
     result,
     observations: events.flatMap((event) =>
       event.kind === "model" ? [event.observation] : [],
-    ),
-    activity: events.flatMap((event) =>
-      event.kind === "activity" ? [event.description] : [],
     ),
     frames: appServer.stdinLines.map(
       (line) =>
@@ -3998,19 +3993,12 @@ test("a Turn requesting no Model choice sends neither model nor effort and obser
   assert.equal("effort" in turnStart.params, false);
 });
 
-test("a thread/read reporting a model that is not a string is incompatible: the values stay unknown with a diagnostic", async () => {
-  const { result, observations, activity } = await effectiveValuesTurn(
-    (installed) =>
-      installed.configureThreadRead({ model: 42 as never, effort: "high" }),
+test("a thread/read reporting a model that is not a string is incompatible: the values stay unknown", async () => {
+  const { result, observations } = await effectiveValuesTurn((installed) =>
+    installed.configureThreadRead({ model: 42 as never, effort: "high" }),
   );
   assert.deepEqual(effectiveModel(result), { known: false });
   assert.deepEqual(observations, []);
-  assert.ok(
-    activity.some((description) =>
-      /thread\/read returned incompatible data/.test(description),
-    ),
-    activity.join("; "),
-  );
 });
 
 test("a thread/read reporting no model leaves the observation unknown, and one reporting no effort leaves only the effort unknown", async () => {
@@ -4061,10 +4049,9 @@ test("a model/rerouted naming another Turn changes nothing", async () => {
 
 for (const fault of ["rpc-error", "malformed"] as const) {
   test(`a thread/read answered with ${fault === "rpc-error" ? "an RPC error, twice," : "something other than a thread"} leaves the effective values unknown and the Turn's outcome alone`, async () => {
-    const { result, observations, activity, frames } =
-      await effectiveValuesTurn((installed) =>
-        installed.configureThreadRead(fault),
-      );
+    const { result, observations, frames } = await effectiveValuesTurn(
+      (installed) => installed.configureThreadRead(fault),
+    );
     assert.deepEqual(effectiveModel(result), { known: false });
     assert.deepEqual(observations, []);
     // Only a refusal is read again, and only once.
@@ -4072,19 +4059,11 @@ for (const fault of ["rpc-error", "malformed"] as const) {
       frames.filter((frame) => frame.method === "thread/read").length,
       fault === "rpc-error" ? 2 : 1,
     );
-    assert.ok(
-      activity.some((description) =>
-        /did not report this Turn's effective model and effort/.test(
-          description,
-        ),
-      ),
-      activity.join("; "),
-    );
   });
 }
 
 test("a first thread/read Codex refuses is read again at the Turn's next item", async () => {
-  const { result, observations, activity, frames } = await effectiveValuesTurn(
+  const { result, observations, frames } = await effectiveValuesTurn(
     (installed) => installed.configureThreadRead("rpc-error-once"),
   );
   const applied = { known: true, model: "gpt-5.6-sol", effort: "high" };
@@ -4093,14 +4072,6 @@ test("a first thread/read Codex refuses is read again at the Turn's next item", 
   assert.equal(
     frames.filter((frame) => frame.method === "thread/read").length,
     2,
-  );
-  assert.ok(
-    activity.some((description) =>
-      /effective model and effort yet, so its next item reads them again/.test(
-        description,
-      ),
-    ),
-    activity.join("; "),
   );
 });
 
@@ -4962,7 +4933,7 @@ for (const terminal of ["leftover", "leftover-failed"] as const) {
     const result = await turn.result();
     assert.equal(result.kind, "completed");
     if (result.kind !== "completed") throw new Error("unreachable");
-    assert.equal(result.detail.finalContent, "re-delivered answer");
+    assert.equal(assistantContent(turn), "re-delivered answer");
     assert.deepEqual(
       events.flatMap((event) => (event.kind === "steer" ? [event] : [])),
       [
@@ -5037,14 +5008,8 @@ test("codex-live-controls keeps the leftover's native terminal when Codex refuse
     { kind: "delivered", delivery: "within-turn" },
   ]);
   assert.deepEqual(
-    events.filter((event) => event.kind === "activity"),
-    [
-      {
-        kind: "activity",
-        description:
-          "Codex refused to re-deliver a Steer. turn/start returned RPC error -32603: failed to submit turn input: EmptyInput",
-      },
-    ],
+    events.filter((event) => String(event.kind) === "activity"),
+    [],
   );
   assert.equal(turnStarts(installed).length, 3);
   await prepared.close();
@@ -5380,26 +5345,36 @@ test("m10-audit-runtime-failure-causes: Codex descendant startup does not hold T
     );
     const installed = installSyntheticCodexReplayer();
     installed.configureTurn({ backgroundTree: { worker, report } });
+    let readDeadline!: () => void;
+    const unreadModel = new Promise<void>((resolve) => {
+      readDeadline = resolve;
+    });
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const prepared = await createCodexAdapter({
       path: installed.path,
       env: {},
       controlTimeoutMs: 500,
+      recordingObserver: {
+        version() {},
+        schema() {},
+        stdout() {},
+        stderr() {},
+        closed() {},
+        stdin(bytes) {
+          if (
+            new TextDecoder().decode(bytes).includes('"method":"thread/read"')
+          )
+            deadlineTimer = setTimeout(readDeadline, 501);
+        },
+      },
     }).prepare({ workspace });
     assert.ok(prepared.ok);
     if (!prepared.ok) throw new Error("unreachable");
     harness = prepared.harness;
     const turn = harness.startTurn(turnRequest());
-    const unreadModel = new Promise<void>((resolve) => {
-      turn.subscribe((event) => {
-        if (
-          event.kind === "activity" &&
-          event.description.includes("did not report this Turn's effective")
-        )
-          resolve();
-      });
-    });
-    // The descendant is held until the observed read deadline, never a sleep.
+    // The timer is anchored to the native read and ordered after its 500 ms deadline.
     await Promise.race([Promise.all([unreadModel, connected]), turn.result()]);
+    clearTimeout(deadlineTimer);
     (await connected).write("release");
     const result = await turn.result();
     assert.equal(

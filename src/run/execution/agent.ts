@@ -1010,7 +1010,6 @@ function notifyChannel(
     case "usage":
       channel.observe({ usage: event.observation.summary });
       return;
-    case "activity":
     case "tool-call":
       return;
     default:

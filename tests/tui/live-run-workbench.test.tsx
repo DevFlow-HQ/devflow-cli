@@ -151,7 +151,6 @@ async function refusalWorkbench(
                 outcome: { kind: "running" },
               },
             },
-            { kind: "activity", description: "delegating to subagent" },
             {
               kind: "context",
               observation: { usedTokens: 12_500, limitTokens: 200_000 },
@@ -176,7 +175,6 @@ async function refusalWorkbench(
           result: {
             kind: "completed",
             detail: {
-              finalContent: "The repair is complete.",
               effectiveModel: { known: true, model: "fake-sonnet" },
               session: { state: "open" },
             },
@@ -382,7 +380,6 @@ test("the Matt grill takes its idea on the inputs screen and opens on the first 
           result: {
             kind: "completed",
             detail: {
-              finalContent: question,
               effectiveModel: { known: true, model: "fake-sonnet" },
               session: { state: "detached", coordinate: { opaque: "c" } },
             },

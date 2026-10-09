@@ -61,7 +61,6 @@ const COMPLETED: FakeScript = {
       result: {
         kind: "completed",
         detail: {
-          finalContent: "published",
           effectiveModel: { known: false },
           session: { state: "open" },
         },

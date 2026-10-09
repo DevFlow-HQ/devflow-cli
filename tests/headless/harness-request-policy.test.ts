@@ -42,7 +42,6 @@ import { usageEvents, UNREAD_UPDATE_BOUND } from "../helpers/liveRun.js";
 const COMPLETED_OPEN: TurnResult = {
   kind: "completed",
   detail: {
-    finalContent: "repaired the workspace",
     effectiveModel: { known: false },
     session: { state: "open" },
   },

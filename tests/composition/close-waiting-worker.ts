@@ -69,7 +69,6 @@ await withClients(
           result: {
             kind: "completed",
             detail: {
-              finalContent: "unused",
               effectiveModel: { known: false },
               session: { state: "open" },
             },

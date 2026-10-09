@@ -187,7 +187,6 @@ test("m10-audit-turn-event-redaction: every normalized event kind is redacted, w
         commands: [token],
       },
     },
-    { kind: "activity", description: token },
     {
       kind: "agent-call",
       phase: "raised",
@@ -329,6 +328,6 @@ test("m10-audit-turn-event-redaction: every normalized event kind is redacted, w
         event.kind === "tool-partial" && event.call.output.text === REPLACEMENT,
     ),
   );
-  producer.emit({ kind: "activity", description: token });
+  producer.emit({ kind: "usage", observation: { summary: token } });
   assert.equal(JSON.stringify(live).includes(token), false);
 });

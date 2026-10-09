@@ -72,7 +72,6 @@ import type {
   RequestAnswer,
   RequestId,
   SessionAvailability,
-  SessionFacts,
   SteerCapability,
   SteerInput,
   SteerSettlement,
@@ -934,11 +933,15 @@ class ClaudeCodeSession {
       turn.settleLost("interruption", turn.lastObservation, failure);
       return;
     }
-    turn.noteActivity(
-      `${interruptFallbackReason(outcome, this.timeouts.controlMs)}; stopping the Claude Code process.`,
-    );
+    const fallbackFailure: HarnessFailure = {
+      phase: "control",
+      category:
+        outcome.kind === "refused" ? "control-refused" : "control-unconfirmed",
+      possibleEffects: "possible",
+      diagnostics: `${interruptFallbackReason(outcome, this.timeouts.controlMs)}; stopping the Claude Code process.`,
+    };
     if (this.active === turn) this.active = undefined;
-    await this.settleInterruption(turn, owned, span);
+    await this.settleInterruption(turn, owned, span, fallbackFailure);
   }
 
   needsNativeReap(): boolean {
@@ -984,6 +987,7 @@ class ClaudeCodeSession {
     turn: ClaudeCodeTurn,
     owned: OwnedProcess,
     control: PhaseSpan,
+    fallbackFailure?: HarnessFailure,
   ): Promise<void> {
     let escalated = false;
     const close = await this.retire(owned, async () => {
@@ -992,8 +996,17 @@ class ClaudeCodeSession {
       return outcome.close;
     });
     const failure = interruptionFailure(close, escalated);
-    if (failure === undefined) control.ok();
-    else control.failed(failure);
+    if (failure !== undefined)
+      control.failed({
+        ...failure,
+        ...(fallbackFailure === undefined
+          ? {}
+          : {
+              diagnostics: `${fallbackFailure.diagnostics} ${failure.diagnostics}`,
+            }),
+      });
+    else if (fallbackFailure !== undefined) control.failed(fallbackFailure);
+    else control.ok();
     if (turn.settled) return;
     if (failure !== undefined) {
       turn.settleLost("interruption", turn.lastObservation, failure);
@@ -1176,9 +1189,6 @@ class ClaudeCodeSession {
           : await this.changeChoice(reused, channel, choice);
       if (turn.settled) return;
       if (answer.kind === "unanswered") {
-        turn.noteActivity(
-          "Claude Code did not answer the Model choice change; relaunching the Session with it.",
-        );
         await this.retire(reused);
         if (!(await this.retirement.recoverable())) {
           turn.settleCleanupRecoveryFailure();
@@ -2285,10 +2295,6 @@ class ClaudeCodeTurn implements HarnessTurn {
       facts,
     });
     this.producer.emit({ kind: "model", observation: this.session.model() });
-    this.producer.emit({
-      kind: "activity",
-      description: describeSessionFacts(facts),
-    });
   }
 
   observeModel(observation: ModelObservation, change?: ModelChange): void {
@@ -2420,20 +2426,6 @@ class ClaudeCodeTurn implements HarnessTurn {
   private acceptStatus(frame: StatusFrame): void {
     if (frame.compact_result !== undefined) {
       if (frame.compact_result !== "success") this.compactionFailed = true;
-      this.producer.emit({
-        kind: "activity",
-        description:
-          frame.compact_result === "success"
-            ? "Claude Code compaction succeeded."
-            : `Claude Code compaction ${frame.compact_result}.`,
-      });
-      return;
-    }
-    if (frame.status === "compacting") {
-      this.producer.emit({
-        kind: "activity",
-        description: "Claude Code is compacting the conversation.",
-      });
       return;
     }
   }
@@ -2482,11 +2474,6 @@ class ClaudeCodeTurn implements HarnessTurn {
       frame.user_message_uuids.length > 0 &&
       !frame.user_message_uuids.some((uuid) => this.messages.has(uuid))
     ) {
-      this.producer.emit({
-        kind: "activity",
-        description:
-          "Claude Code ended an exchange for a message this Turn did not send; it is ignored.",
-      });
       return;
     }
     const reportedUsage = usageObservation(frame);
@@ -2525,10 +2512,6 @@ class ClaudeCodeTurn implements HarnessTurn {
       this.boundaries += 1;
       this.betweenExchanges = true;
       this.lastObservation = "Claude Code ended a native exchange";
-      this.producer.emit({
-        kind: "activity",
-        description: `Claude Code ended an exchange; the Turn stays open for ${this.steers.size} pending Steer(s).`,
-      });
       return;
     }
     this.heldResult = undefined;
@@ -2588,13 +2571,9 @@ class ClaudeCodeTurn implements HarnessTurn {
       return;
     }
     if (subtype === "success") {
-      const finalContent = frame.result;
       this.settle({
         kind: "completed",
         detail: {
-          ...(finalContent !== undefined
-            ? this.producer.redact({ finalContent })
-            : {}),
           effectiveModel: this.session.model(),
           session: { state: "open" },
           ...(usage !== undefined ? { usage } : {}),
@@ -2617,11 +2596,6 @@ class ClaudeCodeTurn implements HarnessTurn {
         session: { state: "open" },
       },
     });
-  }
-
-  /** Report one live activity line, such as why a native stop fell back. */
-  noteActivity(description: string): void {
-    this.producer.emit({ kind: "activity", description });
   }
 
   private settle(result: TurnResult): void {
@@ -2669,16 +2643,6 @@ class ClaudeCodeTurn implements HarnessTurn {
     clearTimeout(this.handshakeTimer);
     this.handshakeTimer = undefined;
   }
-}
-
-function describeSessionFacts(facts: SessionFacts): string {
-  const version = facts.executableVersion ?? "unknown version";
-  const tools = facts.tools.length === 0 ? "no tools" : facts.tools.join(", ");
-  const mcp =
-    facts.mcp.length === 0
-      ? "no MCP servers"
-      : facts.mcp.map((server) => `${server.name}=${server.status}`).join(", ");
-  return `Claude Code ${version}; tools: ${tools}; MCP: ${mcp}`;
 }
 
 // A tool_use is known work even when its tool name is unfamiliar. Unknown
@@ -2776,7 +2740,7 @@ async function settlesWithin(
   clearTimeout(timer);
 }
 
-/** Why a native stop fell back to the process stop, as a live activity line. */
+/** Why a native stop fell back to the process stop, for the control phase. */
 function interruptFallbackReason(
   outcome: ControlOutcome,
   timeoutMs: number,

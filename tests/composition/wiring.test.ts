@@ -920,7 +920,6 @@ for (const kind of ["agent", "interactive-agent"] as const) {
               result: {
                 kind: "completed",
                 detail: {
-                  finalContent: "done",
                   effectiveModel: { known: false },
                   session: {
                     state: "detached",

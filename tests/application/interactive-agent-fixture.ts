@@ -36,7 +36,6 @@ export const COMPLETED_DETACHED: FakeScript["turns"][number] = {
   result: {
     kind: "completed",
     detail: {
-      finalContent: "acknowledged",
       effectiveModel: { known: true, model: "fake-sonnet" },
       session: { state: "detached", coordinate: { opaque: "coord-s" } },
     },

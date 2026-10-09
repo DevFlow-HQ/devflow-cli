@@ -62,7 +62,6 @@ function fakeProcess(): ProcessAdapter {
 const COMPLETED: TurnResult = {
   kind: "completed",
   detail: {
-    finalContent: "done",
     effectiveModel: { known: false },
     session: { state: "open" },
   },

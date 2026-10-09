@@ -184,7 +184,6 @@ const RESULT_CASES = {
     result: {
       kind: "completed",
       detail: {
-        finalContent: "done",
         effectiveModel: { known: true, model: "fake-model" },
         session: { state: "open" },
       },
@@ -1800,7 +1799,6 @@ for (const fault of ["invalid", "storage", "malformed", "fenced"] as const) {
           result: {
             kind: "completed",
             detail: {
-              finalContent: "Still reading",
               effectiveModel: { known: false },
               session: { state: "open" },
             },

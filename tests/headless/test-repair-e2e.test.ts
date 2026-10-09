@@ -132,7 +132,6 @@ function claudeScript(sumPath: string): FakeScript {
         result: {
           kind: "completed",
           detail: {
-            finalContent: "repaired the failing test",
             effectiveModel: { known: true, model: "claude-opus-5[1m]" },
             session: { state: "open" },
           },
@@ -177,7 +176,6 @@ function codexScript(): FakeScript {
         result: {
           kind: "completed",
           detail: {
-            finalContent: "repaired the failing test",
             effectiveModel: {
               known: true,
               model: "gpt-6.1-sol",

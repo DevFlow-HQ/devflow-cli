@@ -74,7 +74,6 @@ const CODEX_PROFILE_OVERRIDES = {
 const COMPLETED: TurnResult = {
   kind: "completed",
   detail: {
-    finalContent: "recorded",
     effectiveModel: { known: true, model: "fake-codex-model" },
     session: { state: "open" },
   },

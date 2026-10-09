@@ -13,7 +13,7 @@ Read before changing Harness doubles, shared conformance, native replayers, or r
   Claude replay covers native and pending Steer. Other control groups stay capability-specific.
   Structured clarifications, after-acceptance checkpoint, load-with-replay, and caller-contract violations remain fake-only. The fake performs load-with-replay:
   resumed Turn re-emits the Session's retained history (`assistant-content`, `tool-call`, `tool-partial`, `thought`), drops a scripted entry that repeats
-  a replayed one, then emits `REPLAY_BARRIER` (an `activity`) before any live event — history is historical by position, inside the closed vocabulary.
+  a replayed one, then emits `REPLAY_BARRIER` (a Session availability fact) before any live event — history is historical by position, inside the closed vocabulary.
 - Native Adapter and replayer conformance that launches real children runs only in standalone runtime conformance (#198); scripted Process failure
   cases through the Claude Code Seam run in the semantic suite (#332). The layer rules are in [testing](testing.md).
 - **Leftover recording race:** a leftover Steer lands only in the few milliseconds after a native turn's Stop hook completes, so its recorder

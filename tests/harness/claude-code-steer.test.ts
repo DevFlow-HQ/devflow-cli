@@ -1,3 +1,4 @@
+import { assistantContent } from "./conformance.js";
 // Claude Code native Steer (#359, ADR 0035), driven through the Adapter Seam
 // with a scripted Process that answers stdin frames the way Claude Code 2.1.288
 // does. No child runs, so these cases hold on every OS; the recorded wire is
@@ -194,7 +195,7 @@ test("the Turn stretches across a native boundary until a pending Steer runs, to
   const settled = await turn.result();
   assert.equal(settled.kind, "completed");
   if (settled.kind !== "completed") throw new Error("unreachable");
-  assert.equal(settled.detail.finalContent, "MANGO KIWI");
+  assert.equal(assistantContent(turn), "MANGO KIWI");
   assert.deepEqual(settlements(events), [
     ["s-1", "now say MANGO", { kind: "delivered", delivery: "after-boundary" }],
     ["s-2", "and KIWI", { kind: "delivered", delivery: "after-boundary" }],
@@ -477,13 +478,10 @@ async function compactionTurn(
     },
   });
   const events: TurnEvent[] = [];
-  await new Promise<void>((resolve) => {
-    turn.subscribe((event) => {
-      events.push(event);
-      if (event.kind === "activity" && event.description.includes("compacting"))
-        resolve();
-    });
-  });
+  turn.subscribe((event) => events.push(event));
+  await scripted.frameRead(
+    (frame) => frame.type === "system" && frame.status === "compacting",
+  );
   return { scripted, harness, turn, events };
 }
 
@@ -518,7 +516,7 @@ test("a compaction Claude Code reports failed settles the Turn failed, not compl
 });
 
 test("a successful compaction settles the Turn completed", async () => {
-  const { scripted, harness, turn, events } = await compactionTurn("ignore");
+  const { scripted, harness, turn } = await compactionTurn("ignore");
   scripted.emit(
     compactResult("success"),
     init,
@@ -530,17 +528,11 @@ test("a successful compaction settles the Turn completed", async () => {
     compactionResult,
   );
   assert.equal((await turn.result()).kind, "completed");
-  assert.ok(
-    events.some(
-      (event) =>
-        event.kind === "activity" &&
-        event.description.includes("compaction succeeded"),
-    ),
-  );
+
   await harness.close();
 });
 
-test("automatic compaction mid-Turn is activity and the Turn runs on", async () => {
+test("automatic compaction mid-Turn adds no activity and the Turn runs on", async () => {
   const scripted = scriptedClaude({
     answer: "ignore",
     userFrame: (_index, frame) => [
@@ -576,14 +568,8 @@ test("automatic compaction mid-Turn is activity and the Turn runs on", async () 
   const settled = await turn.result();
   assert.equal(settled.kind, "completed");
   if (settled.kind !== "completed") throw new Error("unreachable");
-  assert.equal(settled.detail.finalContent, "carried on");
-  assert.ok(
-    events.some(
-      (event) =>
-        event.kind === "activity" &&
-        event.description.includes("compacting the conversation"),
-    ),
-  );
+  assert.equal(assistantContent(turn), "carried on");
+
   await harness.close();
 });
 
@@ -609,21 +595,20 @@ test("a local command's result settles completed with its output", async () => {
     ],
   });
   const harness = await prepare(scripted);
-  const settled = await harness
-    .startTurn({
-      session: "planning",
-      origin: "human",
-      correlationKey: { opaque: "local" },
-      input: { text: "/context" },
-      recorder: {
-        admit: () => Promise.resolve({ recorded: true }),
-        checkpoint: () => Promise.resolve({ recorded: true }),
-      },
-    })
-    .result();
+  const turn = harness.startTurn({
+    session: "planning",
+    origin: "human",
+    correlationKey: { opaque: "local" },
+    input: { text: "/context" },
+    recorder: {
+      admit: () => Promise.resolve({ recorded: true }),
+      checkpoint: () => Promise.resolve({ recorded: true }),
+    },
+  });
+  const settled = await turn.result();
   assert.equal(settled.kind, "completed");
   if (settled.kind !== "completed") throw new Error("unreachable");
-  assert.equal(settled.detail.finalContent, "Context: 4% used");
+  assert.equal(assistantContent(turn), "Context: 4% used");
   await harness.close();
 });
 
@@ -646,13 +631,10 @@ test("a compaction that runs before init, as on a relaunched process, is not an 
     },
   });
   const events: TurnEvent[] = [];
-  await new Promise<void>((resolve) => {
-    turn.subscribe((event) => {
-      events.push(event);
-      if (event.kind === "activity" && event.description.includes("compacting"))
-        resolve();
-    });
-  });
+  turn.subscribe((event) => events.push(event));
+  await scripted.frameRead(
+    (frame) => frame.type === "system" && frame.status === "compacting",
+  );
   // The Adapter armed its handshake timer before this one, with the same bound;
   // timers of equal delay fire in creation order, so once this one fires the
   // handshake bound has elapsed (an ordering fact, not a sleep).
@@ -688,22 +670,23 @@ test("a process that never inits still times out its handshake", async () => {
 test("a result listing only messages this Turn never sent is ignored, not the Turn's end", async () => {
   const scripted = steerable();
   const harness = await prepare(scripted);
-  const { turn, events } = await liveTurnOn(harness);
+  const { turn } = await liveTurnOn(harness);
   scripted.emit(
     result("someone else's", ["another-message"], "another-message"),
   );
   assert.equal(await isSettled(turn), false);
-  assert.ok(
-    events.some(
-      (event) =>
-        event.kind === "activity" && event.description.includes("did not send"),
-    ),
+
+  scripted.emit(
+    {
+      type: "assistant",
+      message: { content: [{ type: "text", text: "mine" }] },
+    },
+    result("mine", [promptUuid(scripted)], promptUuid(scripted)),
   );
-  scripted.emit(result("mine", [promptUuid(scripted)], promptUuid(scripted)));
   const settled = await turn.result();
   assert.equal(settled.kind, "completed");
   if (settled.kind !== "completed") throw new Error("unreachable");
-  assert.equal(settled.detail.finalContent, "mine");
+  assert.equal(assistantContent(turn), "mine");
   // The prompt itself carries the minted uuid results are matched by.
   assert.match(String(promptUuid(scripted)), UUID);
   await harness.close();
@@ -724,21 +707,20 @@ test("a failed automatic compaction followed by the model's answer keeps the Tur
     ],
   });
   const harness = await prepare(scripted);
-  const settled = await harness
-    .startTurn({
-      session: "planning",
-      origin: "managed",
-      correlationKey: { opaque: "auto-failed" },
-      input: { text: "long work" },
-      recorder: {
-        admit: () => Promise.resolve({ recorded: true }),
-        checkpoint: () => Promise.resolve({ recorded: true }),
-      },
-    })
-    .result();
+  const turn = harness.startTurn({
+    session: "planning",
+    origin: "managed",
+    correlationKey: { opaque: "auto-failed" },
+    input: { text: "long work" },
+    recorder: {
+      admit: () => Promise.resolve({ recorded: true }),
+      checkpoint: () => Promise.resolve({ recorded: true }),
+    },
+  });
+  const settled = await turn.result();
   assert.equal(settled.kind, "completed");
   if (settled.kind !== "completed") throw new Error("unreachable");
-  assert.equal(settled.detail.finalContent, "answered anyway");
+  assert.equal(assistantContent(turn), "answered anyway");
   await harness.close();
 });
 
@@ -762,12 +744,7 @@ test("under an Interrupt, a natural answer after an earlier failed compaction ke
       checkpoint: () => Promise.resolve({ recorded: true }),
     },
   });
-  await new Promise<void>((resolve) => {
-    turn.subscribe((event) => {
-      if (event.kind === "activity" && event.description.includes("failed"))
-        resolve();
-    });
-  });
+  await scripted.frameRead((frame) => frame.compact_result === "failed");
   await turn.interrupt();
   assert.equal((await turn.result()).kind, "completed");
   assert.equal(scripted.stops(), 0);

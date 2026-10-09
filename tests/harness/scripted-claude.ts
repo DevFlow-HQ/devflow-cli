@@ -49,6 +49,8 @@ export interface ScriptedClaude {
   /** Resolves once the Adapter has read a `control_response` line: the reader
    *  pulled the next line, so it finished dispatching that one. */
   readonly responseRead: Promise<void>;
+  /** Resolves after the Adapter dispatched a matching native frame. */
+  frameRead(matches: (frame: Frame) => boolean): Promise<void>;
   /** Emit frames on the newest process's stdout, at a moment the test picks. */
   emit(...frames: readonly Frame[]): void;
   /** End the newest process on its own, as a crash or exit would. */
@@ -72,6 +74,11 @@ export function scriptedClaude(options: {
   const writes: Frame[][] = [];
   const spawnOptions: OwnedProcessOptions[] = [];
   let stops = 0;
+  const readFrames: Frame[] = [];
+  const frameWaiters: {
+    matches: (frame: Frame) => boolean;
+    resolve: () => void;
+  }[] = [];
   let markResponseRead!: () => void;
   const responseRead = new Promise<void>((resolve) => {
     markResponseRead = resolve;
@@ -128,6 +135,10 @@ export function scriptedClaude(options: {
         const line = lines.shift();
         if (line !== undefined) {
           yield new TextEncoder().encode(line);
+          const read = JSON.parse(line) as Frame;
+          readFrames.push(read);
+          for (const waiter of frameWaiters)
+            if (waiter.matches(read)) waiter.resolve();
           if (
             line.includes('"control_response"') &&
             interruptIds.has(JSON.parse(line).response?.request_id)
@@ -270,6 +281,12 @@ export function scriptedClaude(options: {
     },
     stops: () => stops,
     responseRead,
+    frameRead(matches) {
+      if (readFrames.some(matches)) return Promise.resolve();
+      return new Promise<void>((resolve) =>
+        frameWaiters.push({ matches, resolve }),
+      );
+    },
     emit: (...frames) => {
       assert.ok(current, "no scripted process is running");
       for (const frame of frames) current.emit(frame);

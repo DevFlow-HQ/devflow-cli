@@ -110,7 +110,6 @@ function approval(id: string, awaited: boolean): FakeRequestSpec {
 const COMPLETED_OPEN: TurnResult = {
   kind: "completed",
   detail: {
-    finalContent: "done",
     effectiveModel: { known: true, model: "fake-model" },
     session: { state: "open" },
   },
@@ -663,7 +662,7 @@ runTurnProducerTraceCases(
               messageId: "preview-message",
               content: "hel",
             },
-            { kind: "activity", description: "between deltas" },
+            { kind: "context", observation: {} },
             {
               kind: "message-preview",
               messageId: "preview-message",
@@ -793,7 +792,7 @@ test("m10-observed-harness-facts: fake cumulative snapshots retain first appeara
           },
         },
         { kind: "turn-diff-preview", diff },
-        { kind: "activity", description: "READY" },
+        { kind: "usage", observation: { summary: "READY" } },
       ],
       block: true,
       finish: finish.promise,
@@ -805,7 +804,7 @@ test("m10-observed-harness-facts: fake cumulative snapshots retain first appeara
   t.after(() => prepared.harness.close());
   const turn = prepared.harness.startTurn(turnRequest("diff"));
   turn.subscribe((event) => {
-    if (event.kind === "activity" && event.description === "READY")
+    if (event.kind === "usage" && event.observation.summary === "READY")
       ready.resolve();
   });
   await ready.promise;
@@ -813,7 +812,7 @@ test("m10-observed-harness-facts: fake cumulative snapshots retain first appeara
   turn.subscribe((event) => events.push(event));
   assert.deepEqual(
     events.map((event) => event.kind),
-    ["turn-diff-preview", "tool-call", "activity"],
+    ["turn-diff-preview", "tool-call", "usage"],
   );
   assert.deepEqual(events[0], { kind: "turn-diff-preview", diff });
   finish.resolve();

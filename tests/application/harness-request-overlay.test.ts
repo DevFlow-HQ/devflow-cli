@@ -45,7 +45,6 @@ const FAKE_MODEL = "fake-model";
 const COMPLETED_OPEN: TurnResult = {
   kind: "completed",
   detail: {
-    finalContent: "repaired the workspace",
     effectiveModel: { known: false },
     session: { state: "open" },
   },

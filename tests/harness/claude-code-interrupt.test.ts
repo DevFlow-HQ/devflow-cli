@@ -78,7 +78,7 @@ test("a refused interrupt falls back to the process stop at once", async () => {
     controlTimeoutMs: 600_000,
     phases,
   });
-  const { turn, events } = await liveTurnOn(harness);
+  const { turn } = await liveTurnOn(harness);
 
   await turn.interrupt();
   const result = await turn.result();
@@ -88,13 +88,14 @@ test("a refused interrupt falls back to the process stop at once", async () => {
   assert.equal(result.detail.session.state, "detached");
   assert.equal(scripted.stops(), 1);
   assert.ok(
-    events.some(
+    phases.some(
       (event) =>
-        event.kind === "activity" &&
-        event.description.includes("refused the interrupt (not now)"),
+        event.kind === "phase-end" &&
+        event.outcome === "failed" &&
+        event.failure.diagnostics?.includes("refused the interrupt (not now)"),
     ),
   );
-  assert.deepEqual(controlSettlements(phases), ["ok"]);
+  assert.deepEqual(controlSettlements(phases), ["failed:control-refused"]);
   await harness.close();
 });
 
@@ -123,8 +124,9 @@ test("an unanswered interrupt falls back after the control bound, and a forced k
 
 test("an acknowledged interrupt whose aborted result never arrives falls back within the same bound", async () => {
   const scripted = scriptedClaude({ answer: "acknowledge-only" });
-  const harness = await prepare(scripted, { controlTimeoutMs: 20 });
-  const { turn, events } = await liveTurnOn(harness);
+  const phases: HarnessPhaseFact[] = [];
+  const harness = await prepare(scripted, { controlTimeoutMs: 20, phases });
+  const { turn } = await liveTurnOn(harness);
 
   await turn.interrupt();
   const result = await turn.result();
@@ -133,10 +135,11 @@ test("an acknowledged interrupt whose aborted result never arrives falls back wi
   assert.equal(result.detail.interruption.mode, "process-only");
   assert.equal(scripted.stops(), 1);
   assert.ok(
-    events.some(
+    phases.some(
       (event) =>
-        event.kind === "activity" &&
-        event.description.includes(
+        event.kind === "phase-end" &&
+        event.outcome === "failed" &&
+        event.failure.diagnostics?.includes(
           "acknowledged the interrupt but did not end the Turn",
         ),
     ),
@@ -268,7 +271,7 @@ test("a process that exits on its own before confirming settles lost with the in
   await harness.close();
 });
 
-test("a refusal's detail is bounded in the fallback activity", async () => {
+test("a refusal's detail is bounded in control-phase diagnostics", async () => {
   const scripted = scriptedClaude({
     answer: (frame, emit) =>
       emit({
@@ -280,16 +283,19 @@ test("a refusal's detail is bounded in the fallback activity", async () => {
         },
       }),
   });
-  const harness = await prepare(scripted);
-  const { turn, events } = await liveTurnOn(harness);
+  const phases: HarnessPhaseFact[] = [];
+  const harness = await prepare(scripted, { phases });
+  const { turn } = await liveTurnOn(harness);
   await turn.interrupt();
   await turn.result();
-  const refusal = events.find(
+  const refusal = phases.find(
     (event) =>
-      event.kind === "activity" && event.description.includes("refused"),
+      event.kind === "phase-end" &&
+      event.outcome === "failed" &&
+      event.failure.diagnostics?.includes("refused"),
   );
-  assert.ok(refusal?.kind === "activity");
-  assert.ok(refusal.description.length < 400);
+  assert.ok(refusal?.kind === "phase-end" && refusal.outcome === "failed");
+  assert.ok((refusal.failure.diagnostics?.length ?? 0) < 400);
   await harness.close();
 });
 

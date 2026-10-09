@@ -261,7 +261,6 @@ test("m12-wiring-test-helpers: an Agent Run records its completed Turn's usage a
         result: {
           kind: "completed",
           detail: {
-            finalContent: "seeded-content-6c19",
             effectiveModel: { known: true, model: "claude-opus-5" },
             session: { state: "open" },
             usage: {
@@ -389,7 +388,6 @@ test("m12-wiring-test-helpers: an interactive Step's Turn usage and its driver's
         result: {
           kind: "completed",
           detail: {
-            finalContent: "acknowledged",
             effectiveModel: { known: true, model: "claude-opus-5" },
             session: { state: "detached", coordinate: { opaque: "coord-s" } },
             usage: { summary: "input 1, output 2 tokens" },
@@ -636,7 +634,6 @@ test("a reopened interactive Step prepares, records usage, and closes its Harnes
         result: {
           kind: "completed",
           detail: {
-            finalContent: "acknowledged",
             effectiveModel: { known: true, model: "claude-opus-5" },
             session: { state: "detached", coordinate: { opaque: "coord-s" } },
             usage: { summary: "input 1, output 2 tokens" },

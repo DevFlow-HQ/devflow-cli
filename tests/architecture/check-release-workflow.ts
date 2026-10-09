@@ -211,6 +211,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-audit-guidance-refresh",
   "m10-audit-file-input-resolution",
   "m10-audit-claude-fact-translation",
+  "m10-audit-retired-seam-vocabulary",
   "m10-audit-optional-native-facts",
   "m10-audit-embedded-ripgrep-release",
   "m10-audit-claude-token-stdin",

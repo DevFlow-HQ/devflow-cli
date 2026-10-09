@@ -36,7 +36,6 @@ const sharedGit = createFakeGitProcess();
 const COMPLETED: TurnResult = {
   kind: "completed",
   detail: {
-    finalContent: "Published the spec.",
     effectiveModel: { known: false },
     session: { state: "open" },
   },
