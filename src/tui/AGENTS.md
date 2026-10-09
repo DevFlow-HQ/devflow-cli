@@ -71,7 +71,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Tests
 
-- Long Unicode wrap cases spy on real grapheme segmentation and bound total input code units; suffix rescanning fails without timing the runner.
+- Long Unicode wrap and layout-cost cases spy on real grapheme segmentation and bound total input code units; suffix rescanning fails without
+  timing the runner. Never assert wall-clock time: hosted macOS runners vary about 3x between runs.
 - Use `resizeWorkbench` to resize both the captured terminal and injected Renderer Port; other screens resize the captured terminal directly.
 - Exercise screens in-memory over fake Projection snapshots with `mountRenderer` (`tests/tui/renderer-fixture.ts`), backed by `@opentui/solid` `testRender`.
   Its shared after-test cleanup owns renderer destruction. Assert content, key dispatch, and small-width/resize relayout without overflow.

@@ -1,7 +1,7 @@
 import type { App } from "../../src/tui/tui.js";
 import { PALETTES } from "./palette-expectations.js";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import type {
   SessionHistoryRow,
   SessionHistorySnapshot,
@@ -64,12 +64,35 @@ function command(id: string, text: string): SessionHistoryRow {
   };
 }
 
+/** Counts code units passed to native grapheme segmentation, which every wrap and
+ *  clip performs, so layout work is bounded without timing the runner. */
+function countSegmentation(t: { mock: TestContext["mock"] }) {
+  const segment = Intl.Segmenter.prototype.segment;
+  let units = 0;
+  t.mock.method(
+    Intl.Segmenter.prototype,
+    "segment",
+    function (this: Intl.Segmenter, input: string) {
+      units += input.length;
+      return segment.call(this, input);
+    },
+  );
+  return {
+    /** Units segmented since the previous call. */
+    take(): number {
+      const taken = units;
+      units = 0;
+      return taken;
+    },
+  };
+}
+
 const sessionRun = () =>
   runOf({
     sessions: [{ session: "s", name: "Conversation", availability: "open" }],
   });
 
-test("m10-audit-row-layout-once: a preview lays out only its changed row among 199 bounded command outputs within one frame", async () => {
+test("m10-audit-row-layout-once: a preview lays out only its changed row among 199 bounded command outputs with bounded segmentation", async (t) => {
   const laidOut: string[] = [];
   const observe: NonNullable<Parameters<typeof App>[0]["observeLayout"]> = (
     event,
@@ -95,13 +118,20 @@ test("m10-audit-row-layout-once: a preview lays out only its changed row among 1
   await wb.t.renderOnce();
   assert.equal(laidOut.length, 199);
   laidOut.length = 0;
-  const before = performance.now();
+  const segmented = countSegmentation(t);
   wb.control.setHistory(
     page([...rows.slice(0, -1), command("198", "LAST\n" + output.slice(5))]),
   );
-  const elapsed = performance.now() - before;
   assert.deepEqual(laidOut, ["198"]);
-  assert.ok(elapsed < 16.7, `layout update took ${elapsed.toFixed(2)} ms`);
+  // Collapsed output draws at most 10 * max(20, width - 6) code points
+  // (tui-history.md); three passes over that one preview fit, while re-wrapping
+  // the 198 unchanged rows or scanning a full 30000-character output cannot.
+  const preview = 10 * Math.max(20, 100 - 6);
+  const units = segmented.take();
+  assert.ok(
+    units <= 3 * preview,
+    `segmented ${units} code units for one ${preview}-code-point preview`,
+  );
   await wb.t.renderOnce();
   assert.match(wb.t.captureCharFrame(), /COMMAND_198/);
   assert.match(wb.t.captureCharFrame(), /LAST/);
@@ -484,32 +514,32 @@ for (const [width, hidden] of [
 }
 
 for (const glyph of ["é", "漢"]) {
-  test(`m10-audit-row-layout-once: a live unbroken 30000-character ${glyph} row stays responsive on load, first expansion and expanded preview replacement`, async () => {
+  test(`m10-audit-row-layout-once: a live unbroken 30000-character ${glyph} row segments linearly on load, first expansion and expanded preview replacement`, async (t) => {
     const wb = await mountWorkbench(sessionRun(), 100, 44, undefined, true);
     const text = glyph.repeat(30_000);
-    let before = performance.now();
+    // A fixed number of passes over the row fits; rescanning suffixes cannot.
+    const budget = 3 * text.length;
+    const segmented = countSegmentation(t);
+    const linear = (action: string) => {
+      const units = segmented.take();
+      assert.ok(
+        units <= budget,
+        `${action} segmented ${units} code units for ${text.length}`,
+      );
+    };
     wb.control.setHistory(page([command("unicode", text)]));
-    assert.ok(
-      performance.now() - before < 100,
-      "collapsed Unicode layout exceeded 100 ms",
-    );
+    linear("collapsed Unicode layout");
     await wb.t.renderOnce();
     assert.match(wb.t.captureCharFrame(), /hidden characters/);
-    before = performance.now();
+    segmented.take();
     wb.renderer.key("o", { ctrl: true });
-    assert.ok(
-      performance.now() - before < 100,
-      "first Unicode expansion exceeded 100 ms",
-    );
+    linear("first Unicode expansion");
     await wb.t.renderOnce();
-    before = performance.now();
+    segmented.take();
     wb.control.setHistory(
       page([command("unicode", glyph.repeat(29999) + "Z")]),
     );
-    assert.ok(
-      performance.now() - before < 100,
-      "expanded Unicode preview replacement exceeded 100 ms",
-    );
+    linear("expanded Unicode preview replacement");
     await wb.t.renderOnce();
     assert.ok(
       wb.t
