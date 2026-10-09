@@ -19,7 +19,7 @@
 // within a file remain sequential; do NOT use `--concurrent`, which would race
 // their shared fixtures. Child-lifecycle flakiness is fixed by keeping spawns out
 // of the semantic suite, never a retry, a sleep, or a larger timeout
-// (docs/agents/testing.md).
+// (docs/agents/test-runners.md).
 //
 // Extra arguments pass through, so `bun run test -- tests/foo.test.ts` still works.
 import { spawnSync } from "node:child_process";

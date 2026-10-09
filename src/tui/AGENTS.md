@@ -5,6 +5,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 ## Invariants
 
 - History text edge analysis scans transient portions without retaining them; exact reads stay raw and `screenText` still owns filtering (#489).
+  It crosses as an injection Seam: `tui.ts` exports `historyTextEdges` (`screen-text.ts`), composition (`tui-runtime.ts`) passes it through wiring as
+  the Application's `historyTextEdges` dependency, and Application calls it on each text read. Headless supplies none, so its reads carry no `edges`.
 - History demand readers own independent Solid roots; viewport membership changes dispose those roots without resetting retained readers (#489).
   `createHistoryContentReaders` is the one keyed reader set for row content and long paths; `rowContentReference` owns which rows read (#490).
 
@@ -24,9 +26,6 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   never a search for matching text.
 - History layouts (#441) retain row/value/width/expansion work, release evicted rows, and window visible lines; transcript prepends re-layout only new entries
   and changed divider junctions. `App.observeLayout` measures actual cache misses through the Renderer fixture; height-only resize must reuse the layout.
-- Ctrl+O eligibility is cached with the drawn collapse (#503). Its remembered row uses the history id, clears on click-close or eviction, and never
-  names a modal inspection. Visibility includes counted prefixes and partial rows.
-- Before changing history rendering, scrolling, or row inspection, read [Workbench history](../../docs/agents/tui-workbench.md#history).
 - Workbench Step-ending Offers expose Run and Step ids, not an Attempt id. Resume evidence is ownerPid and acknowledgement; Interrupt exposes turnId
   (#389). Confirmation lifecycle rules live in [Workbench interaction](../../docs/agents/tui-workbench.md).
 - `follow.ts` alone owns Projection observer health and reconnect ordering. A terminal update preserves last-known state as `disconnected`; explicit reconnect
@@ -65,8 +64,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Native prompt caret and completion offsets come from editor text ranges, never guessed tab widths or `cursorCharacterOffset`; acknowledge selection edits once (#447).
 - Prompt receipts are independent per dispatch (#420). A native textarea `setText` moves its cursor to the start; prompt write-back calls
   `gotoBufferEnd` after clear or restore so continued typing extends the restored draft. Ordinary updates never write text back.
-- `run-draft-control.ts` owns captures, ordered recovery and the draft's restore note. Every clear goes through its `clear`, including native empty input.
-- Workbench Steer receipts require the Operation id as `steerId`, including fakes; equal text never identifies a capture. Command owners declare numeric order.
+- The draft controller (`run-draft-control.ts`) and Steer receipt identity are in [Workbench compose](../../docs/agents/tui-compose.md#drafts-and-restoration).
+  App command owners declare numeric order.
 
 ## Tests
 
@@ -81,7 +80,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 ## Read next
 
-- `app-commands.tsx` retains known names and aliases even when unavailable; its `entries()` exposes available commands to Home, Ctrl+P, and Slash.
+- `app-commands.tsx` is the App command catalog; its availability rules are in [Workbench compose](../../docs/agents/tui-compose.md#slash-discovery-and-dispatch).
 - `ShellCommands` disables its keymap bindings while `portDriven` or a dialog is open. Workbench shell keys use its Renderer Port dispatcher;
   dialogs take Port keys and geometry. Other screens keep keymap bindings. Picker cancellation restores entry appearance; confirmation applies before saving.
   `preferences-view.ts` generates a fresh Operation id on every save or retry.
@@ -102,7 +101,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   The Previous Runs seam (`run-list-view.tsx`) reopens an `observer-lagged` page in place, keeping older loaded pages (#306).
 - Application ends pending settlement waits at shutdown with `operation-observation-ended` and unknown effects; TUI presents the returned Problem (#448).
 - Read [tui-workbench](../../docs/agents/tui-workbench.md) before changing the Run Workbench's layout, bottom interaction, key routing, prompt, drafts,
-  confirmations, dialogs, or details panel.
+  confirmations, dialogs, or details panel, and [Workbench history](../../docs/agents/tui-history.md) before changing history.
 - `previous-runs.tsx` is the Previous Runs screen reached from Home.
 - `clip.ts` is the ellipsis affordance above, `wrap.ts` its wrapping counterpart, and `bundle-format.ts` holds the Bundle-catalog status wording — keep
   it matching `headless/render.ts` so the TUI and headless surfaces say the same thing about the same fact.

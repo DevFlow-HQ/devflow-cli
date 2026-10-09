@@ -10,7 +10,7 @@ import {
 // The ordinal scroll model used by resource inspection (#91 AC4, #288):
 // display-line paging, append and rewrap anchoring, and jumping to the latest
 // content. Live Workbench history uses semantic row ids instead, covered by
-// run-workbench-history-scroll.test.tsx and run-history-scroll.test.ts.
+// run-workbench-history-scroll.test.tsx.
 
 /** `count` single-line rows — the pre-wrap timeline. */
 function ones(count: number): number[] {

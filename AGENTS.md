@@ -38,13 +38,13 @@ Read the line that matches your task, then the file it names. The canonical gate
 
 Before editing under a Module root that carries its own `AGENTS.md`, read that file. Each one is listed here by path when it is created:
 
-- `src/application/AGENTS.md` — Application Module: observed-owner writes, gate answering, Trust-grant order, launch and Harness selection, live-Run reads, derived state,
-  historyOrder stamping, subscription-local history ids, and the guarded observer.
+- `src/application/AGENTS.md` — Application Module: observed-owner writes, gate answering, Trust-grant order, launch and Harness selection, derived state, the
+  guarded observer, and the route to Run reads and history.
 - `src/headless/AGENTS.md` — headless CLI Module: settledOperation, transcript JSON, the exit-code contract, and commander-settings ordering.
 - `src/tui/AGENTS.md` — presentation Module: OpenTUI layout, Renderer Port keys, ShellCommands guards, history identity, and per-screen view seams.
 - `src/bundle/AGENTS.md` — Bundle Module: digest, validator, and budget invariants for slice authors.
-- `src/run/store/AGENTS.md` — Run Store Module: coordination/run.db split, fencing, conversation kinds, Artifact publication, and working-area rules.
-- `src/harness/AGENTS.md` — Harness Module: Interface opacity, preparation, terminal ordering, recovery, safe causes, and conformance/replay rules.
+- `src/run/store/AGENTS.md` — Run Store Module: coordination/run.db split, fencing, ownership, and the routes to conversation, Artifact, and working-area rules.
+- `src/harness/AGENTS.md` — Harness Module: Interface opacity, preparation, terminal ordering, safe causes, and the routes to Turn control and testing.
 - `src/process/AGENTS.md` — process Module: the Process Interface, Windows containment, POSIX lifetime FFI, shared-bound shutdown, git spawns, and ChildWatch facts.
 - `src/composition/AGENTS.md` — composition Module: Adapter opacity, Harness-registry and preparation ownership, cleanup warnings, and per-Run logging.
 - `src/run/execution/AGENTS.md` — Run execution Module: abort-reason rests, Turn writes, Agent evidence, Command Git hardening, and guarded observers.

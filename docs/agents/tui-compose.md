@@ -17,8 +17,9 @@ Read before changing Workspace path completion, Slash discovery, prompt captures
 
 ## Slash discovery and dispatch
 
-- The catalog retains registered command identities with availability; `entries()` hides unavailable entries, and `knownSlash` recognizes their first word
-  and aliases even then. Names ignore leading whitespace and case, matching the Harness-input protection's breadth without copying Harness rules.
+- The catalog (`app-commands.tsx`) retains registered command identities with availability; `entries()` exposes only available entries to
+  Home, Ctrl+P, and Slash, and `knownSlash` recognizes their first word and aliases even then. Names ignore leading whitespace and case, matching
+  the Harness-input protection's breadth without copying Harness rules.
 - Discovery requires first-character `/` and no whitespace. It uses shared catalog search and initially highlights only a name prefix. Up/Down selects,
   Enter/Tab resolves the current registered entry and runs its `run`. A withdrawn selection never silently chooses another command. Esc dismisses the list
   and keeps text before Interrupt or leave; Tab runs a highlighted entry before details focus. Paths without a highlight keep ordinary Enter send/Steer.
@@ -45,7 +46,8 @@ Read before changing Workspace path completion, Slash discovery, prompt captures
   counted notice and Ctrl+P's `Recover unsent text`. Only that command moves it into the current draft. Distinct bottom controls instead offer
   `Copy unsent text` through the terminal clipboard; unavailable clipboard support leaves text saved. Automatic restores preserve details or dialog focus.
 - Interrupt drops wait for the live Turn and pending receipts to leave (#356). Full text comes from `RunTimelineEvent.steer`, never its capped `detail`.
-  The private draft controller owns every clear and its restore note, and saves a finished Run's typed draft for Copy.
-  Steer receipts require their opaque Operation id to match durable `steerId`, including identical-text retries and different Attempts.
+  The private draft controller (`run-draft-control.ts`) owns captures, ordered recovery, every clear (native empty input included) and its restore note,
+  and saves a finished Run's typed draft for Copy. Steer receipts, fakes included, require their opaque Operation id to match durable `steerId`, including
+  identical-text retries and different Attempts; equal text never identifies a capture.
   Captured send order wins; uncaptured drops retain recorded order. Opening old history and repeated snapshots never restore twice. Restore only into an
   interactive Step's prompt or an Agent Step's follow-up (#354); a signal-halted Agent Step's same-target drops stay history.

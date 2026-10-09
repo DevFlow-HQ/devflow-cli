@@ -14,7 +14,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   than a raw `spawnSync`; but raw `spawnSync` sites deliberately remain for the spawns that expect a non-zero/failure exit and for the long-lived child processes
   (SIGINT, takeover), which `run()`'s default exit-0 contract does not fit (A35). This rest-state exit is only `launch`, `resume` and `answer` — the three
   commands that drive to settlement through `settleAndReportRun`;
-  `show`, `list`, `read`, `model`, `cancel` and `delete` exit 0 on success (or 1 on a refusal), never by rest state. On Ctrl+C the signal handler (`withClients`,
+  `show`, `list`, `read`, `paths`, `model`, `cancel` and `delete` exit 0 on success (or 1 on a refusal), never by rest state. On Ctrl+C the signal handler (`withClients`,
   `composition/main.ts`, #98) aborts the live Runs, restores the default disposition, and re-raises the signal, so the process exits **128 plus the signal
   number** rather than 1 — the Unix "killed" contract a CI script reads, which a fabricated 1 destroys. The `halted` rest lands lazily: the claim is left
   live and the next open reconciles it `halted` (ADR 0019), not the signalled process.
@@ -71,7 +71,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   surfaces disagree about the same fact.
 - The `--json` shapes are frozen: the three-OS CI gate parses specific fields (`.result.run.state`, `.checkpoint.completedIterations`, …), so renaming
   one breaks the gate. They are not uniform — `bundle inspect --json` prints the inner bundle while `bundle list --json` prints the snapshot — so match
-  the existing shape a command already emits.
+  the existing shape a command already emits. `run paths --json` (#484) prints the available search result — `status`, `candidates`, optional
+  `notice` — and an unavailable search is the shared `fail` envelope.
 - The `harness` command group lives in `harness-commands.ts`. `harness inspect` waits for settled qualification when its initial snapshot is
   `not-checked` (#188, #390). Its frozen JSON is the inner focused Harness, where `supportedModels` keeps its names-only shape (a `suggested` declaration
   reads as `free-text`) and #341 adds `modelDeclaration` and `harnessDefaults` (text: `Reported settings:`) beside it, #342 `preselection`;

@@ -242,8 +242,9 @@ function expandDp0(token: string, shimDir: string): string {
 
 /** What a caller's spawn is for: the Preflight worktree probe and the Artifact
  *  repository spawn `git`, a Command step spawns `command`, a Harness version or
- *  schema probe spawns `harness-probe`, and a Harness's long-lived process is
- *  `harness-runtime`. Every caller declares one. The set is closed because a free
+ *  schema probe spawns `harness-probe`, a Harness's long-lived process is
+ *  `harness-runtime`, and Workspace path search's embedded listing helper is
+ *  `workspace-paths`. Every caller declares one. The set is closed because a free
  *  label could carry a Command's executable or arguments, which the operational
  *  log excludes: the closed set is part of that privacy control. A role names a
  *  child's purpose, never which Harness owns it. */

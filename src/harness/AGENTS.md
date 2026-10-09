@@ -19,7 +19,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   semantic phase, an optional closed semantic `step` (#325), the Session key, elapsed time, and a typed `HarnessFailure`; no typed field carries a
   frame, argv, RPC name, or coordinate (mapping in harness-adapters), though a translated Codex cause may name its RPC method in bounded message or stack text.
   Recovery coordinates cross the Seam only as opaque `RecoveryCoordinate` values, never Run truth; callers never decide from their contents. Native
-  protocol models and qualification stay private to each Adapter and re-export nothing native.
+  protocol models and qualification stay private to each Adapter and re-export nothing native. The shared stored Turn-fact schemas (`turnFactSchemas`,
+  `TurnFact`, `stored-turn-facts.ts`) are exported so the Run Store validates and the Application reads the normalized facts this Seam publishes.
 - No Routing, Step kind, retry budget, or Run policy knowledge lives here; those are above the Seam. A Turn is one mechanical exchange, not a
   judgement that a Step succeeded — the closed Turn results (`not-started`, `completed`, `failed`, `interrupted`, `lost`) are mechanical truth, and the
   Step kind decides the Attempt outcome above the Seam.
@@ -28,7 +29,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Terminal ordering is exact: an Adapter publishes remaining events, drops pending Steers, expires requests and unanswered Agent calls, then closes
   the producer and settles the authoritative result. No event is observable afterward; both Adapters and the fake enforce this order.
   Turn diffs drain once; requested edits never prove changes. `tool-partial` drains incomplete command tails with a running outcome; unqualified fields stay absent.
-- Child reuse across Turns (a result may settle before the native `close`) is in [harness-adapters](../../docs/agents/harness-adapters.md).
+- Claude child reuse across Turns (a result may settle before the native `close`) is in [Claude Code Adapter](../../docs/agents/claude-code-adapter.md).
 - Operational failures are typed values (`HarnessFailure`, `ControlReceipt` rejections, `RecordingReceipt`, `CleanupReport`). Only caller-contract
   violations throw: a second concurrent Turn on one Prepared Harness, a Turn after `close`, or a Turn beyond what an Adapter can serve. Control races
   (`expired`, `already-settled`, `shape-mismatch`, `unsupported`) are rejected receipts, never throws.

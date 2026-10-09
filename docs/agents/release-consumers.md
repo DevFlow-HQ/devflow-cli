@@ -7,7 +7,10 @@ Each shipped release channel is verified on the Windows x64, macOS arm64, and Li
 job in [check.yml](../../.github/workflows/check.yml), driving the channel exactly as a consumer receives it. The job's shape (one download per
 artifact, `continue-on-error` scenarios, the always-run aggregation) is owned by [release-workflow.md](./release-workflow.md); the evidence layers,
 including why the semantic suite never reaches a real child, by [testing](./testing.md). Release-channel pure logic is unit-tested under `bun test`
-in `tests/release/` with no subprocess; every real round-trip on real binaries below lives only in the consumer job, like the compiled-binary smoke.
+in `tests/release/` with no subprocess; every real round-trip on real binaries lives only in the consumer job, like the compiled-binary smoke.
+
+Before changing the platform-package or npm launcher consumer, read [npm channel consumers](./release-npm-consumers.md); before changing either
+installer consumer, read [installer consumers](./release-installers.md).
 
 ## Release Archive Consumer
 
@@ -19,44 +22,6 @@ extracts the matching archive and proves layout, executable mode, inner-binary d
 version, and — on macOS — the strict ad-hoc signature. `tests/release/assemble.test.ts` unit-tests the pure logic — manifest facts and digests
 (`computeCandidate`), the immutability/identity/version/digest checks (`assertAgrees`), and the consumer's pre-extraction refusals — and spawns no
 subprocess. The archive create → extract → run round-trip on real binaries is proven only by this CI job.
-
-## Platform Package Consumer
-
-The `Platform package consumer` step ([check.yml](../../.github/workflows/check.yml)) verifies the three per-platform npm packages (`scripts/pack.ts`,
-#151) as an npm consumer receives them. Packing runs once on the Linux `build` job after assembly: `scripts/pack.ts` reads the archive candidate manifest
-(`scripts/assemble.ts`), fails closed unless every dist binary and the legal material are byte-identical to that candidate, and emits one exact-version,
-os/cpu-constrained npm tarball per target (built with `bun pm pack`, so the npm channel needs no Node toolchain) plus a `package-manifest.json`. Each
-package carries only its executable, `LICENSE`, and `THIRD-PARTY-NOTICES.md`, with no lifecycle script. On the Windows x64, macOS arm64, and Linux x64
-matrix, `scripts/package-consumer.ts` installs the matching package with `npm install --ignore-scripts` (npm is the channel under test) and proves its
-os/cpu constraint, exact version, contents, the absence of a lifecycle script, inner-binary digest against the archive candidate, executable mode, native
-execution and version, and — on macOS — the strict ad-hoc signature. `tests/release/pack.test.ts` unit-tests the pure logic — the package.json shape
-(`platformPackageJson`), the byte-identity anchoring to the archive candidate (`computePackages`), the immutability/identity/version/digest checks
-(`assertPackagesAgree`), the consumer's pre-install refusals (unknown target, wrong host, tampered/missing/malformed manifest), and its installed-contents
-refusals against a hand-staged directory (stale version, lifecycle script, unexpected/missing/tampered files, inner-binary digest, executable mode via
-`verifyInstalledPackage`) — and spawns no subprocess. Only the `bun pm pack` → `npm install` → run
-round-trip on real binaries (npm's own os/cpu gating, mode preservation, native execution, macOS signature) is left to this CI job.
-
-Platform-package cleanup failures stay blocking and retain any earlier verification error. Their stderr report records the verification phase, child
-PIDs and exit statuses, and remaining install-tree entries; an unreadable tree cannot replace the cleanup error. A Windows `EBUSY` at cleanup alone
-does not establish which process held the lock. Preserve this evidence before changing lifecycle behavior.
-
-## npm Launcher Consumer
-
-The `npm launcher consumer` step ([check.yml](../../.github/workflows/check.yml)) verifies the thin, script-free npm launcher `@secantdev/secant`
-(`bin/secant.mjs`, packed by `scripts/pack-launcher.ts`, #152) as a consumer receives it. Packing runs once on the Linux `build` job after the platform
-packages: `scripts/pack-launcher.ts` pins the assembled release version, generates the host-key → package/executable map from the one target manifest
-(`scripts/targets.ts`), and stages the Node launcher, that map, and the legal material — no candidate executable, exact-version `optionalDependencies` on
-all three platform packages, and no lifecycle script — into one tarball beside them in the `platform-packages` artifact. On the Windows x64, macOS arm64,
-and Linux x64 matrix, `scripts/launcher-consumer.ts` installs the launcher and the matching platform package with `npm install --ignore-scripts`
-(`--omit=optional`, so the install is network-free; npm is the channel under test) and proves: argument/stdio/native-exit forwarding under an npm-flat
-layout and under a pnpm-symlinked layout (the platform package is not hoisted, so resolution only works because the launcher canonicalizes its own path);
-the before-spawn missing-optional-package diagnostic; and — the acceptance seam — the Proof Bundle smoke (the M3 gate) completed end to end THROUGH the
-launched command: build + install the Test Repair Proof Bundle, launch it against the recorded Claude Code replayer to its authored Human Gate, and once
-answered reach `succeeded` and make the authored commit. `tests/release/launcher.test.ts` unit-tests the pure logic — the launcher package.json shape
-(`launcherPackageJson`), the host-key map (`launcherPlatforms`), and the launcher's own target selection and before-spawn diagnostics (`selectTarget`,
-`resolveExecutable`, with an injected resolver) — and spawns no subprocess. Only the
-install → launch → Proof Bundle round-trip on real binaries is left to this CI job. Real-platform unsupported-target detection is not exercised here
-(a real spawn cannot spoof `process.platform`); the `selectTarget` unsupported branch is proven deterministically in `bun test` instead.
 
 ## Release Legal Closure
 
@@ -82,38 +47,6 @@ per-package prose mislabel within a known family is a named limitation, not caug
 real build) runs in the `build` job. The embedded ripgrep closure comes from pinned official members and target-specific upstream Cargo trees.
 Build and inventory verify the matching member's complete bytes in each candidate; `dist/legal-inventory.json` records that evidence per target.
 `m10-audit-embedded-ripgrep-release` tests scoped licence admission and complete component notices on all three OSes; package smoke proves extraction.
-
-## PowerShell Installer Consumer
-
-The `PowerShell installer consumer` step ([check.yml](../../.github/workflows/check.yml)) supplies the assembled candidate through a network-free
-local-candidate seam. The macOS arm64 and Linux x64 legs exercise native unsupported-target detection before candidate access. The Windows x64 leg installs
-into an isolated home, runs the installed executable, exercises latest and exact versions with their five phase lines in order on stdout, executes the
-declined PATH instruction twice, and checks idempotent default PATH changes. It preserves the installed bytes across missing input (failing with its phase
-and path), malformed manifest/version, target-identity, checksum, layout, inner-binary, legal-material, and executable-version failures, including a
-well-formed candidate whose `--version` never exits: the installer kills it at the 30 s bound and leaves no probe running. That hanging stand-in is compiled
-by the CI step before both installer consumers (Git Bash and the pinned Bun, from source written at run time); the scenario itself needs only native
-PowerShell, no Git Bash, Node, Bun, credentials, or network. Every child run has an outer bound, so a regression fails the step instead of holding the leg. A
-directory-swap failure is deliberately not induced: doing so deterministically would require a private installer hook or an inherently racy Windows file
-lock. The installer runs its `--version` probe on a digest-checked copy outside the stage, never the staged executable: Windows can hold a just-executed
-image briefly, which failed the stage rename (a sharing violation in CI, #216). CI runs only `pwsh`, so the Windows PowerShell 5.1 path is a named gap.
-
-## POSIX Installer Consumer
-
-The `POSIX installer consumer` step ([check.yml](../../.github/workflows/check.yml)) runs `scripts/posix-installer-consumer.sh` (the POSIX sibling of
-`scripts/powershell-installer-consumer.ps1`) to give root `install.sh` the local candidate without a product runtime. On macOS arm64 and Linux x64 the
-`supported` scenario installs the real candidate under fixed `~/.secant/bin` in an isolated home and proves: the executable runs and reports the candidate
-version, the five phase lines print in order for latest and exact versions, `LICENSE`/`THIRD-PARTY-NOTICES.md` are installed while `SECANT_HOME` is not
-used as the install root, the declined-PATH instruction is printed (with macOS Terminal guidance), exact-version selection accepts the matching version
-and rejects a mismatch, and PATH modification is idempotent. It then tampers a local copy to prove a missing file (failing with its phase and path), a
-malformed candidate — a checksum, archive-layout, manifest-version, or legal-material fault — or the hanging stand-in (strictly signed on macOS, killed at
-the 30 s bound, no probe left running, under the scenario's own outer bound) is refused while the existing installation is preserved, each assertion naming
-its scenario on failure. Windows x64 runs the `unsupported` scenario, proving only refusal before candidate access. This restores at the compiled-binary
-layer the coverage the deterministic `tests/release/posix-installer.test.ts` suite carried before it was retired in the #185 subprocess-test migration so
-the semantic suite spawns no child; the install, replacement, and tamper round-trips on the real binary live only in this CI job, the way the
-compiled-binary smoke ([testing](./testing.md)) lives outside `bun test`.
-
-Download timeouts and retries are a named gap in both installers: inducing a stalled network deterministically would need a private installer hook, which
-they deliberately lack, so the native curl and `Invoke-WebRequest` bounds are proven only by review of the flags (curl's `--max-time` restarts per retry).
 
 The manual-dispatch candidate validation and the tag-triggered protected promotion are workflow-shape policy, not consumer round-trips; they live in
 [release-workflow.md](./release-workflow.md).

@@ -38,9 +38,9 @@
   It applies the effort lock to any preselection and refuses contradicting effort with correction `effort`; `submit` requires a model and trusts the Offer's effort.
 - Each focus open and assessment reads Preferences outside the qualification cache; stale model/effort skips the whole choice with a notice.
   `saveLastModelChoice` runs after Run creation or a fenced choice change; failure keeps the Run choice and its notice across Projection reopen.
-- `run` Offers follow `prepareModelChoice` or qualification. Ordinary reads never prepare a Harness. Changes share `model-choice.ts` and re-read authority after
-  qualification.
-  `RunOwner.currentTurn` avoids history (#395). Halves use the Run, never Preferences. Push with the writer's owner. See [live control](../../docs/agents/run-control.md).
+- `run` Offers follow `prepareModelChoice` or qualification. Ordinary reads never prepare a Harness. Changes share `model-choice.ts` and re-read
+  authority after qualification. `RunOwner.currentTurn` avoids history (#395). Halves use the Run, never Preferences. Push with the writer's owner.
+  See [live Turn control](../../docs/agents/run-turn-control.md).
 - Preflight alone exempts exactly `0.0.0-dev` from the engine range and reports `preflight-engine-skip` at info level; catalog notes and
   strict-parse failures still use ordinary compatibility. Both launch assessment and resume use the stored archive's declared range (#367).
 - Preflight takes the injected `ProcessAdapter` for command resolution and the Git worktree probe; it never constructs one, so tests drive it spawn-free.
@@ -57,9 +57,10 @@
   refuses it too; `listRuns` throwing on a malformed row is caught in cancel/delete so nothing throws out of `submit` (A4).
 - The closed registry and prepared Harnesses live in composition, not Application (#116, #146): the Port sees normalized choices/availability, while selected-only
   Preflight sees normalized discovery and capabilities. `makeRunExecution` resolves the durable id and prepares only that Adapter; on a `blocked` rest
-  composition transfers an opaque Step driver (`heldStep`), kept only on the hold basis ([run-control](../../docs/agents/run-control.md)) and closed
-  otherwise. Every human Turn reuses it, an Interrupt keeps it held (#353), a follow-up hands it back to the re-walk, and End, a `halted` Turn rest,
-  cancel, or shutdown closes it exactly once. Preflight refuses discovery/capability failures before creation.
+  composition transfers an opaque Step driver (`heldStep`), kept only on the hold basis
+  ([live Turn control](../../docs/agents/run-turn-control.md#follow-up-after-an-agent-step-interrupt)) and closed otherwise.
+  Every human Turn reuses it, an Interrupt keeps it held (#353), a follow-up hands it back to the re-walk, and End, a `halted` Turn rest, cancel, or
+  shutdown closes it exactly once. Preflight refuses discovery/capability failures before creation.
   `supportsInteractiveTurns` remains the client fact Application forwards to Preflight.
 - A typed `prepare` failure is translated in one place, `haltForHarnessFailure` (#304): every drive reaches it — `executeTrackedRouting` for launch, resume, both
   Gate answers, End Step, Continue, End Stage, and the follow-up (#354), and the reopened human Turn directly. It rests the Run `halted` through
@@ -103,7 +104,8 @@
 
 ## Read next
 
-- Read [run-control](../../docs/agents/run-control.md) before changing deferred settlement, cancel or shutdown, Turn interrupt or steer, takeover, the
-  interactive-Step drive, or the live overlay; the abort-reason mapping is [execution's](../run/execution/AGENTS.md).
+- Read [run-control](../../docs/agents/run-control.md) before changing deferred settlement, cancel or shutdown, takeover, the interactive-Step drive, or
+  the live overlay, and [live Turn control](../../docs/agents/run-turn-control.md) before changing Turn interrupt, steer, live Model choice, or follow-up;
+  the abort-reason mapping is [execution's](../run/execution/AGENTS.md).
 - `createApplication` keeps Run ownership, observers, admission, execution drives and shutdown together. Catalog, Harness Catalog,
   launch preparation and home-scoped Preferences delegate their Projections and use cases to private files.

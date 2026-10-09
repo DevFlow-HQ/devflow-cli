@@ -1976,7 +1976,8 @@ export interface HistoryContentRequest {
   /** Abort releases the traversal, including a pinned superseded live version. */
   readonly signal?: AbortSignal;
 }
-/** Text reads deliver at most 4096 UTF-16 units; item reads at most eight items.
+/** Text reads deliver at most 4095 UTF-16 units, 4096 when one keeps a surrogate pair
+ * split at its start; item reads at most eight items.
  * A traversal pins one exact version until release, abort, observer close or shutdown.
  * Previous/next address bounded portions without retaining previously read bodies. */
 export type HistoryContentRead =

@@ -17,4 +17,4 @@ Native mechanics live in [Harness adapters](./harness-adapters.md).
 - Recovery is caller- and history-driven: a relaunch of a Session that already ran, or any Turn carrying `resume`, resumes that exact native conversation.
   A resume the native side does not acknowledge is a `recovery`-phase failure that marks the Session `unusable`; recovery never silently starts a fresh
   conversation. Codex app-server replacement failures leave Sessions detached; only an unacknowledged thread resume makes its Session unusable.
-  Each Adapter's resume mechanics are in [harness-adapters](harness-adapters.md).
+  Each Adapter's resume mechanics are in [Claude Code Adapter](./claude-code-adapter.md) and [Codex Adapter](./codex-adapter.md).

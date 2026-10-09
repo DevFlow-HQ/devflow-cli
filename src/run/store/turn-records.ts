@@ -645,9 +645,9 @@ const conversationColumns = {
   at: turnEvents.at,
 };
 // Order eligible rows without scanning the Run. Application stamps
-// `historyOrder` on every Turn event it writes; only a row written straight to
-// the Store counts its historical ordinal, and `coalesce` evaluates that count
-// for it alone. Each such row pays one count, so production writes stay stamped.
+// `historyOrder` on every Turn event it writes except `model` and
+// `agent-call-expired`; only an unstamped row counts its historical ordinal, and
+// `coalesce` evaluates that count for it alone. Each such row pays one count.
 function conversationFacts(db: SQLiteBunDatabase) {
   const position = sql<number>`case
     when ${turnEvents.kind} = 'turn-input' then -1
