@@ -16,7 +16,8 @@ The [Run Store notes](../../src/run/store/AGENTS.md) keep ownership and fencing 
   This is eligibility and retained identity, not first appearance. `transcriptCutoff` reads its current maximum; bounded pages filter by Session,
   cutoff and an exclusive typed order boundary, returning at most `limit` entries plus `hasOlder` from one extra row. Application owns cursors and snapshots.
   Order evidence is Turn sequence, input first, then persisted `historyOrder`, or authoritative migrated transcript position for legacy conversation.
-  Unstamped historical facts retain event append-order evidence. Later appends never renumber retained rows; legacy first appearances are never reconstructed.
+  Unstamped historical facts retain event append-order evidence, counted per row under `coalesce` so reads never scan every `turn_event`;
+  Application stamps `historyOrder` on every Turn event it writes (#504). Later appends never renumber retained rows; legacy first appearances are never reconstructed.
   `turn-input` stores admitted input with `role: "user"` and `kind: "entry-prompt"` for every `managed` origin, including Agent-step retries and re-sends.
   Human Turn inputs store `kind: "message"`. Earlier stored kinds remain unchanged in transcript pages and exports; Session history derives attribution from origin.
   `legacy-message` retains migrated conversation without invented Turn metadata. Both are excluded from `turnEvents()`.

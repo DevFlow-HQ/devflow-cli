@@ -52,8 +52,8 @@ file for the prune. No `RunOwner` write method is added, so `observedOwner`'s in
 unchanged.
 
 **Privacy.** A Detailed diagnostic passes through the same safe cause translator as the operational log: it copies an allowlist of known fields
-from an arbitrary error, redacts secrets Secant introduced (the Claude Code permission-bridge token today, the ADR 0033 agent-call token when it
-lands), and bounds size. Raw Harness protocol frames, private reasoning, environment values, credentials, prompts, and user text never enter it.
+from an arbitrary error, redacts secrets Secant introduced (the per-Session bearer that carries both the Claude Code permission bridge and
+ADR 0033 agent calls; corrected 2026-10-09, [#504](https://github.com/secantdev/secant/issues/504), as that token has landed), and bounds size. Raw Harness protocol frames, private reasoning, environment values, credentials, prompts, and user text never enter it.
 The Command output tail is stored exactly as captured, like a declared Command output, and the Command appears as the Bundle declares it.
 
 **Presentation.** Everyday screens carry no codes or ids.

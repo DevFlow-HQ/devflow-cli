@@ -40,7 +40,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   their immediate parent; their inherited token remains authoritative. MCP approval input includes the opaque tool arguments, not only the caption.
 - The shared Turn-event producer redacts every event before publication or retention. It owns command delta accumulation
   and redacts before the 30,000-character tail cut; an unfinished secret prefix survives that cut for the next delta. Message previews redact accumulated
-  text, never individual deltas. Only exact registered Secant secrets are replaced; user look-alikes stay exact, and old Run bytes are never rewritten.
+  text, never individual deltas. Previews and partials withhold a trailing start of four or more characters of any registered secret, so a split
+  secret is never shown or settled in meaningful part; a shorter start (at most 12 of a bearer's 256 bits) shows, so text stays exact in practice. Only
+  exact registered Secant secrets are replaced; user look-alikes stay exact, and old Run bytes are never rewritten.
   Failures and diagnostics keep their existing redaction. Excluding raw protocol, private reasoning, and duplicate transcript content is Interface design;
   a `HarnessFailure` still preserves useful Harness-originated diagnostics and its cause.
   One private registry (`secrets.ts`) owns it: a minter registers a secret when it hands it out, and nothing registers through the Interface. A secret

@@ -96,6 +96,7 @@ for (const kind of ["codex", "claude-code"] as const) {
       ),
     );
     assert.equal(JSON.stringify(liveRows).includes(bearer), false);
+    assert.equal(JSON.stringify(liveRows).includes(bearer.slice(0, 31)), false);
     const run = wired.runGroup.readRun(runId);
     assert.ok(run.ok);
     const transcript = port.readTranscript({

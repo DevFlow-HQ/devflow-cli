@@ -207,6 +207,7 @@ jobs:
           bun run test
           -t '^m10-audit-conversation-order(:|$)'
           tests/application/transcript-resource.test.ts
+          tests/application/steer-history.test.ts
           tests/run/store/session-and-transcript-evidence.test.ts
           tests/headless/run.test.ts
           tests/tui/run-workbench-full-transcript.test.tsx

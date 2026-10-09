@@ -315,6 +315,8 @@ for (const kind of ["turn-diff", "tool"] as const) {
     await press(wb.t, wb.renderer, "o", { ctrl: true });
     assert.match(wb.t.captureCharFrame(), /PATCH_0/);
     await press(wb.t, wb.renderer, "escape");
+    // Application supplies a detail reference for more than ten names, so only an
+    // uncapped running call with no patch is a row with nothing to open.
     wb.control.setHistory(
       history([
         ...original,
@@ -322,7 +324,7 @@ for (const kind of ["turn-diff", "tool"] as const) {
           kind: "tool",
           tool: "file-change",
           input: "requested",
-          files: files.map(({ path }) => ({ path })),
+          files: files.slice(0, 10).map(({ path }) => ({ path })),
           outcome: { kind: "running" },
         }),
       ]),

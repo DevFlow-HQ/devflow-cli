@@ -14,7 +14,8 @@ Read before changing the private Codex Adapter.
   optional lists, collecting every failure. Missing optional definitions degrade only their display. Completed Thought summaries and summary previews
   qualify independently; provider/model evidence still comes only from `qualifiesThoughtSummary`. The private set gates runtime parsing, not Steer
   item identity. Steer-only item kinds require only `id` and `type`, never unused payloads. Malformed enabled accounting leaves prior observations intact.
-  Profiles expose only readable limits. The four unconsumed notifications in #499 have no qualification role.
+  Profiles expose only readable limits. `thread/started`, `item/fileChange/outputDelta`, `item/fileChange/patchUpdated` and
+  `item/mcpToolCall/progress` are unconsumed and have no qualification role; the change that first reads one classifies it.
 - Live qualification sends one `initialize` then `initialized`, runs bounded `account/read` and `model/list`, and transfers its child and connection.
   `model/list` entries keep each model's `supportedReasoningEfforts` and `defaultReasoningEffort` as reported (a model with no efforts gets no
   default), and its `isDefault` model is the defaults fallback. One page is read (`cursor: null`); `nextCursor` is not followed.

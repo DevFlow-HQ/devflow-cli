@@ -8,6 +8,7 @@ import {
   createTurnEventProducerForTest,
   startPermissionBridge,
   TURN_EVENT_KINDS,
+  type ToolCall,
   type TurnEvent,
 } from "../../src/harness/harness.js";
 
@@ -105,6 +106,11 @@ for (const kind of ["codex", "claude-code"] as const) {
     turn.subscribe((event) => retained.push(event)).unsubscribe();
     for (const events of [live, retained]) {
       assert.equal(JSON.stringify(events).includes(bearer), false);
+      assert.equal(
+        JSON.stringify(events).includes(bearer.slice(0, 31)),
+        false,
+        "a secret's streamed first half is withheld until it can be redacted",
+      );
       assert.ok(
         events.some(
           (e) =>
@@ -167,6 +173,104 @@ for (const kind of ["codex", "claude-code"] as const) {
     }
   });
 }
+
+test("m10-audit-turn-event-redaction: settling mid-secret drops a withheld start of four or more characters from incomplete text", async (t) => {
+  const bridge = await startPermissionBridge(async () => ({
+    decision: "deny",
+    message: "unused",
+  }));
+  t.after(() => bridge.close());
+  const bearer = bridge.session("settle").bearer;
+  const start = bearer.slice(0, 31);
+  const producer = createTurnEventProducerForTest();
+  const live: TurnEvent[] = [];
+  producer.subscribe((event) => live.push(event));
+  producer.emit({
+    kind: "message-preview",
+    messageId: "message",
+    content: `reply ${start}`,
+  });
+  producer.emit({
+    kind: "thought-preview",
+    summaryId: "summary",
+    content: `thinking ${start}`,
+  });
+  producer.emit({
+    kind: "tool-preview",
+    call: {
+      callId: "command",
+      tool: "command",
+      input: "print",
+      output: { text: `head ${start}` },
+      outcome: { kind: "running" },
+    },
+  });
+  producer.settlePreview();
+  producer.seal();
+  const retained: TurnEvent[] = [];
+  producer.subscribe((event) => retained.push(event));
+  for (const events of [live, retained])
+    assert.equal(JSON.stringify(events).includes(start), false);
+  assert.deepEqual(
+    retained.map((event) =>
+      event.kind === "tool-partial"
+        ? event.call.output.text
+        : "content" in event
+          ? event.content
+          : event.kind,
+    ),
+    ["head ", "reply ", "thinking "],
+  );
+});
+
+test("m10-audit-turn-event-redaction: a running call's own output and its retained completion withhold a secret start", async (t) => {
+  const bridge = await startPermissionBridge(async () => ({
+    decision: "deny",
+    message: "unused",
+  }));
+  t.after(() => bridge.close());
+  const start = bridge.session("running").bearer.slice(0, 31);
+  const producer = createTurnEventProducerForTest();
+  const live: TurnEvent[] = [];
+  producer.subscribe((event) => live.push(event));
+  const running: ToolCall = {
+    callId: "command",
+    tool: "command",
+    input: "print",
+    output: { text: `head ${start}` },
+    outcome: { kind: "running" },
+  };
+  producer.emit({ kind: "tool-call", call: running });
+  producer.emit({
+    kind: "tool-call",
+    call: { ...running, output: undefined, outcome: { kind: "completed" } },
+  });
+  assert.equal(JSON.stringify(live).includes(start), false);
+  assert.deepEqual(
+    live.map((event) =>
+      event.kind === "tool-call" ? event.call.output?.text : event.kind,
+    ),
+    ["head ", "head "],
+  );
+});
+
+test("m10-audit-turn-event-redaction: a start shorter than four characters is shown and settled exactly", async (t) => {
+  const bridge = await startPermissionBridge(async () => ({
+    decision: "deny",
+    message: "unused",
+  }));
+  t.after(() => bridge.close());
+  const short = `reply ${bridge.session("short").bearer.slice(0, 3)}`;
+  const producer = createTurnEventProducerForTest();
+  const live: TurnEvent[] = [];
+  producer.subscribe((event) => live.push(event));
+  producer.emit({ kind: "message-preview", messageId: "m", content: short });
+  producer.settlePreview();
+  assert.deepEqual(
+    live.map((event) => ("content" in event ? event.content : event.kind)),
+    [short, short],
+  );
+});
 
 test("m10-audit-turn-event-redaction: every normalized event kind is redacted, while look-alike user text stays exact", async (t) => {
   const bridge = await startPermissionBridge(async () => ({

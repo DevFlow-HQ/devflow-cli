@@ -15,7 +15,9 @@ const native = z.looseObject({
   method: z.string(),
   params: z.record(z.string(), z.unknown()),
 });
-export const LOOKALIKE = "user-secret-" + "a".repeat(64);
+// A non-hex last character keeps a look-alike ending from matching a bearer start,
+// which the producer would withhold from a live preview.
+export const LOOKALIKE = "user-secret-" + "a".repeat(63) + "g";
 export const REPLACEMENT = "«redacted-bearer-token»";
 
 function codexBody(recording: string, method: string, type?: string) {

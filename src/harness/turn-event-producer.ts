@@ -55,7 +55,7 @@ export class TurnEventProducer {
           new CommandText(event.call.output),
         );
     }
-    event = this.redact(event);
+    event = withholdSecretStart(this.redact(event));
     if (event.kind === "assistant-content") this.clearPreview(event.messageId);
     if (event.kind === "message-preview") {
       const previous = this.previews.get(event.messageId);
@@ -181,7 +181,7 @@ export class TurnEventProducer {
     this.events.push(event);
     for (const listener of this.listeners) listener(event);
   }
-  redact<T extends object>(value: T): T {
+  private redact<T extends object>(value: T): T {
     const safe = structuredClone(value);
     const visit = (object: object): void => {
       for (const [key, field] of Object.entries(object)) {
@@ -297,6 +297,45 @@ export class TurnEventProducer {
     this.messageText.clear();
     this.commandText.clear();
   }
+}
+
+// A preview, partial, or running call's output may end with the start of a
+// registered secret whose rest has not streamed yet. Withhold that start: the
+// next accumulated preview either completes and redacts it or shows it as
+// ordinary text, and incomplete text settled from a preview already reads as cut. A start shorter than
+// WITHHELD_START is shown: three hex characters reveal 12 of a bearer's 256
+// bits, while a coincidental four-character match is 1 in 65,536 per secret.
+const WITHHELD_START = 4;
+function withholdSecretStart(event: TurnEvent): TurnEvent {
+  if (event.kind === "message-preview" || event.kind === "thought-preview")
+    return { ...event, content: withheld(event.content) };
+  if (event.kind === "tool-partial")
+    return {
+      ...event,
+      call: { ...event.call, output: cut(event.call.output) },
+    };
+  if (event.kind === "tool-preview" && event.call.output !== undefined)
+    return {
+      ...event,
+      call: { ...event.call, output: cut(event.call.output) },
+    };
+  if (
+    event.kind === "tool-call" &&
+    event.call.outcome.kind === "running" &&
+    event.call.output !== undefined
+  )
+    return {
+      ...event,
+      call: { ...event.call, output: cut(event.call.output) },
+    };
+  return event;
+}
+function cut<T extends { readonly text: string }>(output: T): T {
+  return { ...output, text: withheld(output.text) };
+}
+function withheld(text: string): string {
+  const start = secretPrefixLength(text);
+  return start < WITHHELD_START ? text : text.slice(0, text.length - start);
 }
 
 /** Named test Seam carrying normalized events only, without native protocol. */

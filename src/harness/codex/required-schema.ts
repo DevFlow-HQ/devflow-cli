@@ -908,10 +908,11 @@ export type TSchemaValidation =
   | { readonly ok: true; readonly disabledFacts: ReadonlySet<CodexDisplayFact> }
   | { readonly ok: false; readonly diagnostics: string };
 
-/** Compare the generated stable schema with the exact structural subset the M4
- *  Adapter interprets. Additive methods and fields remain compatible; a missing
- *  variant, discriminator, required field, item kind, or terminal status fails
- *  closed before an app-server child is launched. */
+/** Compare the generated stable schema with the structural subset the Adapter
+ *  interprets. Additive methods and fields remain compatible. A required fact's
+ *  missing variant, discriminator, field, item kind, or terminal status fails
+ *  closed before an app-server child is launched; an optional fact's failure
+ *  only adds it to `disabledFacts`. Every check runs, so all failures report. */
 export function validateRequiredSchema(value: unknown): TSchemaValidation {
   const parsed = generatedSchema.safeParse(value);
   if (!parsed.success) {

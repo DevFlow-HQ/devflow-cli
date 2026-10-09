@@ -644,39 +644,27 @@ const conversationColumns = {
   input: turns.input,
   at: turnEvents.at,
 };
-// Compute unstamped historical ordinals once per read. A correlated count per
-// candidate makes a bounded page quadratic in the number of retained events.
+// Order eligible rows without scanning the Run. Application stamps
+// `historyOrder` on every Turn event it writes; only a row written straight to
+// the Store counts its historical ordinal, and `coalesce` evaluates that count
+// for it alone. Each such row pays one count, so production writes stay stamped.
 function conversationFacts(db: SQLiteBunDatabase) {
-  const history = db.$with("history_positions").as(
-    db
-      .select({
-        seq: turnEvents.seq,
-        ordinal:
-          sql<number>`row_number() over (order by ${turnEvents.seq}) - 1`.as(
-            "ordinal",
-          ),
-      })
-      .from(turnEvents)
-      .where(
-        and(
-          ne(turnEvents.kind, "turn-input"),
-          ne(turnEvents.kind, "legacy-message"),
-        ),
-      ),
-  );
   const position = sql<number>`case
     when ${turnEvents.kind} = 'turn-input' then -1
     when ${turnEvents.kind} = 'legacy-message' then ${turnEvents.transcript_seq}
-    else coalesce(json_extract(${turnEvents.payload}, '$.historyOrder'), ${history.ordinal})
+    else coalesce(
+      json_extract(${turnEvents.payload}, '$.historyOrder'),
+      (select count(*) from turn_event as earlier
+        where earlier.seq < ${turnEvents.seq}
+        and earlier.kind not in ('turn-input', 'legacy-message'))
+    )
   end`;
   return {
     position,
     query: db
-      .with(history)
       .select({ ...conversationColumns, position })
       .from(turnEvents)
-      .innerJoin(turns, eq(turns.turn_id, turnEvents.turn_id))
-      .leftJoin(history, eq(history.seq, turnEvents.seq)),
+      .innerJoin(turns, eq(turns.turn_id, turnEvents.turn_id)),
   };
 }
 const transcriptRow = z.object({

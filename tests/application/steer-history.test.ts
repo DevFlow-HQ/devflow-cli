@@ -145,6 +145,80 @@ test("m10-audit-steer-stored-when-sent: accepted Steer waits in history and deli
   }
 });
 
+test("m10-audit-conversation-order: a Steer delivered after a later reply keeps its send position in the transcript", async (t) => {
+  const replied = deferred();
+  const boundary = deferred();
+  const { wired, runId } = await launchInteractive(t, {
+    profile: fakeHarnessProfile({
+      steer: { available: true, evidence: "scripted" },
+    }),
+    turns: [
+      {
+        events: [
+          {
+            kind: "assistant-content",
+            messageId: "reply",
+            content: "Later reply",
+          },
+        ],
+        pace: () => replied.promise,
+        steerBoundary: boundary.promise,
+        result: COMPLETED_DETACHED.result,
+      },
+    ],
+  });
+  try {
+    const { steer } = await sendLiveTurn(wired, runId, "send");
+    assert.ok(steer.available);
+    const port = wired.projectionPort;
+    const view = port.openProjection({
+      family: "session-history",
+      runId,
+      session: "s",
+    });
+    t.after(() => view.close());
+    assert.ok(
+      port.submit({
+        operationId: "guidance",
+        operation: "steer-turn",
+        input: { runId, turnId: steer.turnId, text: "Sent before the reply" },
+      }).admitted,
+    );
+    assert.equal((await awaitSettled(port, "guidance")).status, "applied");
+    replied.resolve();
+    const contents = () => {
+      const current = port.openProjection({
+        family: "session-history",
+        runId,
+        session: "s",
+      });
+      try {
+        assert.ok(current.snapshot.result.found);
+        const transcript = port.readTranscript(
+          current.snapshot.result.history.transcriptExport,
+        );
+        assert.ok(transcript.found);
+        return transcript.entries.map((entry) => entry.content);
+      } finally {
+        current.close();
+      }
+    };
+    for await (const _ of view.updates)
+      if (contents().includes("Later reply")) break;
+    // The reply settled first; the waiting Steer is not yet transcript content.
+    assert.equal(contents().includes("Sent before the reply"), false);
+    boundary.resolve();
+    for await (const _ of view.updates)
+      if (contents().includes("Sent before the reply")) break;
+    assert.deepEqual(contents().slice(-2), [
+      "Sent before the reply",
+      "Later reply",
+    ]);
+  } finally {
+    await wired.shutdown();
+  }
+});
+
 for (const result of ["interrupted", "lost"] as const)
   test(`m10-audit-steer-stored-when-sent: ${result} preserves accepted undelivered guidance and excludes it from transcript`, async (t) => {
     const { wired, runId } = await launchInteractive(t, {
