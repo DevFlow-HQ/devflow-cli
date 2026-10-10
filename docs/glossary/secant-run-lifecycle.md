@@ -58,6 +58,7 @@ This cluster defines the target Secant terms for a **Run** and everything that h
 - **Failure evidence** — the lasting typed fact on a **Step Attempt** or **Turn** saying why it failed, was lost, or was interrupted, including
   whether it may already have changed the world. Kept until Run deletion; its plain wording is derived when read, never stored. _Avoid_: error
   message, Problem.
+  Possible effects `partial` means "Secant knows something was changed before the failure"; `unknown` means effects are uncertain, and `none` means no changes.
 - **Resting cause** — the lasting typed fact saying why a **Run** rests `halted` or `failed`, pointing at the **Failure evidence** behind it when
   there is one. _Avoid_: halt reason.
 - **Detailed diagnostic** — the expiring companion to **Failure evidence**: the verbose technical detail an expert inspects on demand, removed

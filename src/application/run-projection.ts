@@ -326,6 +326,7 @@ function runResult(
           names,
           runId,
           owner?.failureEvidence() ?? [],
+          selectedHarness,
         ),
         outputs,
         ...(derivedRun.checkpoint !== undefined
@@ -1189,6 +1190,7 @@ function buildTimeline(
   names: ReadonlyMap<string, string>,
   runId: string,
   failures: readonly FailureEvidenceRecord[],
+  selectedHarness?: string,
 ): RunTimelineEvent[] {
   // Each event is keyed by the Step instance it belongs to (#289): the log index of
   // its Attempt, so at an equal instant one Step's events stay together instead of
@@ -1241,7 +1243,18 @@ function buildTimeline(
   const attemptFailures = new Map(
     failures.filter((e) => e.turnId === undefined).map((e) => [e.attemptId, e]),
   );
+  const turnFailures = new Map(
+    failures.filter((e) => e.turnId !== undefined).map((e) => [e.turnId!, e]),
+  );
+  const explainedTurns = new Map<string, string>();
+  for (const turn of turns) {
+    if (turnFailures.has(turn.turnId))
+      explainedTurns.set(turn.attemptId, turn.turnId);
+  }
   log.forEach((attempt, index) => {
+    const explainedTurn = attemptFailures.has(attempt.attemptId)
+      ? undefined
+      : explainedTurns.get(attempt.attemptId);
     const stepId = attemptStepId(attempt.attemptId);
     events.push({
       event: {
@@ -1256,12 +1269,14 @@ function buildTimeline(
                 : "interactive-step-ended",
         detail: attempt.outcome,
         ...(attempt.outcome === "failed" || attempt.outcome === "indeterminate"
-          ? {
-              failure: failureView(
-                runId,
-                attemptFailures.get(attempt.attemptId),
-              ),
-            }
+          ? explainedTurn !== undefined
+            ? { failure: { turnId: explainedTurn } }
+            : {
+                failure: failureView(
+                  runId,
+                  attemptFailures.get(attempt.attemptId),
+                ),
+              }
           : {}),
         ...(attempt.endedBy === "agent"
           ? {
@@ -1364,6 +1379,16 @@ function buildTimeline(
           at: turn.settledAt,
           event: "turn-settled",
           detail: turn.resultKind,
+          ...(turnFailures.has(turn.turnId)
+            ? {
+                turnId: turn.turnId,
+                failure: failureView(
+                  runId,
+                  turnFailures.get(turn.turnId),
+                  selectedHarness,
+                ),
+              }
+            : {}),
           ...kindField,
           ...scope(turn),
         },

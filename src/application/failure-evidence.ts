@@ -17,6 +17,10 @@ const receiptCode = z.enum([
   "receipt-invalid-utf8",
   "receipt-blank",
 ]);
+const harnessCode = z.enum(["turn-failed", "turn-not-started", "turn-lost"]);
+const lostDetails = z.object({
+  unknown: z.enum(["acceptance", "completion", "interruption"]),
+});
 const receiptDetails = z.object({
   outputName: z.string().min(1),
   sizeLimit: z.number().int().positive().optional(),
@@ -30,6 +34,7 @@ import {
 export function failureView(
   runId: string,
   evidence: FailureEvidenceRecord | undefined,
+  harness?: string,
 ): RunFailureView {
   const possibleEffects =
     effects.safeParse(evidence?.possibleEffects).data ?? "unknown";
@@ -38,18 +43,18 @@ export function failureView(
   let code: RunFailureView["code"] = "unknown";
   let source: RunFailureView["source"] = "unknown";
   let details: RunFailureView["details"];
+  let raw: unknown;
+  try {
+    raw =
+      evidence?.details !== undefined &&
+      new TextEncoder().encode(evidence.details).byteLength <= 4096
+        ? JSON.parse(evidence.details)
+        : undefined;
+  } catch {
+    raw = undefined;
+  }
   if (evidence?.source === "receipt") {
     const parsedCode = receiptCode.safeParse(evidence.code);
-    let raw: unknown;
-    try {
-      raw =
-        evidence.details !== undefined &&
-        new TextEncoder().encode(evidence.details).byteLength <= 4096
-          ? JSON.parse(evidence.details)
-          : undefined;
-    } catch {
-      raw = undefined;
-    }
     const parsedDetails = receiptDetails.safeParse(raw);
     if (
       parsedCode.success &&
@@ -102,6 +107,39 @@ export function failureView(
             ? "Secant did not send the prompt because it starts with a word the Harness reserves."
             : "Secant could not prepare the prompt and did not send it.";
         nextStep = "Fix the Bundle prompt or choose another Harness.";
+      }
+    }
+  }
+  if (evidence?.source === "harness") {
+    const parsedCode = harnessCode.safeParse(evidence.code);
+    const lost = lostDetails.safeParse(raw);
+    if (
+      parsedCode.success &&
+      (parsedCode.data !== "turn-lost" || lost.success)
+    ) {
+      source = "harness";
+      code = parsedCode.data;
+      const name =
+        harness === "codex"
+          ? "Codex"
+          : harness === "claude-code"
+            ? "Claude Code"
+            : "The Harness";
+      if (code === "turn-lost" && lost.success) {
+        details = lost.data;
+        const unknownHalf = {
+          acceptance: "whether it accepted the Turn",
+          completion: "whether the Turn finished",
+          interruption: "whether the Turn stopped after the interrupt",
+        }[lost.data.unknown];
+        explanation = `${name} exited or lost contact. Secant does not know ${unknownHalf}.`;
+        nextStep = "Resume the Run to continue.";
+      } else if (evidence.category === "authentication") {
+        explanation = `${name} is not signed in.`;
+        nextStep = `Log in through ${name} itself, then resume the Run.`;
+      } else {
+        explanation = `${name} reported an error. Open the details section for the cause.`;
+        nextStep = "Open the details section for the cause.";
       }
     }
   }

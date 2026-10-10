@@ -1943,3 +1943,227 @@ test("m10-followup-body-free-history-index: the history outline reads every fact
   );
   assert.ok(outline.conversation.length >= 2);
 });
+
+test("m11-harness-failure-evidence: Turn evidence and diagnostics survive reopen and immutable/fenced settlement", (t) => {
+  const home = makeTempDir("secant-turn-failure-");
+  let group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-turn-failure");
+  const owner = group.acquireRun(created.runId)!;
+  assert.ok(
+    owner.admitTurn({
+      turnId: "failed",
+      attemptId: "0.0:write",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      recoveryCoordinate: "coordinate",
+      input: "PRIVATE_INPUT",
+      harness: "claude-code",
+      at: AT,
+    }).ok,
+  );
+  const request = {
+    turnId: "failed",
+    session: "s",
+    resultKind: "failed",
+    resultDetail: '{"legacy":true}',
+    availability: "open",
+    at: AT,
+    failureEvidence: {
+      source: "harness",
+      code: "turn-failed",
+      phase: "turn",
+      category: "authentication",
+      possibleEffects: "none",
+      nativeCode: "EAUTH",
+    } as const,
+    diagnostic: {
+      kind: "turn-failed",
+      cause: new Error("safe cause"),
+      partialOutput: "partial",
+      retryEvidence: "retry",
+      harnessDiagnostics: "diagnostics",
+      lastObservation: "observation",
+    },
+  };
+  assert.ok(owner.settleTurn(request).ok);
+  const evidence = owner.failureEvidence();
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0]?.turnId, "failed");
+  assert.equal(evidence[0]?.attemptId, "0.0:write");
+  assert.equal(evidence[0]?.nativeCode, "EAUTH");
+  const diagnosticId = evidence[0]?.diagnosticId;
+  assert.ok(diagnosticId);
+  const diagnostic = owner.readDiagnostic(diagnosticId);
+  assert.ok(diagnostic);
+  assert.match(
+    new TextDecoder().decode(diagnostic),
+    /Cause: Error[\s\S]*safe cause[\s\S]*Partial output:\npartial[\s\S]*Retry evidence:\nretry[\s\S]*Harness diagnostics:\ndiagnostics[\s\S]*Last authoritative observation:\nobservation/,
+  );
+  assert.doesNotMatch(
+    new TextDecoder().decode(diagnostic),
+    /PRIVATE_INPUT|legacy/,
+  );
+  assert.ok(
+    owner.settleTurn({
+      ...request,
+      diagnostic: { kind: "replacement" },
+      failureEvidence: { ...request.failureEvidence, code: "replacement" },
+    }).ok,
+  );
+  assert.deepEqual(owner.failureEvidence(), evidence);
+  assert.equal(owner.turns()[0]?.resultDetail, '{"legacy":true}');
+  assert.deepEqual(
+    readdirSync(join(groupDirOf(home), created.runId, "diagnostics")),
+    [diagnosticId],
+  );
+  const newer = group.acquireRun(created.runId)!;
+  assert.deepEqual(owner.settleTurn({ ...request, turnId: "fenced" }), {
+    ok: false,
+    reason: "fenced",
+  });
+  assert.deepEqual(
+    readdirSync(join(groupDirOf(home), created.runId, "diagnostics")),
+    [diagnosticId],
+  );
+  newer.close();
+  owner.close();
+  group.close();
+  group = openRunGroup(home, WORKSPACE);
+  const reopened = group.acquireRun(created.runId)!;
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.failureEvidence(), evidence);
+  assert.deepEqual(reopened.readDiagnostic(diagnosticId), diagnostic);
+});
+
+import { startPermissionBridge } from "../../../src/harness/harness.js";
+test("m11-harness-failure-evidence: every stored Harness text section is bounded and redacted, and absent sections stay absent", async (t) => {
+  const bridge = await startPermissionBridge(async () => ({
+    decision: "deny",
+    message: "unused",
+  }));
+  t.after(() => bridge.close());
+  const token = bridge.session("s").bearer;
+  const group = openRunGroup(
+    makeTempDir("secant-diagnostic-sections-"),
+    WORKSPACE,
+  );
+  t.after(() => group.close());
+  const owner = group.acquireRun(create(group, "op-sections").runId)!;
+  t.after(() => owner.close());
+  const text = `token ${token} ` + "😀".repeat(5000);
+  assert.ok(
+    owner.admitTurn({
+      turnId: "t",
+      attemptId: "0.0:write",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      recoveryCoordinate: "coordinate",
+      harness: "codex",
+      input: "PRIVATE_PROMPT",
+      at: AT,
+    }).ok,
+  );
+  const cause = Object.assign(new Error(`token ${token}`), {
+    rawProtocol: "RAW_FRAME",
+    reasoning: "PRIVATE_REASONING",
+    prompt: "PRIVATE_PROMPT",
+    user: "USER_TEXT",
+    env: { SECRET: "ENV_VALUE" },
+  });
+  assert.ok(
+    owner.settleTurn({
+      turnId: "t",
+      session: "s",
+      resultKind: "lost",
+      resultDetail: "{}",
+      availability: "detached",
+      at: AT,
+      failureEvidence: {
+        source: "harness",
+        code: "turn-lost",
+        possibleEffects: "unknown",
+        details: { unknown: "completion" },
+      },
+      diagnostic: {
+        kind: "turn-lost",
+        cause,
+        partialOutput: text,
+        retryEvidence: text,
+        harnessDiagnostics: text,
+        lastObservation: text,
+      },
+    }).ok,
+  );
+  const evidence = owner.failureEvidence()[0]!;
+  const diagnostic = new TextDecoder().decode(
+    owner.readDiagnostic(evidence.diagnosticId!),
+  );
+  assert.doesNotMatch(diagnostic, new RegExp(token));
+  assert.doesNotMatch(
+    diagnostic,
+    /RAW_FRAME|PRIVATE_REASONING|PRIVATE_PROMPT|USER_TEXT|ENV_VALUE/,
+  );
+  for (const label of [
+    "Partial output",
+    "Retry evidence",
+    "Harness diagnostics",
+    "Last authoritative observation",
+  ]) {
+    const section = diagnostic
+      .split(`${label}:\n`)[1]!
+      .split("\n\n")[0]!
+      .trimEnd();
+    assert.ok(Buffer.byteLength(section) <= 16384);
+    assert.match(section, /«redacted-bearer-token»/);
+    assert.match(
+      section,
+      label === "Harness diagnostics"
+        ? /\(Secant omitted further Harness diagnostics\.\)$/
+        : /… diagnostic text omitted$/,
+    );
+    assert.doesNotMatch(section, /�/);
+  }
+  assert.equal(diagnostic.split("… diagnostic text omitted").length - 1, 3);
+  assert.equal(
+    diagnostic.split("Secant omitted further Harness diagnostics").length - 1,
+    1,
+  );
+  assert.ok(
+    owner.admitTurn({
+      turnId: "empty",
+      attemptId: "0.1:write",
+      session: "s",
+      origin: "managed",
+      kind: "agent",
+      recoveryCoordinate: "coordinate",
+      harness: "codex",
+      input: "PRIVATE_PROMPT",
+      at: AT,
+    }).ok,
+  );
+  assert.ok(
+    owner.settleTurn({
+      turnId: "empty",
+      session: "s",
+      resultKind: "failed",
+      resultDetail: "{}",
+      availability: "open",
+      at: AT,
+      failureEvidence: {
+        source: "harness",
+        code: "turn-failed",
+        possibleEffects: "none",
+      },
+      diagnostic: { kind: "turn-failed" },
+    }).ok,
+  );
+  assert.equal(
+    new TextDecoder().decode(
+      owner.readDiagnostic(owner.failureEvidence()[1]!.diagnosticId!),
+    ),
+    "Kind: turn-failed\n",
+  );
+});

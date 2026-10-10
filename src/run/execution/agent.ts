@@ -1495,12 +1495,56 @@ function settleTurnResult(
     session,
     resultKind: result.kind,
     resultDetail: turnResultDetail(result),
+    ...turnFailureEvidence(result),
     availability: availability.state,
     ...(availability.detail !== undefined
       ? { availabilityDetail: availability.detail }
       : {}),
     at: new Date(),
   });
+}
+
+/** Preserve every Harness failure field separately from legacy resultDetail. */
+function turnFailureEvidence(
+  result: TurnResult,
+): Pick<
+  Parameters<RunOwner["settleTurn"]>[0],
+  "failureEvidence" | "diagnostic"
+> {
+  if (result.kind === "completed" || result.kind === "interrupted") return {};
+  const failure = result.detail.failure;
+  return {
+    failureEvidence: {
+      source: "harness",
+      code: `turn-${result.kind}`,
+      possibleEffects:
+        failure?.possibleEffects === "none"
+          ? "none"
+          : failure?.possibleEffects === "committed"
+            ? "partial"
+            : "unknown",
+      ...(failure === undefined
+        ? {}
+        : {
+            phase: failure.phase,
+            category: failure.category,
+            nativeCode: failure.nativeCode,
+          }),
+      ...(result.kind === "lost"
+        ? { details: { unknown: result.detail.unknown } }
+        : {}),
+    },
+    diagnostic: {
+      kind: `turn-${result.kind}`,
+      cause: failure?.cause,
+      partialOutput: failure?.partialOutput,
+      retryEvidence: failure?.retryEvidence,
+      harnessDiagnostics: failure?.diagnostics,
+      ...(result.kind === "lost"
+        ? { lastObservation: result.detail.lastObservation }
+        : {}),
+    },
+  };
 }
 
 /** The settled result's detail, flattened to JSON for the durable Turn row. A

@@ -245,6 +245,18 @@ export function createHistoryContent(deps: {
         shown = {
           ...value,
           result: take(value.result),
+          ...(value.failure === undefined
+            ? {}
+            : {
+                failure: {
+                  ...value.failure,
+                  explanation: take(value.failure.explanation),
+                  nextStep: take(value.failure.nextStep),
+                  phase: optional(value.failure.phase),
+                  category: optional(value.failure.category),
+                  nativeCode: optional(value.failure.nativeCode),
+                },
+              }),
           ...(value.harness === undefined
             ? {}
             : { harness: take(value.harness) }),
@@ -446,6 +458,25 @@ export function createHistoryContent(deps: {
         return [
           "Result\n",
           value.result,
+          ...(value.failure === undefined
+            ? []
+            : [
+                "\nFailure\n",
+                value.failure.explanation,
+                "\nNext\n",
+                value.failure.nextStep,
+                "\nCode\n",
+                value.failure.code,
+                ...(value.failure.phase === undefined
+                  ? []
+                  : ["\nPhase\n", value.failure.phase]),
+                ...(value.failure.category === undefined
+                  ? []
+                  : ["\nCategory\n", value.failure.category]),
+                ...(value.failure.nativeCode === undefined
+                  ? []
+                  : ["\nNative code\n", value.failure.nativeCode]),
+              ]),
           ...(value.harness === undefined
             ? []
             : ["\nHarness\n", value.harness]),

@@ -2109,3 +2109,191 @@ test("m10-audit-entry-prompt-kind: history attributes all managed inputs to Seca
   );
   await finish();
 });
+
+test("m11-harness-failure-evidence: live failed Turn replaces its closing value without changing row identity, position, or order", async (t) => {
+  const run = await openLiveRun(t);
+  t.after(run.finish);
+  admit(run.owner);
+  const opened = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
+  assert.ok(opened.snapshot.result.found);
+  const first = opened.snapshot.result.history.rows[0]!;
+  const settle = {
+    turnId: "turn",
+    session: "s",
+    resultKind: "failed",
+    resultDetail: "{}",
+    availability: "open",
+    at: new Date("2026-10-06T00:00:01Z"),
+    failureEvidence: {
+      source: "harness",
+      code: "turn-failed",
+      category: "authentication",
+      phase: "turn",
+      possibleEffects: "none",
+    } as const,
+  };
+  assert.ok(run.owner.settleTurn(settle).ok);
+  const next = await opened.updates[Symbol.asyncIterator]().next();
+  assert.ok(next.value?.kind === "durable" && next.value.snapshot.result.found);
+  const rows = next.value.snapshot.result.history.rows;
+  assert.equal(rows[0]?.id, first.id);
+  assert.equal(rows[0]?.position, first.position);
+  const closing = rows.at(-1)!;
+  assert.equal(closing.value.kind, "turn-result");
+  assert.ok(closing.value.kind === "turn-result");
+  assert.equal(closing.value.failure?.code, "turn-failed");
+  assert.ok(
+    run.owner.settleTurn({
+      ...settle,
+      failureEvidence: { ...settle.failureEvidence, code: "replacement" },
+    }).ok,
+  );
+  run.owner.appendTurnEvent({
+    turnId: "turn",
+    fact: { kind: "model", data: { model: "observed-model" } },
+    at: new Date("2026-10-06T00:00:02Z"),
+  });
+  const update = await opened.updates[Symbol.asyncIterator]().next();
+  assert.ok(
+    update.value?.kind === "durable" && update.value.snapshot.result.found,
+  );
+  const last = update.value.snapshot.result.history.rows.at(-1)!;
+  assert.equal(last.id, closing.id);
+  assert.equal(last.position, closing.position);
+  assert.ok(last.value.kind === "turn-result");
+  assert.deepEqual(last.value.failure, closing.value.failure);
+  assert.equal(last.value.model, "observed-model");
+});
+
+test("m11-harness-failure-evidence: large native failure metadata stays bounded in history and its details read the exact fields", async (t) => {
+  const run = await openLiveRun(t);
+  t.after(run.finish);
+  admit(run.owner);
+  const category = "native category ".repeat(2000);
+  const nativeCode = "native code ".repeat(2000);
+  assert.ok(
+    run.owner.settleTurn({
+      turnId: "turn",
+      session: "s",
+      resultKind: "failed",
+      resultDetail: "{}",
+      availability: "open",
+      at: new Date(),
+      failureEvidence: {
+        source: "harness",
+        code: "turn-failed",
+        category,
+        nativeCode,
+        possibleEffects: "none",
+      },
+    }).ok,
+  );
+  const opened = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
+  assert.ok(opened.snapshot.result.found);
+  const row = opened.snapshot.result.history.rows.at(-1)!;
+  assert.ok(Buffer.byteLength(JSON.stringify(row)) < 18 * 1024);
+  assert.ok(row.value.kind === "turn-result");
+  assert.ok(row.value.failure);
+  assert.ok(row.value.failure.category!.length <= 512);
+  assert.ok(row.value.failure.nativeCode!.length <= 512);
+  assert.ok(row.value.detail);
+  const detail = await readHistoryText(run.port, row.value.detail);
+  assert.ok(detail.includes(category));
+  assert.ok(detail.includes(nativeCode));
+});
+
+test("m11-harness-failure-evidence: history reads failure bodies only for windowed closing rows and drops them on eviction", async (t) => {
+  const reads: (string | undefined)[] = [];
+  const retained: number[] = [];
+  const run = await openLiveRun(t, {
+    onFailureRead: (turn) => reads.push(turn),
+    observeHistoryRetention: (_runId, values) => retained.push(values),
+    seedRun({ owner }) {
+      for (let i = 0; i < 300; i++) {
+        assert.ok(
+          owner.admitTurn({
+            turnId: `failed-${i}`,
+            attemptId: `0.${i}:echo`,
+            session: "s",
+            origin: "human",
+            kind: "interactive-agent",
+            input: "input",
+            recoveryCoordinate: "coordinate",
+            harness: "codex",
+            at: new Date(),
+          }).ok,
+        );
+        assert.ok(
+          owner.settleTurn({
+            turnId: `failed-${i}`,
+            session: "s",
+            resultKind: "failed",
+            resultDetail: "{}",
+            availability: "open",
+            at: new Date(),
+            failureEvidence: {
+              source: "harness",
+              code: "turn-failed",
+              category: "category ".repeat(2000),
+              nativeCode: "native ".repeat(2000),
+              possibleEffects: "none",
+            },
+          }).ok,
+        );
+      }
+    },
+  });
+  t.after(run.finish);
+  reads.length = 0;
+  const opened = openHistory({
+    t,
+    port: run.port,
+    runId: run.runId,
+    session: "s",
+  });
+  assert.ok(opened.snapshot.result.found);
+  assert.equal(opened.snapshot.result.history.rows.length, 200);
+  assert.deepEqual(
+    reads,
+    Array.from({ length: 100 }, (_, i) => `failed-${200 + i}`),
+  );
+  assert.ok(retained.every((count) => count <= 200));
+  assert.equal(
+    opened.snapshot.result.history.rows[1]?.value.kind,
+    "turn-result",
+  );
+  // A fresh visible Turn evicts an old input/result pair. Reading another page
+  // cannot fetch an evicted Turn's failure again.
+  reads.length = 0;
+  admit(run.owner, "latest");
+  assert.ok(
+    run.owner.settleTurn({
+      turnId: "latest",
+      session: "s",
+      resultKind: "failed",
+      resultDetail: "{}",
+      availability: "open",
+      at: new Date(),
+      failureEvidence: {
+        source: "harness",
+        code: "turn-failed",
+        possibleEffects: "none",
+      },
+    }).ok,
+  );
+  const next = await opened.updates[Symbol.asyncIterator]().next();
+  assert.ok(next.value?.kind === "durable" && next.value.snapshot.result.found);
+  assert.equal(next.value.snapshot.result.history.rows.length, 200);
+  assert.deepEqual(reads, ["latest"]);
+  assert.ok(retained.every((count) => count <= 200));
+});

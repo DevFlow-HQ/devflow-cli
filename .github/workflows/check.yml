@@ -615,6 +615,16 @@ jobs:
           bun run test --
           -t '^m11-workbench-failure-presentation(:|$)'
           tests/tui/run-workbench-failure.test.tsx
+      - name: m11-harness-failure-evidence
+        run: >-
+          bun run test --
+          -t '^m11-harness-failure-evidence(:|$)'
+          tests/run/store/session-and-transcript-evidence.test.ts
+          tests/harness/safe-cause.test.ts
+          tests/application/harness-failure.test.ts
+          tests/application/session-history.test.ts
+          tests/headless/failure-output.test.ts
+          tests/tui/run-workbench-failure.test.tsx
       - name: m11-headless-failure-output
         run: >-
           bun run test --

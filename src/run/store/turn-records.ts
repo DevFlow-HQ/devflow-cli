@@ -15,6 +15,7 @@ import {
 } from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
+import { recordFailureEvidence } from "./failure-records.js";
 import { turnFactSchemas, type TurnFact } from "./turn-facts.js";
 import { harnessSessions, turnEvents, turns } from "./run-schema.js";
 import type {
@@ -437,16 +438,29 @@ export function appendTurnEvent(
 export function settleTurn(
   db: SQLiteBunDatabase,
   request: SettleTurnRequest,
+  diagnosticsDir: string,
 ): void {
   const at = request.at.toISOString();
   // Immutable: once a Turn's result is set, the whole settle is a no-op — the
   // Session availability and transcript it recorded are settled truth too.
   const current = db
-    .select({ result_kind: turns.result_kind })
+    .select({ result_kind: turns.result_kind, attempt_id: turns.attempt_id })
     .from(turns)
     .where(eq(turns.turn_id, request.turnId))
     .get();
   if (current === undefined || current.result_kind !== null) return;
+  if (request.failureEvidence !== undefined) {
+    recordFailureEvidence({
+      db,
+      diagnosticsDir,
+      attemptId: current.attempt_id,
+      evidence: { ...request.failureEvidence, turnId: request.turnId },
+      at,
+      ...(request.diagnostic === undefined
+        ? {}
+        : { diagnostic: request.diagnostic }),
+    });
+  }
   db.update(turns)
     .set({
       result_kind: request.resultKind,

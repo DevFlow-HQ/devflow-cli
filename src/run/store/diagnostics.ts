@@ -38,21 +38,15 @@ export function renderDiagnostic(content: DiagnosticContent): string {
   if (content.cause !== undefined) {
     sections.push(renderCause(translateCause(content.cause)));
   }
-  if (content.harnessDiagnostics !== undefined) {
-    const text = redactDiagnosticText(content.harnessDiagnostics);
-    const marker = "\n(Secant omitted further Harness diagnostics.)";
-    const bytes = new TextEncoder().encode(text);
-    const bounded =
-      bytes.byteLength <= 16384
-        ? text
-        : new TextDecoder().decode(
-            bytes.subarray(
-              0,
-              16384 - new TextEncoder().encode(marker).byteLength,
-            ),
-            { stream: true },
-          ) + marker;
-    sections.push(`Harness diagnostics:\n${bounded}`);
+  const harnessSections: readonly (readonly [string, string | undefined])[] = [
+    ["Partial output", content.partialOutput],
+    ["Retry evidence", content.retryEvidence],
+    ["Harness diagnostics", content.harnessDiagnostics],
+    ["Last authoritative observation", content.lastObservation],
+  ];
+  for (const [label, text] of harnessSections) {
+    if (text !== undefined)
+      sections.push(`${label}:\n${boundDiagnosticText(text, label)}`);
   }
   return `${sections.join("\n\n")}\n`;
 }
@@ -71,4 +65,26 @@ function renderCause(cause: SafeCause): string {
   }
   if (cause.truncated === true) lines.push("(Secant shortened this cause.)");
   return lines.join("\n");
+}
+
+/** Each section shares the existing registry and keeps a UTF-8 code-point cut.
+ * The established Harness-diagnostics omission wording remains unchanged. */
+function boundDiagnosticText(raw: string, label: string): string {
+  const text = redactDiagnosticText(raw);
+  const encoder = new TextEncoder();
+  const bound = 16 * 1024;
+  if (encoder.encode(text).length <= bound) return text;
+  const marker =
+    label === "Harness diagnostics"
+      ? "\n(Secant omitted further Harness diagnostics.)"
+      : "\n… diagnostic text omitted";
+  const limit = bound - encoder.encode(marker).length;
+  let kept = 0;
+  let bytes = 0;
+  for (const char of text) {
+    bytes += encoder.encode(char).length;
+    if (bytes > limit) break;
+    kept += char.length;
+  }
+  return text.slice(0, kept) + marker;
 }

@@ -330,3 +330,15 @@ test("every Session token on a shared listener stays registered after close", as
   assert.equal(translatedMessage(a), `token ${REDACTED}`);
   assert.equal(translatedMessage(b), `token ${REDACTED}`);
 });
+
+import { redactDiagnosticText } from "../../src/harness/harness.js";
+test("m11-harness-failure-evidence: diagnostic text shares the existing secret registry without changing unbounded redaction", async () => {
+  await withBearer((token) => {
+    assert.equal(
+      redactDiagnosticText(`before ${token} after`),
+      `before ${REDACTED} after`,
+    );
+    const large = "😀".repeat(5000);
+    assert.equal(redactDiagnosticText(large + token), large + REDACTED);
+  });
+});

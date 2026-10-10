@@ -344,3 +344,35 @@ test("m11-pre-turn-agent-evidence: run show names an unusable conversation witho
   assert.equal(agent.inputs.length, 1);
   await wired.shutdown();
 });
+
+import {
+  harnessFailureCases,
+  launchHarnessFailure,
+} from "../application/harness-failure-fixture.js";
+for (const scenario of harnessFailureCases) {
+  test(`m11-harness-failure-evidence: run show carries ${scenario.name} once in text and turn-settled JSON`, async (t) => {
+    const { wired, runId } = await launchHarnessFailure(t, scenario.result);
+    const plain = await show(wired, [runId]);
+    assert.equal(plain.code, 0);
+    const line = plain.out
+      .split("\n")
+      .find((line) => line.includes("turn-settled"))!;
+    assert.ok(line.endsWith(scenario.explanation), plain.out);
+    assert.equal(plain.out.split(scenario.explanation).length - 1, 1);
+    const json = await show(wired, [runId, "--json"]);
+    assert.equal(json.code, 0);
+    const run = JSON.parse(json.out).result.run;
+    const turn = run.timeline.find(
+      (event: { event: string }) => event.event === "turn-settled",
+    );
+    assert.equal(turn.failure.code, `turn-${scenario.result.kind}`);
+    assert.equal(turn.failure.explanation, scenario.explanation);
+    assert.equal(turn.failure.possibleEffects, scenario.effects);
+    const attempt = run.timeline.find(
+      (event: { event: string }) => event.event === "attempt-settled",
+    );
+    if (attempt !== undefined) {
+      assert.deepEqual(attempt.failure, { turnId: turn.turnId });
+    }
+  });
+}

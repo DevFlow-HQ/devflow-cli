@@ -1,3 +1,4 @@
+import { failureView } from "./failure-evidence.js";
 import { RunNotices } from "./run-notices.js";
 import { createWorkspacePathSearch } from "./workspace-paths.js";
 import type { WorkspacePathHelper } from "./workspace-path-helper.js";
@@ -619,6 +620,32 @@ export function createApplication(deps: ApplicationDependencies): Application {
         }
       } catch (cause) {
         return { ...runStoreDamaged(runId), cause };
+      }
+    },
+    readFailure(runId, turnId) {
+      try {
+        const acquired = acquireForRead(runId);
+        if (!acquired.ok) return { found: false, problem: acquired.problem };
+        try {
+          const { owner } = acquired;
+          const evidence = owner.failureEvidence(turnId)[0];
+          return {
+            found: true,
+            ...(evidence === undefined
+              ? {}
+              : {
+                  failure: failureView(
+                    runId,
+                    evidence,
+                    owner.record.selectedHarness,
+                  ),
+                }),
+          };
+        } finally {
+          if (acquired.transient) acquired.owner.close();
+        }
+      } catch (cause) {
+        return { found: false, problem: { ...runStoreDamaged(runId), cause } };
       }
     },
     read(runId) {

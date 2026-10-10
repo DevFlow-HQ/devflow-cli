@@ -10,8 +10,6 @@ import {
 import { join } from "node:path";
 import {
   asc,
-  and,
-  isNull,
   desc,
   DrizzleQueryError,
   eq,
@@ -25,6 +23,7 @@ import { translateCause, type ModelChoice } from "../../harness/harness.js";
 import type { ProcessAdapter } from "../../process/process.js";
 import { waitingAgentTurn } from "./agent-attempt.js";
 import { openArtifactRepo } from "./artifacts/artifacts.js";
+import { recordFailureEvidence } from "./failure-records.js";
 import { renderDiagnostic, writeDiagnostic } from "./diagnostics.js";
 import {
   artifactBindings,
@@ -167,15 +166,11 @@ const failureEvidenceRow = z.object({
   diagnostic_id: z.string().nullable(),
   at: z.string(),
 });
-const failureDetails = z.record(
-  z.string(),
-  z.union([z.string(), z.number().finite(), z.boolean(), z.null()]),
-);
-
 const attemptRow = z.object({
   outcome: attemptOutcome,
   version_id: z.string().nullable(),
 });
+
 const attemptLogRow = z.object({
   attempt_id: z.string(),
   outcome: attemptOutcome,
@@ -649,58 +644,6 @@ interface TCommitAttemptParams {
   readonly diagnosticsDir: string;
 }
 
-/** Preserve the first evidence and diagnostic for an immutable Attempt or Turn. */
-function commitFailureEvidence(
-  db: SQLiteBunDatabase,
-  diagnosticsDir: string,
-  attemptId: string,
-  failure: NonNullable<PublishAttemptRequest["failureEvidence"]>,
-  at: string,
-): void {
-  const subject =
-    failure.turnId === undefined
-      ? and(
-          eq(failureEvidence.attempt_id, attemptId),
-          isNull(failureEvidence.turn_id),
-        )
-      : eq(failureEvidence.turn_id, failure.turnId);
-  if (
-    db
-      .select({ id: failureEvidence.evidence_id })
-      .from(failureEvidence)
-      .where(subject)
-      .get() !== undefined
-  )
-    return;
-  const details =
-    failure.details === undefined
-      ? null
-      : JSON.stringify(failureDetails.parse(failure.details));
-  if (details !== null && new TextEncoder().encode(details).byteLength > 4096) {
-    throw new Error("Failure evidence details exceed the 4096-byte limit.");
-  }
-  const diagnosticId =
-    failure.diagnostic === undefined
-      ? null
-      : writeDiagnostic(diagnosticsDir, renderDiagnostic(failure.diagnostic));
-  db.insert(failureEvidence)
-    .values({
-      evidence_id: randomUUID(),
-      attempt_id: attemptId,
-      turn_id: failure.turnId ?? null,
-      source: failure.source,
-      code: failure.code,
-      phase: failure.phase ?? null,
-      category: failure.category ?? null,
-      possible_effects: failure.possibleEffects,
-      native_code: failure.nativeCode ?? null,
-      details,
-      diagnostic_id: diagnosticId,
-      at,
-    })
-    .run();
-}
-
 function commitAttempt(params: TCommitAttemptParams): void {
   const at = params.request.at.toISOString();
   if (params.versionId !== undefined) {
@@ -757,13 +700,13 @@ function commitAttempt(params: TCommitAttemptParams): void {
     })
     .run();
   if (params.request.failureEvidence !== undefined) {
-    commitFailureEvidence(
-      params.db,
-      params.diagnosticsDir,
-      params.request.attemptId,
-      params.request.failureEvidence,
+    recordFailureEvidence({
+      db: params.db,
+      diagnosticsDir: params.diagnosticsDir,
+      attemptId: params.request.attemptId,
+      evidence: params.request.failureEvidence,
       at,
-    );
+    });
   }
   if (params.request.advanceState !== undefined) {
     updateRunState({
@@ -1048,13 +991,13 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
             throw new Error(
               "Entry failure evidence requires a blocked state and no Turn.",
             );
-          commitFailureEvidence(
-            tx,
+          recordFailureEvidence({
+            db: tx,
             diagnosticsDir,
-            entryFailure.attemptId,
-            entryFailure.failure,
-            entryFailure.at.toISOString(),
-          );
+            attemptId: entryFailure.attemptId,
+            evidence: entryFailure.failure,
+            at: entryFailure.at.toISOString(),
+          });
         }
         updateRunState({
           db: tx,
@@ -1150,10 +1093,15 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     readArtifact(versionId, name) {
       return repo.read(versionId, name);
     },
-    failureEvidence() {
+    failureEvidence(turnId) {
       return db
         .select()
         .from(failureEvidence)
+        .where(
+          turnId === undefined
+            ? undefined
+            : eq(failureEvidence.turn_id, turnId),
+        )
         .orderBy(asc(failureEvidence.at))
         .all()
         .map((raw) => {
@@ -1424,7 +1372,9 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       }
     },
     settleTurn(request) {
-      const settled = guardedWrite((tx) => settleTurn(tx, request));
+      const settled = guardedWrite((tx) =>
+        settleTurn(tx, request, diagnosticsDir),
+      );
       return toWriteResult(settled);
     },
     currentTurn() {

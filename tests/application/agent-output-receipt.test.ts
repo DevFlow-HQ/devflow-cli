@@ -181,6 +181,7 @@ for (const receipt of INVALID_RECEIPTS) {
       failed?.failure,
       "failed Attempt carries durable Failure evidence",
     );
+    assert.ok("explanation" in failed.failure);
     assert.equal(failed.failure.source, "receipt");
     assert.equal(failed.failure.code, receipt.code);
     assert.equal(failed.failure.possibleEffects, "unknown");
@@ -274,6 +275,7 @@ for (const damaged of [
     const event = readRun(wired.projectionPort, runId).timeline.find(
       (e) => e.event === "attempt-settled",
     );
+    assert.ok(event?.failure && "explanation" in event.failure);
     assert.equal(event?.failure?.code, damaged.code);
     assert.equal(event?.failure?.possibleEffects, "unknown");
     if (damaged.code === "unknown")
@@ -300,10 +302,11 @@ test("m11-receipt-failure-evidence: an unclassified receipt filesystem error fai
     run.timeline.find((e) => e.event === "turn-settled")?.detail,
     "completed",
   );
-  assert.equal(
-    run.timeline.find((e) => e.event === "attempt-settled")?.failure?.code,
-    "unknown",
-  );
+  const failure = run.timeline.find(
+    (e) => e.event === "attempt-settled",
+  )?.failure;
+  assert.ok(failure && "explanation" in failure);
+  assert.equal(failure.code, "unknown");
   const owner = wired.runGroup.acquireRun(runId);
   assert.ok(owner);
   try {
@@ -332,6 +335,7 @@ for (const effect of ["none", "partial"] as const) {
     const failure = readRun(wired.projectionPort, runId).timeline.find(
       (e) => e.event === "attempt-settled",
     )?.failure;
+    assert.ok(failure && "explanation" in failure);
     assert.equal(failure?.possibleEffects, effect);
     assert.equal(failure?.code, "receipt-missing");
     assert.equal(

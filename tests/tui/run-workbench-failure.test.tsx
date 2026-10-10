@@ -566,3 +566,84 @@ test("m11-pre-turn-agent-evidence: blocked Entry reason wraps at narrow widths a
   await press(t, renderer, "return");
   assert.match(t.captureCharFrame(), /The prompt starts with "\/model"/);
 });
+
+import {
+  harnessFailureCases,
+  launchHarnessFailure,
+} from "../application/harness-failure-fixture.js";
+import { readRun } from "../application/run-test-helpers.js";
+for (const scenario of harnessFailureCases) {
+  test(`m11-harness-failure-evidence: Renderer shows ${scenario.name} once at its history closing row and opens details`, async (context) => {
+    const { wired, runId } = await launchHarnessFailure(
+      context,
+      scenario.result,
+    );
+    const run = readRun(wired.projectionPort, runId);
+    const opened = wired.projectionPort.openProjection({
+      family: "session-history",
+      runId,
+      session: "planning",
+    });
+    context.after(() => opened.close());
+    assert.ok(opened.snapshot.result.found);
+    const turn = run.timeline.find((e) => e.event === "turn-settled")!;
+    const failure = turn.failure!;
+    assert.ok("explanation" in failure);
+    assert.ok(failure.diagnostic);
+    const diagnostic = await wired.projectionPort.readResource(
+      failure.diagnostic,
+    );
+    const { t, renderer, control } = await mountWorkbench(runOf(), 100, 50);
+    control.setRead(`d:${failure.diagnostic.diagnosticId}`, diagnostic);
+    control.setHistory({ ...opened.snapshot, runId: "run-1" });
+    control.setRun({ ...run, runId: "run-1" });
+    await t.waitForFrame((frame) =>
+      frame.includes(`✗ Turn ${scenario.result.kind}`),
+    );
+    const frame = t.captureCharFrame();
+    const flat = frame.replaceAll("┃", " ").replace(/\s+/g, " ");
+    assert.ok(flat.includes(scenario.explanation), flat);
+    assert.equal(flat.split(scenario.explanation).length - 1, 1);
+    assert.doesNotMatch(
+      frame,
+      /turn-failed|turn-lost|turn-not-started|ENATIVE/,
+    );
+    noOverflow(frame, 100);
+    if (run.timeline.some((e) => e.event === "attempt-settled"))
+      assert.match(frame, /Step Attempt/);
+    assert.equal(colourOf(t, /┃/), "230,126,128");
+    assert.equal(colourOf(t, /Claude Code/), "122,132,120");
+    for (const width of [40, 140]) {
+      resizeWorkbench(t, renderer, width, 50);
+      await t.renderOnce();
+      const resized = t.captureCharFrame();
+      noOverflow(resized, width);
+      assert.ok(
+        resized
+          .split("\n")
+          .map((line) => line.slice(0, width > 120 ? width - 44 : width))
+          .join(" ")
+          .replaceAll("┃", " ")
+          .replace(/\s+/g, " ")
+          .includes(scenario.explanation),
+        `${width}: ${resized}`,
+      );
+    }
+    resizeWorkbench(t, renderer, 100, 50);
+    await t.renderOnce();
+    await press(t, renderer, "g", { ctrl: true });
+    const panel = t.captureCharFrame();
+    assert.match(panel, /Source · harness/);
+    assert.ok(panel.includes(`Code · turn-${scenario.result.kind}`));
+    assert.ok(
+      panel.includes(
+        `Possible effects · ${scenario.effects === "none" ? "No changes made" : scenario.effects === "partial" ? "Changed files before it stopped" : "May have changed files"}`,
+      ),
+    );
+    assert.match(panel, /failure diagnostic/);
+    while (!/› failure diagnostic/.test(t.captureCharFrame()))
+      await press(t, renderer, "down");
+    await press(t, renderer, "return");
+    assert.match(t.captureCharFrame(), /Kind: turn-/);
+  });
+}

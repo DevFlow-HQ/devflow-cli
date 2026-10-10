@@ -114,7 +114,10 @@ export interface RestingCauseRequest {
 export interface DiagnosticContent {
   readonly kind: string;
   readonly cause?: unknown;
+  readonly partialOutput?: string;
+  readonly retryEvidence?: string;
   readonly harnessDiagnostics?: string;
+  readonly lastObservation?: string;
 }
 
 /** One registered Run and its ownership (ADR 0031). `live` is whether the Run is
@@ -489,7 +492,8 @@ export type AppendTurnEventResult =
     };
 
 /** Settle a Turn authoritatively (#116). Immutable: a settle after a settled
- *  result is a no-op. Updates only the Turn result and Session availability.
+ *  result is a no-op. Turn result, Session availability, and optional Failure
+ *  evidence share its transaction.
  *  Settled assistant messages already reside in canonical Turn events. */
 export interface SettleTurnRequest {
   readonly turnId: string;
@@ -498,6 +502,8 @@ export interface SettleTurnRequest {
   readonly resultDetail: string; // JSON
   readonly availability: string; // open/detached/unusable
   readonly availabilityDetail?: string;
+  readonly failureEvidence?: FailureEvidenceRequest;
+  readonly diagnostic?: DiagnosticContent;
   readonly at: Date;
 }
 
@@ -661,7 +667,8 @@ export interface RunOwner {
   readArtifact(versionId: string, name: string): Uint8Array | undefined;
   /** Every Attempt outcome in append order. */
   attemptLog(): readonly AttemptLogEntry[];
-  failureEvidence(): readonly FailureEvidenceRecord[];
+  /** All failure facts, or one Turn's evidence through its unique subject index. */
+  failureEvidence(turnId?: string): readonly FailureEvidenceRecord[];
   /**
    * Record a Materialization conflict and rest the Run `halted` in one
    * transaction: write the diagnostic under `diagnostics/`, append the conflict

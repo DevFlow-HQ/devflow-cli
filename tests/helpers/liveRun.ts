@@ -50,6 +50,7 @@ export async function openLiveRun(
   t: TestContext,
   options: {
     onHistoryRead?: () => void;
+    onFailureRead?: (turnId: string | undefined) => void;
     onRetainedEventRead?: () => void;
     /** Each Store read that returns stored bodies, with how many it returned:
      *  Turn inputs, Turn event payloads, or conversation contents. */
@@ -113,6 +114,10 @@ export async function openLiveRun(
         ...owner,
         get record() {
           return owner.record;
+        },
+        failureEvidence(turnId?: string) {
+          options.onFailureRead?.(turnId);
+          return owner.failureEvidence(turnId);
         },
         turns() {
           options.onHistoryRead?.();

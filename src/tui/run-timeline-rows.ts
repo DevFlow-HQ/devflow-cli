@@ -39,17 +39,14 @@ export interface TimelineRow {
   readonly dividers?: readonly Rule[];
 }
 
-/** The latest failed Attempt's evidence used by details until Resting causes
+/** The latest failed Attempt or Turn's evidence used by details until Resting causes
  *  identify the stopping subject (#529). */
-export function latestAttemptFailure(run: RunView) {
-  return [...run.timeline]
-    .reverse()
-    .find(
-      (event) =>
-        event.event === "attempt-failure" ||
-        (event.event === "attempt-settled" &&
-          (event.detail === "failed" || event.detail === "indeterminate")),
-    )?.failure;
+export function latestFailure(run: RunView) {
+  for (const event of [...run.timeline].reverse()) {
+    if (event.failure !== undefined && !("turnId" in event.failure))
+      return event.failure;
+  }
+  return undefined;
 }
 
 /** Where a Step begins: a thin rule naming the Step (#289). */
@@ -139,6 +136,10 @@ function durableTimelineRows(
   timeline: readonly RunTimelineEvent[],
 ): TimelineRow[] {
   return timeline.map((event, index) => {
+    const failure =
+      event.failure !== undefined && !("turnId" in event.failure)
+        ? event.failure
+        : undefined;
     return {
       key: `durable:${event.at}:${event.event}:${index}`,
       at: event.at,
@@ -151,10 +152,10 @@ function durableTimelineRows(
       session: event.session,
       sessionName: event.sessionName,
       ...(event.event === "iteration" ? { iterationEnd: true } : {}),
-      ...(event.failure === undefined ? {} : { failurePanel: true as const }),
+      ...(failure === undefined ? {} : { failurePanel: true as const }),
       text:
-        event.failure !== undefined
-          ? `✗ Step Attempt ${event.detail ?? "failed"}\n${event.failure.explanation}\nNext: ${event.failure.nextStep}`
+        failure !== undefined
+          ? `✗ ${event.event === "turn-settled" ? "Turn" : "Step Attempt"} ${event.detail ?? "failed"}\n${failure.explanation}\nNext: ${failure.nextStep}`
           : event.endedBy === "agent"
             ? durableLabel(event)
             : `${event.at} ${durableLabel(event)}`,
@@ -267,6 +268,9 @@ function historyTimelineRows(
       sessionName: name,
       value: row.value,
       preview: row.source === "preview",
+      ...(row.value.kind === "turn-result" && row.value.failure !== undefined
+        ? { failurePanel: true as const }
+        : {}),
       text: historyLabel(row.value, row.source === "preview"),
       fileSpans: historyFileSpans(row.value, row.source === "preview"),
       inspection: fileInspection(row.value) ?? previewInspection(row.value),
@@ -391,6 +395,8 @@ export function historyLabel(
     case "activity":
       return `↳ ${value.description}`;
     case "turn-result":
+      if (value.failure !== undefined)
+        return `✗ Turn ${value.result}\n${value.failure.explanation}\nNext: ${value.failure.nextStep}`;
       return `Turn · ${value.origin === "managed" ? "Secant started the Step" : value.origin === "human" ? "started by you" : "origin unknown"} · ${value.result}${value.harness === undefined ? "" : ` · ${value.harness}`}${value.model === undefined ? "" : ` · ${value.model}`}${value.durationMs === undefined ? "" : ` · ${value.durationMs} ms`}`;
   }
 }

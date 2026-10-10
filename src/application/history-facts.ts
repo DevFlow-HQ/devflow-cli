@@ -224,6 +224,7 @@ export function resultValue(
   turn: HistoryTurn,
   harness?: string,
   model = turn.modelChoice?.model,
+  failure?: Extract<SessionHistoryValue, { kind: "turn-result" }>["failure"],
 ): StoredHistoryValue {
   const duration =
     turn.settledAt === undefined ||
@@ -233,6 +234,7 @@ export function resultValue(
       : Date.parse(turn.settledAt) - Date.parse(turn.admittedAt);
   return {
     kind: "turn-result",
+    ...(failure === undefined ? {} : { failure }),
     origin:
       turn.origin === "human" || turn.origin === "managed"
         ? turn.origin

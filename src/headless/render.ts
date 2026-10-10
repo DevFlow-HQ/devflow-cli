@@ -526,7 +526,7 @@ export function renderRun(run: RunView): string {
         : "";
     const line = `  ${event.at} ${event.event}${kind}${elicitation}${detail}${completion}${call}${step}`;
     lines.push(
-      event.failure === undefined
+      event.failure === undefined || "turnId" in event.failure
         ? line
         : `${line} · ${event.failure.explanation}`,
     );

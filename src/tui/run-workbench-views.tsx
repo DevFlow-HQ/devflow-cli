@@ -1,4 +1,4 @@
-import { latestAttemptFailure } from "./run-timeline-rows.js";
+import { latestFailure } from "./run-timeline-rows.js";
 import { TextAttributes, type TextareaRenderable } from "@opentui/core";
 import {
   batch,
@@ -574,7 +574,7 @@ export function buildDetailsRows(params: {
   // cause's code and possible effects in plain phrases, its diagnostic among the
   // Resources, and a transient Problem's code.
   const cause = run.restingCause;
-  const failure = latestAttemptFailure(run);
+  const failure = latestFailure(run);
   if (
     cause !== undefined ||
     failure !== undefined ||

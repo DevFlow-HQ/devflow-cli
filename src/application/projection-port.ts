@@ -965,7 +965,9 @@ interface RunSteerEvent {
 }
 
 export interface RunTimelineEvent {
-  readonly failure?: RunFailureView;
+  /** Identity of a Turn settlement. An Attempt points at it through failure.turnId. */
+  readonly turnId?: string;
+  readonly failure?: RunFailureView | { readonly turnId: string };
   /** Full elicitation evidence, separate from the bounded remediation text. */
   readonly elicitation?: {
     readonly harness: "codex" | "claude-code";
@@ -1047,7 +1049,7 @@ export interface RunConflictView {
 
 /** Failure facts narrowed at read, with wording derived for both clients. */
 export interface RunFailureView {
-  readonly source: "receipt" | "agent" | "unknown";
+  readonly source: "receipt" | "agent" | "harness" | "unknown";
   readonly code:
     | "receipt-missing"
     | "receipt-not-file"
@@ -1059,6 +1061,9 @@ export interface RunFailureView {
     | "prompt-render-failed"
     | "prompt-refused"
     | "not-started"
+    | "turn-failed"
+    | "turn-not-started"
+    | "turn-lost"
     | "unknown";
   readonly phase?: string;
   readonly category?: string;
@@ -1398,6 +1403,7 @@ export type SessionHistoryValue =
     }
   | {
       readonly kind: "turn-result";
+      readonly failure?: RunFailureView;
       readonly origin: "human" | "managed" | "unknown";
       readonly result: string;
       readonly harness?: string;

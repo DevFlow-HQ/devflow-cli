@@ -1,4 +1,4 @@
-import { latestAttemptFailure } from "./run-timeline-rows.js";
+import { latestFailure } from "./run-timeline-rows.js";
 import { useRenderer } from "@opentui/solid";
 import { TextAttributes } from "@opentui/core";
 import {
@@ -772,7 +772,7 @@ export function RunWorkbench(props: {
     const current = run();
     return current === undefined
       ? undefined
-      : latestAttemptFailure(current)?.diagnostic?.diagnosticId;
+      : latestFailure(current)?.diagnostic?.diagnosticId;
   });
   const attemptDiagnosticExpired = createMemo(() => {
     const diagnosticId = attemptDiagnosticId();
@@ -819,7 +819,7 @@ export function RunWorkbench(props: {
         reference: current.restingCause.diagnostic,
       });
     }
-    const failure = latestAttemptFailure(current);
+    const failure = latestFailure(current);
     if (
       failure?.diagnostic !== undefined &&
       !attemptDiagnosticExpired() &&

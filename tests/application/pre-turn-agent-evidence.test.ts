@@ -28,7 +28,12 @@ for (const kind of ["agent", "interactive-agent"] as const) {
       true,
       (wiring, id) => {
         pushed = followRun(wiring.projectionPort, id, (run) =>
-          run.timeline.some((e) => e.failure?.code === "prompt-refused")
+          run.timeline.some(
+            (e) =>
+              e.failure !== undefined &&
+              "code" in e.failure &&
+              e.failure.code === "prompt-refused",
+          )
             ? run
             : undefined,
         );
@@ -37,16 +42,16 @@ for (const kind of ["agent", "interactive-agent"] as const) {
     const run = readRun(wired.projectionPort, runId);
     assert.equal(run.state, kind === "agent" ? "failed" : "blocked");
     assert.ok(pushed);
-    assert.equal(
-      (await pushed).timeline.at(-1)?.failure?.code,
-      "prompt-refused",
-    );
+    const pushedFailure = (await pushed).timeline.at(-1)?.failure;
+    assert.ok(pushedFailure && "explanation" in pushedFailure);
+    assert.equal(pushedFailure.code, "prompt-refused");
     assert.equal(agent.inputs.length, 1);
     const failed = run.timeline.find((event) => event.step === "tickets");
     assert.equal(
       failed?.event,
       kind === "agent" ? "attempt-settled" : "attempt-failure",
     );
+    assert.ok(failed?.failure && "explanation" in failed.failure);
     assert.equal(failed?.failure?.code, "prompt-refused");
     assert.equal(failed.failure.source, "agent");
     assert.equal(failed.failure.possibleEffects, "none");
@@ -117,6 +122,7 @@ for (const delivery of ["skill", "file"] as const) {
     const failure = run.timeline.find(
       (e) => e.event === "attempt-settled",
     )?.failure;
+    assert.ok(failure && "explanation" in failure);
     assert.equal(failure?.code, "prompt-render-failed");
     assert.equal(failure.category, "unsupported-delivery-mode");
     assert.equal(failure.possibleEffects, "none");
@@ -150,6 +156,7 @@ for (const slot of [false, true]) {
     const failure = run.timeline.find(
       (e) => e.event === "attempt-settled",
     )?.failure;
+    assert.ok(failure && "explanation" in failure);
     assert.equal(failure?.code, slot ? "prompt-render-failed" : "not-started");
     assert.equal(failure.category, "working-area-unavailable");
     assert.equal(failure.possibleEffects, "none");
@@ -177,6 +184,7 @@ test("m11-pre-turn-agent-evidence: receipt preparation fails before admission an
     .map((e) => e.failure);
   assert.equal(failures.length, 2);
   for (const failure of failures) {
+    assert.ok(failure && "explanation" in failure);
     assert.equal(failure?.code, "not-started");
     assert.equal(failure.category, "output-receipt-directory-unavailable");
     assert.equal(failure.possibleEffects, "none");
@@ -220,6 +228,7 @@ test("m11-pre-turn-agent-evidence: an unusable Session fails the retry without a
   const failure = run.timeline
     .filter((e) => e.event === "attempt-settled")
     .at(-1)?.failure;
+  assert.ok(failure && "explanation" in failure);
   assert.equal(failure?.code, "session-unusable");
   assert.equal(failure.possibleEffects, "none");
   assert.equal(
@@ -288,6 +297,7 @@ test("m11-pre-turn-agent-evidence: an unpreparable Entry stays blocked without a
   );
   const failure = run.timeline.find((e) => e.event === "attempt-failure");
   assert.equal(failure?.step, "publish");
+  assert.ok(failure?.failure && "explanation" in failure.failure);
   assert.equal(failure.failure?.code, "prompt-render-failed");
   assert.equal(failure.failure.category, "unsupported-delivery-mode");
   await wired.shutdown();
@@ -324,7 +334,12 @@ test("m11-pre-turn-agent-evidence: a missing prompt asset still rests halted wit
   assert.ok("problem" in launched);
   assert.equal(launched.problem?.code, "run-execution-fault");
   assert.equal(
-    run.timeline.filter((e) => e.failure?.source === "agent").length,
+    run.timeline.filter(
+      (e) =>
+        e.failure !== undefined &&
+        "source" in e.failure &&
+        e.failure.source === "agent",
+    ).length,
     0,
   );
   assert.ok(run.actionOffers.some((offer) => offer.action === "resume-run"));

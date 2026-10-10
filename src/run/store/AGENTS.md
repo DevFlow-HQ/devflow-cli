@@ -64,7 +64,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The Resting cause (ADR 0041, #528) lives on `run_record`'s nullable `resting_cause_*` columns. `writeState`'s optional cause is written in the state's
   transaction, and every state write sets or clears it, so a resumed Run loses its old cause; only `halted` and `failed` may carry one. The code is stored
   as given, never branched on here; the Projection narrows it at read (`resting-cause.ts`). Details and the Failure evidence pointer have no writer yet.
-- `failure_evidence` (ADR 0041, #529) records immutable Failure evidence in Attempt publication's guarded transaction. Partial unique indexes
+- `failure_evidence` (ADR 0041, #529) records immutable Failure evidence in Attempt publication and Turn settlement's guarded transactions.
+  Partial unique indexes
   allow one row per Turn and one per Attempt without a Turn, even before Attempt publication. Entry evidence rides `writeState("blocked")` (#531);
   repeated blocked writes and later Attempt publication keep its original evidence and diagnostic. Scalar JSON details are bounded to 4 KiB.
   Source, code and effects stay open strings; `failureEvidence()` reads them as given and Application narrows unknown codes and malformed details.

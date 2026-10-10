@@ -22,6 +22,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `driveHarnessTurn` reads the Run's Model choice once per Turn (`currentModelChoice`, ADR 0034). It sends that value on the Turn request and writes
   it on the `turn` row in the same `admitTurn`, for Agent, Entry, and human Turns alike, so a Turn's record is what it asked for. It reads
   `owner.record`, which the owner refreshes after its own upgrade writes; #344's change write must refresh it too.
+- Turn settlement records every Harness failure field as separate Failure evidence or a redacted Detailed diagnostic (#532); legacy `resultDetail` stays exact.
+  Lost Turns retain the unknown half and last observation; completed and interrupted Turns record no failure. Cleanup and usage stay operational-log facts.
 - Every autonomous Agent Attempt publishes one co-sourced evidence value: qualified Harness identity plus its optional observed model. `attemptEvidence`
   fails fast if an Agent result lacks identity; Command/Gate and synthetic interactive Attempts publish neither (#147).
 - An Agent Step's declared `text` outputs come only from Output receipts (#215): after a `completed` Turn each receipt must be a regular UTF-8 file of at most

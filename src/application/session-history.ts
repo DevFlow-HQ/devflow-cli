@@ -137,6 +137,18 @@ const missingFact: Problem = {
  * or the live owner holds its Run. */
 export function createSessionHistory(deps: {
   readonly read: (runId: string) => HistoryRead;
+  readonly readFailure: (
+    runId: string,
+    turnId: string,
+  ) =>
+    | {
+        readonly found: true;
+        readonly failure?: Extract<
+          StoredHistoryValue,
+          { kind: "turn-result" }
+        >["failure"];
+      }
+    | { readonly found: false; readonly problem: Problem };
   /** Every requested event, or a Problem when any is unreadable. */
   readonly readEvents: (
     runId: string,
@@ -229,8 +241,18 @@ export function createSessionHistory(deps: {
     const { turnId, kind, id } = readHistoryKey(fact.key);
     const turn = run.turns.get(turnId);
     if (turn === undefined) return missingFact;
-    if (kind === "result")
-      return resultValue(turn.record, run.harness, turn.model);
+    if (kind === "result") {
+      if (
+        !["failed", "not-started", "lost"].includes(
+          turn.record.resultKind ?? "",
+        )
+      )
+        return resultValue(turn.record, run.harness, turn.model);
+      const read = deps.readFailure(runId, turnId);
+      return read.found
+        ? resultValue(turn.record, run.harness, turn.model, read.failure)
+        : read.problem;
+    }
     const at = bodyAt(run, fact);
     if (kind === "input" || kind === "legacy") {
       // A Turn input orders before the Turn's first activity; a migrated message at its own sequence.
@@ -424,7 +446,9 @@ export function createSessionHistory(deps: {
       turn: turn.record,
       order: Infinity,
       source: "stored",
-      value: resultValue(turn.record, run.harness, turn.model),
+      // Resolve result metadata only when this row enters a window. Eviction
+      // drops the full failure with fact.value, leaving only the Turn coordinate.
+      value: undefined,
     });
   }
   function initialize(
