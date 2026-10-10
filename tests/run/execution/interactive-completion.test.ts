@@ -148,14 +148,43 @@ test("m10-followup-agent-call-expiry: the check reads only the judged Turn's eve
   callOn(owner, "earlier", "a");
   admit(owner, "turn");
   callOn(owner, "turn", "b");
-  const read: string[] = [];
-  const narrowed: Pick<RunOwner, "turns" | "turnEventsOf"> = {
+  const read: (string | undefined)[] = [];
+  const narrowed: Pick<RunOwner, "turns" | "turnEventsOfKinds"> = {
     turns: () => owner.turns(),
-    turnEventsOf: (turnId) => {
+    turnEventsOfKinds: (kinds, turnId) => {
       read.push(turnId);
-      return owner.turnEventsOf(turnId);
+      return owner.turnEventsOfKinds(kinds, turnId);
     },
   };
   assert.equal(latestAgentCall(narrowed, ATTEMPT)?.call.callId, "b");
   assert.deepEqual(read, ["turn"]);
+});
+
+test("m10-followup-bounded-run-snapshot: the Agent-call lookup reads only the judged Turn's Agent-call rows", (t) => {
+  const { owner } = openOwner(t);
+  admit(owner, "turn");
+  callOn(owner, "turn", "a");
+  for (const fact of [
+    { kind: "thought", data: { summaryId: "t", content: "Thinking" } },
+    { kind: "turn-diff", data: { content: "diff", files: [] } },
+    { kind: "assistant-content", data: { content: "Hello" } },
+  ] as const)
+    assert.ok(owner.appendTurnEvent({ turnId: "turn", fact, at: AT }).ok);
+  expire(owner, "turn", "a");
+  callOn(owner, "turn", "b", "held-for-review");
+  const read: string[] = [];
+  const counted: Pick<RunOwner, "turns" | "turnEventsOfKinds"> = {
+    turns: () => owner.turns(),
+    turnEventsOfKinds: (kinds, turnId) => {
+      const events = owner.turnEventsOfKinds(kinds, turnId);
+      read.push(...events.map((event) => event.kind));
+      return events;
+    },
+  };
+  assert.equal(heldAgentCall(counted, ATTEMPT)?.call.callId, "b");
+  assert.equal(latestAgentCall(counted, ATTEMPT), undefined);
+  assert.deepEqual(read, [
+    ...["agent-call", "agent-call-expired", "agent-call"],
+    ...["agent-call", "agent-call-expired", "agent-call"],
+  ]);
 });

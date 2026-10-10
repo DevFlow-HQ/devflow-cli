@@ -1667,18 +1667,77 @@ test("m10-followup-agent-call-expiry: one Turn's events read alone, in append or
   expired("second", "b");
   expired("first", "c");
   // The admitted input row is conversation-only, so neither read returns it.
+  const expiries = (turnId: string) =>
+    owner.turnEventsOfKinds(["agent-call-expired"], turnId);
   assert.deepEqual(
-    owner.turnEventsOf("first").map((e) => [e.turnId, readTurnFact(e)?.data]),
+    expiries("first").map((e) => [e.turnId, readTurnFact(e)?.data]),
     [
       ["first", { callId: "a" }],
       ["first", { callId: "c" }],
     ],
   );
   assert.deepEqual(
-    owner.turnEventsOf("second").map((e) => readTurnFact(e)?.data),
+    expiries("second").map((e) => readTurnFact(e)?.data),
     [{ callId: "b" }],
   );
-  assert.deepEqual(owner.turnEventsOf("absent"), []);
+  assert.deepEqual(expiries("absent"), []);
+});
+
+test("m10-followup-bounded-run-snapshot: a kind-filtered read equals the full read filtered to those kinds", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-kinds");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner !== undefined);
+  t.after(() => owner.close());
+  for (const turnId of ["first", "second"])
+    assert.ok(
+      owner.admitTurn({
+        turnId,
+        attemptId: "attempt",
+        session: "s",
+        origin: "managed",
+        kind: "agent",
+        input: "Work",
+        recoveryCoordinate: "native",
+        harness: "codex",
+        at: AT,
+      }).ok,
+    );
+  const runDb = new Database(join(groupDirOf(home), created.runId, "run.db"));
+  try {
+    const insert = runDb.query(
+      "INSERT INTO turn_event (turn_id, kind, payload, at) VALUES (?, ?, ?, ?)",
+    );
+    for (const [turnId, kind, payload] of [
+      ["first", "thought", '{"summaryId":"t","content":"Thinking"}'],
+      ["second", "model", '{"model":"gpt"}'],
+      ["first", "model", "{not json"],
+      ["first", "unknown-kind", "{}"],
+      ["second", "assistant-content", '{"content":"Hello"}'],
+      ["first", "model", '{"model":"later"}'],
+      ["second", "turn-diff", '{"content":"diff","files":[]}'],
+    ])
+      insert.run(turnId!, kind!, payload!, AT.toISOString());
+  } finally {
+    runDb.close();
+  }
+  const all = owner.turnEvents();
+  const kinds = ["model", "assistant-content"] as const;
+  const of = (turnId?: string) =>
+    all.filter(
+      (e) =>
+        (kinds as readonly string[]).includes(e.kind) &&
+        (turnId === undefined || e.turnId === turnId),
+    );
+  // A malformed row of a read kind is still returned, for its reader to refuse.
+  assert.equal(of().length, 4);
+  assert.deepEqual(owner.turnEventsOfKinds(kinds), of());
+  assert.deepEqual(owner.turnEventsOfKinds(kinds, "first"), of("first"));
+  assert.deepEqual(owner.turnEventsOfKinds(kinds, "second"), of("second"));
+  assert.deepEqual(owner.turnEventsOfKinds(kinds, "absent"), []);
+  assert.deepEqual(owner.turnEventsOfKinds([]), []);
 });
 
 test("m10-followup-body-free-history-index: the history outline reads every fact's order and identity without its body", (t) => {

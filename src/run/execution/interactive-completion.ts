@@ -120,21 +120,23 @@ function consecutiveAgentContinues(
   return count;
 }
 
+/** What the Agent-call lookup reads: the Run's Turns and one Turn's events. */
+export type AgentCallSource = Pick<RunOwner, "turns" | "turnEventsOfKinds">;
+/** The only kinds the lookup reads: one Turn's calls and their expiries (#521). */
+export const AGENT_CALL_KINDS = [
+  "agent-call",
+  "agent-call-expired",
+] as const satisfies Parameters<RunOwner["turnEventsOfKinds"]>[0];
+
 /** Only the latest call of the latest Turn can settle an open Attempt, so an
  *  earlier accepted call never outlives a later held or refused one. */
-export function latestAgentCall(
-  owner: Pick<RunOwner, "turns" | "turnEventsOf">,
-  attemptId: string,
-) {
+export function latestAgentCall(owner: AgentCallSource, attemptId: string) {
   const latest = lastTurnCall(owner, attemptId);
   return latest?.call.answer.outcome === "accepted" ? latest : undefined;
 }
 
 /** The latest Turn's step done the Review checkpoint held for the person. */
-export function heldAgentCall(
-  owner: Pick<RunOwner, "turns" | "turnEventsOf">,
-  attemptId: string,
-) {
+export function heldAgentCall(owner: AgentCallSource, attemptId: string) {
   const latest = lastTurnCall(owner, attemptId);
   return latest?.call.answer.outcome === "held-for-review" ? latest : undefined;
 }
@@ -145,16 +147,13 @@ function isCompletionCall(
   return id === "step_done" || id === "stage_done";
 }
 
-function lastTurnCall(
-  owner: Pick<RunOwner, "turns" | "turnEventsOf">,
-  attemptId: string,
-) {
+function lastTurnCall(owner: AgentCallSource, attemptId: string) {
   const turn = owner
     .turns()
     .filter((t) => t.attemptId === attemptId)
     .at(-1);
   if (turn === undefined) return undefined;
-  const events = owner.turnEventsOf(turn.turnId);
+  const events = owner.turnEventsOfKinds(AGENT_CALL_KINDS, turn.turnId);
   const call = events
     .map(readAgentCallEvent)
     .filter((c) => c !== undefined)

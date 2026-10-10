@@ -32,11 +32,13 @@ import type {
 import {
   attemptIteration,
   attemptStepId,
+  AGENT_CALL_KINDS,
   heldAgentCall,
   interactiveEndLegality,
   latestAgentCall,
   interactiveStepTarget,
 } from "../run/execution/execution.js";
+import type { AgentCallSource } from "../run/execution/execution.js";
 import type {
   ActionOffer,
   Problem,
@@ -194,11 +196,13 @@ function runResult(
     const interactiveStep =
       held?.kind === "interactive" ? held.step : undefined;
     const followUp = held?.kind === "follow-up" ? held : undefined;
-    const turnEvents = owner?.turnEvents() ?? [];
+    // One read serves the timeline and every Agent-call lookup (#521).
+    const turnEvents = owner?.turnEventsOfKinds(TIMELINE_EVENT_KINDS) ?? [];
+    const calls = agentCallSource(turns, turnEvents);
     const lastTurn = turns.at(-1);
     const pendingCall =
       owner !== undefined && lastTurn !== undefined
-        ? latestAgentCall(owner, lastTurn.attemptId)
+        ? latestAgentCall(calls, lastTurn.attemptId)
         : undefined;
     const pendingAgentCompletion =
       pendingCall !== undefined &&
@@ -229,7 +233,7 @@ function runResult(
         log.some((e) => e.attemptId === lastTurn.attemptId)
       )
         return undefined;
-      const held = heldAgentCall(owner, lastTurn.attemptId);
+      const held = heldAgentCall(calls, lastTurn.attemptId);
       const checkpoint = humanReviewCheckpoint(
         facts.routing,
         interactiveStep.id,
@@ -312,6 +316,7 @@ function runResult(
           gateAnswers,
           turns,
           turnEvents,
+          calls,
           facts.routing,
           names,
         ),
@@ -972,6 +977,43 @@ function timelineDetail(text: string): string {
   return `${flat.slice(0, contentLimit)} ${RUN_TIMELINE_TRUNCATION_MARKER}`;
 }
 
+/** The stored kinds the timeline shows, plus every kind its Agent-call lookup
+ *  reads. `turn-diff`, `tool-partial` and `thought` never show, so their bodies
+ *  are never read (#521). */
+const TIMELINE_EVENT_KINDS = [
+  ...AGENT_CALL_KINDS,
+  "elicitation-declined",
+  "model",
+  "steer",
+  "assistant-content",
+  "tool-call",
+  "tool-activity",
+  "request-raised",
+  "request-answered",
+  "request-expired",
+] as const satisfies Parameters<RunOwner["turnEventsOfKinds"]>[0];
+
+/** The snapshot's one event read, served per Turn to the Agent-call lookup, so no
+ *  row is read from the Store twice. */
+function agentCallSource(
+  turns: readonly TurnRecord[],
+  events: readonly TurnEventRecord[],
+): AgentCallSource {
+  const byTurn = new Map<string, TurnEventRecord[]>();
+  for (const event of events) {
+    const of = byTurn.get(event.turnId);
+    if (of === undefined) byTurn.set(event.turnId, [event]);
+    else of.push(event);
+  }
+  return {
+    turns: () => turns,
+    turnEventsOfKinds: (kinds, turnId) =>
+      (turnId === undefined ? events : (byTurn.get(turnId) ?? [])).filter(
+        (event) => (kinds as readonly string[]).includes(event.kind),
+      ),
+  };
+}
+
 /** The turn-event timeline entries for one Turn's normalized durable events. */
 function turnEventEntry(
   event: TurnEventRecord,
@@ -1133,6 +1175,7 @@ function buildTimeline(
   gateAnswers: readonly GateAnswerRecord[],
   turns: readonly TurnRecord[],
   turnEvents: readonly TurnEventRecord[],
+  calls: AgentCallSource,
   routing: readonly RoutingNode[],
   names: ReadonlyMap<string, string>,
 ): RunTimelineEvent[] {
@@ -1196,14 +1239,7 @@ function buildTimeline(
         ...(attempt.endedBy === "agent"
           ? {
               endedBy: "agent" as const,
-              reason: latestAgentCall(
-                {
-                  turns: () => turns,
-                  turnEventsOf: (turnId) =>
-                    turnEvents.filter((e) => e.turnId === turnId),
-                },
-                attempt.attemptId,
-              )?.call.reason,
+              reason: latestAgentCall(calls, attempt.attemptId)?.call.reason,
             }
           : {}),
         ...(stepId !== undefined ? { step: stepId } : {}),

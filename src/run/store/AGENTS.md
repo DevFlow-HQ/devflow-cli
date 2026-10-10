@@ -6,7 +6,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 
 - `turnEventsAt` indexes the same append-only, conversation-excluded sequence as `turnEvents`; new writes never shift an exact Resource (#489).
   It numbers rows through the covering `turn_event_turn_kind` index, because a large payload fills its row's leaf page (#522).
-  `turnEventsOf` reads one Turn's slice of that sequence, so a per-Turn check never scans the Run (#513).
+  `turnEventsOfKinds` reads only the named kinds of that sequence, the Run's or one Turn's, choosing rows through that index so no
+  other payload is read; a per-Turn check never scans the Run (#513, #521).
 - `historyOutline` reads history's order, identity and visibility facts in SQL; no Turn input, event payload or conversation content reaches
   JavaScript. `outlineTurnFact` is its decoded twin, and a Store test holds the two equal (#522).
 

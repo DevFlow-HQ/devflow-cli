@@ -9,6 +9,7 @@ import {
   call,
   reviewedLoop,
   across,
+  type TurnEventRead,
 } from "../helpers/agentCompletion.js";
 
 test("a clean Entry Turn applies the latest step done through the Projection Port", async (t) => {
@@ -837,4 +838,50 @@ test("resume applies a clean stage done recorded before a crash", async (t) => {
     run.timeline.find((e) => e.event === "stage-ended")?.reason,
     "no ticket left",
   );
+});
+
+test("m10-followup-bounded-run-snapshot: settling agent Continues reads only the judged Turn's Agent-call rows", async (t) => {
+  const reads: TurnEventRead[] = [];
+  const withBodies = (key: string) => ({
+    ...continueOnce(key),
+    events: [
+      { kind: "thought" as const, summaryId: `t-${key}`, content: "Thinking" },
+      { kind: "turn-diff" as const, diff: { content: "diff", files: [] } },
+    ],
+  });
+  const { wired, runId, answers } = await setup(
+    t,
+    across([withBodies("1"), withBodies("2"), withBodies("3")]),
+    reviewedLoop({ interval: 2, message: "Look over the tracker." }),
+    { onTurnEventRead: (read) => reads.push(read) },
+  );
+  assert.equal(
+    (await awaitSettled(wired.projectionPort, "launch")).status,
+    "applied",
+  );
+  assert.deepEqual(
+    answers.map((a) => a.outcome),
+    ["accepted", "accepted", "held-for-review"],
+  );
+  assert.equal(
+    readRun(wired.projectionPort, runId).heldForReview?.reason,
+    "ticket 3 done",
+  );
+  const perTurn = reads.filter((read) => read.turnId !== undefined);
+  // Each judged Turn holds one call, and each read returns that row alone.
+  assert.deepEqual(
+    [...new Set(perTurn.map((read) => read.turnId))],
+    ["0.0:implement#entry", "1.0:implement#entry", "2.0:implement#entry"],
+  );
+  for (const read of perTurn)
+    assert.deepEqual(read.kindsRead, ["agent-call"], JSON.stringify(read));
+  for (const read of reads) {
+    assert.notEqual(read.kinds, undefined, "no read takes every kind");
+    assert.ok(
+      !read.kindsRead.some(
+        (kind) => kind === "thought" || kind === "turn-diff",
+      ),
+      JSON.stringify(read),
+    );
+  }
 });

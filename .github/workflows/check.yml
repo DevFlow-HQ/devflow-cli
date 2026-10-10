@@ -558,6 +558,14 @@ jobs:
           -t '^m10-followup-agent-call-expiry(:|$)'
           tests/run/execution/interactive-completion.test.ts
           tests/run/store/session-and-transcript-evidence.test.ts
+      - name: m10-followup-bounded-run-snapshot
+        run: >-
+          bun run test --
+          -t '^m10-followup-bounded-run-snapshot(:|$)'
+          tests/application/bounded-run-snapshot.test.ts
+          tests/application/agent-completion.test.ts
+          tests/run/execution/interactive-completion.test.ts
+          tests/run/store/session-and-transcript-evidence.test.ts
       - name: m10-followup-history-viewport
         run: >-
           bun run test --

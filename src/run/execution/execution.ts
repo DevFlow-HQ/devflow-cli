@@ -54,8 +54,12 @@ import { guardedExecutionObserver } from "./observer.js";
 
 export { resolveLaunchInputValue } from "./reference-resolution.js";
 
-export type { InteractiveEndLegality } from "./interactive-completion.js";
+export type {
+  AgentCallSource,
+  InteractiveEndLegality,
+} from "./interactive-completion.js";
 export {
+  AGENT_CALL_KINDS,
   heldAgentCall,
   interactiveEndLegality,
   latestAgentCall,

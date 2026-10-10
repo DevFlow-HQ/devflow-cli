@@ -670,8 +670,12 @@ export interface RunOwner {
   turns(): readonly TurnRecord[];
   /** Every normalized durable Turn event, in append order. */
   turnEvents(): readonly TurnEventRecord[];
-  /** One Turn's normalized durable events, in append order. */
-  turnEventsOf(turnId: string): readonly TurnEventRecord[];
+  /** The normalized durable events of `kinds`, the Run's or one Turn's, in append
+   *  order. No other kind's payload is read (#521). */
+  turnEventsOfKinds(
+    kinds: readonly TurnFact["kind"][],
+    turnId?: string,
+  ): readonly TurnEventRecord[];
   /** Exact append-only history events by their index among `turnEvents`, in one
    *  pass over an index rather than the payloads. An index past the end is absent. */
   turnEventsAt(

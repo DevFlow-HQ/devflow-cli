@@ -16,6 +16,7 @@ import {
 } from "../harness/fake-adapter.js";
 import { createFakeBundleProcess } from "../helpers/fakeBundleProcess.js";
 import { makeTempDir } from "../helpers/tempDir.js";
+import type { RunOwner } from "../../src/run/store/store.js";
 
 export const completed: FakeScript["turns"][number]["result"] = {
   kind: "completed",
@@ -53,6 +54,12 @@ export const reviewedLoop = (reviewCheckpoint?: object) => [
 export const across =
   (script: FakeScript["turns"]) => (_prepare: number, started: number) =>
     script.slice(started);
+/** One Turn-event Store read: the kinds and Turn asked for, and the kinds returned. */
+export interface TurnEventRead {
+  readonly kinds?: Parameters<RunOwner["turnEventsOfKinds"]>[0];
+  readonly turnId?: string;
+  readonly kindsRead: readonly string[];
+}
 export async function launchAgentCompletionRun(
   t: TestContext,
   turns:
@@ -68,6 +75,10 @@ export async function launchAgentCompletionRun(
       prompt: { asset: "prompt.md" },
     },
   ],
+  observe: {
+    /** Each Turn-event Store read of every owner the Application acquires. */
+    onTurnEventRead?: (read: TurnEventRead) => void;
+  } = {},
 ) {
   const folder = makeTempDir("secant-agent-done-bundle-");
   writeFileSync(join(folder, "prompt.md"), "Discuss the plan.");
@@ -158,6 +169,34 @@ export async function launchAgentCompletionRun(
   const instances: ReturnType<typeof wireApplication>[] = [];
   const reopen = () => {
     const instance = wireApplication(options);
+    const { onTurnEventRead } = observe;
+    if (onTurnEventRead !== undefined) {
+      const acquire = instance.runGroup.acquireRun;
+      instance.runGroup.acquireRun = (...args) => {
+        const owner = acquire(...args);
+        if (owner === undefined) return undefined;
+        return {
+          ...owner,
+          get record() {
+            return owner.record;
+          },
+          turnEvents() {
+            const events = owner.turnEvents();
+            onTurnEventRead({ kindsRead: events.map((e) => e.kind) });
+            return events;
+          },
+          turnEventsOfKinds(kinds, turnId) {
+            const events = owner.turnEventsOfKinds(kinds, turnId);
+            onTurnEventRead({
+              kinds,
+              ...(turnId === undefined ? {} : { turnId }),
+              kindsRead: events.map((e) => e.kind),
+            });
+            return events;
+          },
+        };
+      };
+    }
     instances.push(instance);
     return instance;
   };

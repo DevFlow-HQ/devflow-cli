@@ -581,11 +581,10 @@ export function readTurns(db: SQLiteBunDatabase): readonly TurnRecord[] {
     }));
 }
 
-/** History events in append order: all of them, or one Turn's. `readTurnEventsAt`
- * reads them by index. */
+/** Every history event in append order. `readTurnEventsAt` reads them by index,
+ * and `readTurnEventsOfKinds` only the kinds a reader shows. */
 export function readTurnEvents(
   db: SQLiteBunDatabase,
-  { turnId }: { readonly turnId?: string } = {},
 ): readonly TurnEventRecord[] {
   return db
     .select({
@@ -599,11 +598,33 @@ export function readTurnEvents(
       and(
         ne(turnEvents.kind, "turn-input"),
         ne(turnEvents.kind, "legacy-message"),
-        turnId === undefined ? undefined : eq(turnEvents.turn_id, turnId),
       ),
     )
     .orderBy(asc(turnEvents.seq))
     .all()
+    .map(turnEventRecord);
+}
+/** The history events of `kinds` in append order, the Run's or one Turn's. Rows are
+ * chosen through the covering `(turn_id, kind)` index, so no other payload is read. */
+export function readTurnEventsOfKinds(
+  db: SQLiteBunDatabase,
+  kinds: readonly TurnFactKind[],
+  turnId?: string,
+): readonly TurnEventRecord[] {
+  return db
+    .all(
+      sql`
+    select turn_id, kind, payload, at
+    from turn_event
+    where seq in (
+      select seq
+      from turn_event indexed by turn_event_turn_kind
+      where kind in (select value from json_each(${JSON.stringify(kinds)}))${
+        turnId === undefined ? sql`` : sql` and turn_id = ${turnId}`
+      }
+    )
+    order by seq`,
+    )
     .map(turnEventRecord);
 }
 function turnEventRecord(row: unknown): TurnEventRecord {

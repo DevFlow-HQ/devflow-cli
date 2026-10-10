@@ -8,7 +8,7 @@ import {
 } from "../../src/harness/harness.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
 import type { RequestChannel } from "../../src/run/execution/execution.js";
-import type { RunOwner } from "../../src/run/store/store.js";
+import type { RunOwner, TurnEventRecord } from "../../src/run/store/store.js";
 import { createFakeProcess } from "../process/fake-adapter.js";
 import { openFakeRunGroup as openRunGroup } from "../run/store/fake-git-process.js";
 import { createApplication } from "./application.js";
@@ -54,6 +54,8 @@ export async function openLiveRun(
     /** Each Store read that returns stored bodies, with how many it returned:
      *  Turn inputs, Turn event payloads, or conversation contents. */
     onBodyRead?: (bodies: number) => void;
+    /** Each Store read that returns Turn event payloads, with the events it returned. */
+    onTurnEventRead?: (events: readonly TurnEventRecord[]) => void;
     historyTextEdges?: Parameters<
       typeof createApplication
     >[0]["historyTextEdges"];
@@ -84,6 +86,12 @@ export async function openLiveRun(
     options.onBodyRead?.(read.length);
     return read;
   };
+  const events = (
+    read: readonly TurnEventRecord[],
+  ): readonly TurnEventRecord[] => {
+    options.onTurnEventRead?.(read);
+    return bodies(read);
+  };
   const runGroup = {
     ...rawGroup,
     listRuns() {
@@ -112,13 +120,17 @@ export async function openLiveRun(
         },
         turnEventsAt(indexes: readonly number[]) {
           options.onRetainedEventRead?.();
-          const events = owner.turnEventsAt(indexes);
-          options.onBodyRead?.(events.size);
-          return events;
+          const read = owner.turnEventsAt(indexes);
+          options.onTurnEventRead?.([...read.values()]);
+          options.onBodyRead?.(read.size);
+          return read;
         },
         turnEvents() {
           options.onHistoryRead?.();
-          return bodies(owner.turnEvents());
+          return events(owner.turnEvents());
+        },
+        turnEventsOfKinds(...args: Parameters<RunOwner["turnEventsOfKinds"]>) {
+          return events(owner.turnEventsOfKinds(...args));
         },
         transcript() {
           options.onHistoryRead?.();

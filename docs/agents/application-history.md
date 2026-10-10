@@ -9,6 +9,8 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
 - The timeline is ordered by `at` (`buildTimeline`), then by Step instance (the Attempt's log index; an unsettled Attempt's Turns after every settled one), then
   category, for equal instants (A2, #98, #289), so one Step's events never interleave with the next Step's. Events are still built category by category, then sorted,
   so a later Attempt never moves an earlier event. ISO 8601 sorts lexicographically, so the string compare is the time compare.
+- A `run` snapshot reads Turn events once, through `turnEventsOfKinds` over the kinds the timeline shows plus `AGENT_CALL_KINDS`, and serves every
+  Agent-call lookup from that read; `turn-diff`, `tool-partial` and `thought` bodies are never read (#521).
 - Each event's `step` and each Session's plain name come from stored Attempt ids (`attemptStepId`, `attemptIteration`, #289): a Session whose recorded name
   differs from its Step's authored one was scoped to an Attempt, so it reads "<authored>, iteration <n>". Nothing new is persisted.
 - `run-progress.ts` owns Run progress (#384): each Attempt counts for its Step and Iteration (`attemptStepId`/`attemptIteration`), never as another group's

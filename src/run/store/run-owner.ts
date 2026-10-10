@@ -61,6 +61,7 @@ import {
   readTranscriptPage,
   readTurnEvents,
   readTurnEventsAt,
+  readTurnEventsOfKinds,
   readTurns,
   settleAbandonedTurns,
   settleTurn,
@@ -1259,8 +1260,8 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     turnEvents() {
       return readTurnEvents(db);
     },
-    turnEventsOf(turnId) {
-      return readTurnEvents(db, { turnId });
+    turnEventsOfKinds(kinds, turnId) {
+      return readTurnEventsOfKinds(db, kinds, turnId);
     },
     harnessSessions() {
       return readHarnessSessions(db);
