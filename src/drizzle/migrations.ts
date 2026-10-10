@@ -20,6 +20,7 @@ import runCanonicalConversation from "./run/20261006104519_canonical_conversatio
 import type { MigrationsJournal } from "drizzle-orm/migrator";
 import runTurnKindIndex from "./run/20261009014409_chemical_sugar_man/migration.sql" with { type: "text" };
 import runRestingCause from "./run/20261010132540_resting_cause/migration.sql" with { type: "text" };
+import runFailureEvidence from "./run/20261010151020_tricky_bastion/migration.sql" with { type: "text" };
 
 // A migration's journal `name` and `timestamp` are the two load-bearing fields
 // drizzle applies by: the migrator dedupes on `name` and orders by `timestamp`.
@@ -89,4 +90,5 @@ export const runMigrations: MigrationsJournal = [
   ),
   journalEntry("20261009014409_chemical_sugar_man", runTurnKindIndex),
   journalEntry("20261010132540_resting_cause", runRestingCause),
+  journalEntry("20261010151020_tricky_bastion", runFailureEvidence),
 ];

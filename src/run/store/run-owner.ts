@@ -30,6 +30,7 @@ import {
   attemptLog,
   attempts,
   gateAnswers,
+  failureEvidence,
   materializationConflicts,
   pendingGates,
   runOwner,
@@ -151,6 +152,25 @@ const attemptOutcome = z.enum([
   "cancelled",
 ]);
 const gateAnswer = z.enum(["continue", "stop"]);
+const failureEvidenceRow = z.object({
+  evidence_id: z.string(),
+  attempt_id: z.string(),
+  turn_id: z.string().nullable(),
+  source: z.string(),
+  code: z.string(),
+  phase: z.string().nullable(),
+  category: z.string().nullable(),
+  possible_effects: z.string(),
+  native_code: z.string().nullable(),
+  details: z.string().nullable(),
+  diagnostic_id: z.string().nullable(),
+  at: z.string(),
+});
+const failureDetails = z.record(
+  z.string(),
+  z.union([z.string(), z.number().finite(), z.boolean(), z.null()]),
+);
+
 const attemptRow = z.object({
   outcome: attemptOutcome,
   version_id: z.string().nullable(),
@@ -682,6 +702,36 @@ function commitAttempt(params: TCommitAttemptParams): void {
       ended_by: params.request.endedBy ?? null,
     })
     .run();
+  const failure = params.request.failureEvidence;
+  if (failure !== undefined) {
+    const details =
+      failure.details === undefined
+        ? null
+        : JSON.stringify(failureDetails.parse(failure.details));
+    if (
+      details !== null &&
+      new TextEncoder().encode(details).byteLength > 4096
+    ) {
+      throw new Error("Failure evidence details exceed the 4096-byte limit.");
+    }
+    params.db
+      .insert(failureEvidence)
+      .values({
+        evidence_id: randomUUID(),
+        attempt_id: params.request.attemptId,
+        turn_id: failure.turnId ?? null,
+        source: failure.source,
+        code: failure.code,
+        phase: failure.phase ?? null,
+        category: failure.category ?? null,
+        possible_effects: failure.possibleEffects,
+        native_code: failure.nativeCode ?? null,
+        details,
+        diagnostic_id: null,
+        at,
+      })
+      .run();
+  }
   if (params.request.advanceState !== undefined) {
     updateRunState({
       db: params.db,
@@ -1050,6 +1100,34 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
     },
     readArtifact(versionId, name) {
       return repo.read(versionId, name);
+    },
+    failureEvidence() {
+      return db
+        .select()
+        .from(failureEvidence)
+        .orderBy(asc(failureEvidence.at))
+        .all()
+        .map((raw) => {
+          const row = failureEvidenceRow.parse(raw);
+          return {
+            evidenceId: row.evidence_id,
+            attemptId: row.attempt_id,
+            source: row.source,
+            code: row.code,
+            possibleEffects: row.possible_effects,
+            at: row.at,
+            ...(row.turn_id === null ? {} : { turnId: row.turn_id }),
+            ...(row.phase === null ? {} : { phase: row.phase }),
+            ...(row.category === null ? {} : { category: row.category }),
+            ...(row.native_code === null
+              ? {}
+              : { nativeCode: row.native_code }),
+            ...(row.details === null ? {} : { details: row.details }),
+            ...(row.diagnostic_id === null
+              ? {}
+              : { diagnosticId: row.diagnostic_id }),
+          };
+        });
     },
     attemptLog() {
       return readAttemptLog(db);

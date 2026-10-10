@@ -6,7 +6,11 @@ import type { RunRestingCauseView } from "./projection-port.js";
 // narrows it tolerantly and derives the plain words clients show, so no
 // wording is ever stored.
 
-const MAY_HAVE_CHANGED_FILES = "It may have changed files before it stopped.";
+export const MAY_HAVE_CHANGED_FILES =
+  "It may have changed files before it stopped.";
+
+export const UNKNOWN_FAILURE_EXPLANATION =
+  "This Step failed for unknown reasons.";
 
 type KnownCode = Exclude<RunRestingCauseView["code"], "unknown">;
 
@@ -28,7 +32,7 @@ const KNOWN: Readonly<
 
 const UNKNOWN: RunRestingCauseView = {
   code: "unknown",
-  explanation: "This Step failed for unknown reasons.",
+  explanation: UNKNOWN_FAILURE_EXPLANATION,
   nextStep: "Resume the Run to try again, or delete it.",
 };
 

@@ -1,3 +1,4 @@
+import { latestAttemptFailure } from "./run-timeline-rows.js";
 import { useRenderer } from "@opentui/solid";
 import { TextAttributes } from "@opentui/core";
 import {
@@ -767,6 +768,23 @@ export function RunWorkbench(props: {
       type: "diagnostic",
     }).found;
   });
+  const attemptDiagnosticId = createMemo(() => {
+    const current = run();
+    return current === undefined
+      ? undefined
+      : latestAttemptFailure(current)?.diagnostic?.diagnosticId;
+  });
+  const attemptDiagnosticExpired = createMemo(() => {
+    const diagnosticId = attemptDiagnosticId();
+    return (
+      diagnosticId !== undefined &&
+      !view.readResource({
+        runId: props.runId,
+        diagnosticId,
+        type: "diagnostic",
+      }).found
+    );
+  });
   // The evidence the details panel offers, in a stable order: bound outputs,
   // then a blocked checkpoint's latest Verdict, a halt or failure diagnostic, and
   // transcript.
@@ -799,6 +817,18 @@ export function RunWorkbench(props: {
       list.push({
         label: `failure diagnostic: ${current.restingCause.code}`,
         reference: current.restingCause.diagnostic,
+      });
+    }
+    const failure = latestAttemptFailure(current);
+    if (
+      failure?.diagnostic !== undefined &&
+      !attemptDiagnosticExpired() &&
+      failure.diagnostic.diagnosticId !==
+        current.restingCause?.diagnostic?.diagnosticId
+    ) {
+      list.push({
+        label: `failure diagnostic: ${failure.code}`,
+        reference: failure.diagnostic,
       });
     }
     list.push(...transcriptTargets());
@@ -1167,6 +1197,7 @@ export function RunWorkbench(props: {
       focused: focus() === "details",
       openables: openables(),
       diagnosticExpired: restingDiagnosticExpired(),
+      failureDiagnosticExpired: attemptDiagnosticExpired(),
       selected: selectedRef(),
       resumeAcknowledgement:
         resume?.available === true ? resume.acknowledgement : undefined,
@@ -1929,6 +1960,7 @@ export function RunWorkbench(props: {
                           value={line().value}
                           event={line().event}
                           humanPanel={line().humanPanel}
+                          failurePanel={line().failurePanel}
                           width={innerW()}
                           onMouseDown={() => history.click(index)}
                         />

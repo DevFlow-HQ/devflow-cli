@@ -18,6 +18,7 @@ import {
 import { openAgentAttemptTurn, waitingAgentTurn } from "../store/store.js";
 import type {
   AgentAttemptEvidence,
+  FailureEvidenceRequest,
   CandidateOutput,
   HarnessIdentityRecord,
   OutputReceiptDirectoryResult,
@@ -223,6 +224,7 @@ export interface StepAttempt {
    *  interactive-agent Step's synthetic Attempt (#122), which records neither identity
    *  nor effective model — the same scope as `effectiveModel`. */
   readonly harnessIdentity?: HarnessIdentityRecord;
+  readonly failureEvidence?: FailureEvidenceRequest;
 }
 
 /** The human's message continuing an Agent Step's Attempt after an Interrupt
@@ -369,13 +371,34 @@ export async function runAgent(
   // A completed Turn is only a Harness boundary: the Step succeeds only when every
   // required receipt validates. A missing or invalid one fails the Attempt, which
   // moves no binding (retryable within budget, like any failed Agent Attempt).
-  // ponytail: which receipt failed and why is not recorded — a failed Attempt has
-  // no diagnostic channel yet (the Command-step spawn cause shares this gap).
   const outputs: CandidateOutput[] = [];
   for (const receipt of receipts) {
-    const content = readReceipt(receipt.path);
-    if (content === undefined) return { ...attempt, outcome: "failed" };
-    outputs.push({ name: receipt.name, type: "text", content });
+    const checked = readReceipt(receipt.path);
+    if (!checked.ok)
+      return {
+        ...attempt,
+        outcome: "failed",
+        ...(checked.code === undefined
+          ? {}
+          : {
+              failureEvidence: {
+                source: "receipt",
+                code: checked.code,
+                possibleEffects: "unknown",
+                details: {
+                  outputName: receipt.name,
+                  ...(checked.code === "receipt-too-large"
+                    ? { sizeLimit: MAX_RECEIPT_BYTES }
+                    : {}),
+                },
+              },
+            }),
+      };
+    outputs.push({
+      name: receipt.name,
+      type: "text",
+      content: checked.content,
+    });
   }
   return { ...attempt, outputs };
 }
@@ -452,28 +475,45 @@ function receiptInstruction(receipt: Receipt): string {
   return `Write the required output "${receipt.name}" as UTF-8 text to ${receipt.path} before you finish; Secant completes this Step only from that file.`;
 }
 
-/** Validate one receipt at this ingress: a regular file (not a link or directory)
- *  within the byte cap, valid UTF-8, and non-empty once trimmed. Returns the trimmed
- *  text's bytes, or undefined when the receipt is missing or invalid. The value is
- *  kept opaque — a remote reference is the agent's observation, never checked
- *  against the tracker it names. */
-function readReceipt(path: string): Uint8Array | undefined {
+/** Validate opaque output text without following a link. Unclassified I/O failures
+ *  fail the Attempt with no invented evidence code. */
+function readReceipt(
+  path: string,
+):
+  | { readonly ok: true; readonly content: Uint8Array }
+  | { readonly ok: false; readonly code?: string } {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (cause) {
+    return {
+      ok: false,
+      ...(cause instanceof Error && "code" in cause && cause.code === "ENOENT"
+        ? { code: "receipt-missing" }
+        : {}),
+    };
+  }
+  if (stat.isSymbolicLink()) return { ok: false, code: "receipt-symlink" };
+  if (!stat.isFile()) return { ok: false, code: "receipt-not-file" };
+  if (stat.size > MAX_RECEIPT_BYTES)
+    return { ok: false, code: "receipt-too-large" };
   let bytes: Uint8Array;
   try {
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.size > MAX_RECEIPT_BYTES) return undefined;
     bytes = readFileSync(path);
   } catch {
-    return undefined;
+    return { ok: false };
   }
-  if (bytes.byteLength > MAX_RECEIPT_BYTES) return undefined;
+  if (bytes.byteLength > MAX_RECEIPT_BYTES)
+    return { ok: false, code: "receipt-too-large" };
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
   } catch {
-    return undefined;
+    return { ok: false, code: "receipt-invalid-utf8" };
   }
-  return text === "" ? undefined : new TextEncoder().encode(text);
+  return text === ""
+    ? { ok: false, code: "receipt-blank" }
+    : { ok: true, content: new TextEncoder().encode(text) };
 }
 
 /** What the named Session's last recorded availability says about how the next Turn
@@ -1473,7 +1513,10 @@ function resultAvailability(
 export function attemptEvidence(
   stepKind: StepKindName,
   result: StepAttempt,
-): { readonly agentEvidence?: AgentAttemptEvidence } {
+): {
+  readonly agentEvidence?: AgentAttemptEvidence;
+  readonly failureEvidence?: FailureEvidenceRequest;
+} {
   if (stepKind !== "agent") {
     if (
       result.harnessIdentity !== undefined ||
@@ -1483,12 +1526,17 @@ export function attemptEvidence(
         `run execution: a ${stepKind} Attempt carried Agent evidence.`,
       );
     }
-    return {};
+    return result.failureEvidence === undefined
+      ? {}
+      : { failureEvidence: result.failureEvidence };
   }
   if (result.harnessIdentity === undefined) {
     throw new Error("run execution: an Agent Attempt has no Harness identity.");
   }
   return {
+    ...(result.failureEvidence === undefined
+      ? {}
+      : { failureEvidence: result.failureEvidence }),
     agentEvidence: {
       kind: "agent",
       identity: result.harnessIdentity,

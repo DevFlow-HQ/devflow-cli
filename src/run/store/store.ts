@@ -246,6 +246,31 @@ export interface CandidateOutput {
   readonly content: Uint8Array;
 }
 
+/** Small, safe facts supplied by execution. Codes remain open in the Store. */
+export interface FailureEvidenceRequest {
+  readonly source: string;
+  readonly code: string;
+  readonly turnId?: string;
+  readonly phase?: string;
+  readonly category?: string;
+  readonly possibleEffects: "none" | "partial" | "unknown";
+  readonly nativeCode?: string;
+  readonly details?: Readonly<Record<string, string | number | boolean | null>>;
+}
+
+/** Persisted evidence is narrowed by Application. Details stay opaque JSON here. */
+export interface FailureEvidenceRecord extends Omit<
+  FailureEvidenceRequest,
+  "details" | "possibleEffects"
+> {
+  readonly evidenceId: string;
+  readonly attemptId: string;
+  readonly possibleEffects: string;
+  readonly details?: string;
+  readonly diagnosticId?: string;
+  readonly at: string;
+}
+
 /** One Step Attempt's outcome and evidence. Agent evidence is one bundled value,
  *  so current writes cannot persist a model without its qualified identity. */
 export interface PublishAttemptRequest {
@@ -262,6 +287,7 @@ export interface PublishAttemptRequest {
   /** Present for autonomous Agent Attempts; absent for Command/Gate and synthetic
    *  interactive Attempts. */
   readonly agentEvidence?: AgentAttemptEvidence;
+  readonly failureEvidence?: FailureEvidenceRequest;
   /** Marks the interactive Attempt settled by a human's confirmed End Stage or by
    *  an accepted agent stage-done call applied after a clean Turn (ADR 0032). The
    *  scheduler exits its human-controlled Repeat; completion origin is recorded
@@ -624,6 +650,7 @@ export interface RunOwner {
   readArtifact(versionId: string, name: string): Uint8Array | undefined;
   /** Every Attempt outcome in append order. */
   attemptLog(): readonly AttemptLogEntry[];
+  failureEvidence(): readonly FailureEvidenceRecord[];
   /**
    * Record a Materialization conflict and rest the Run `halted` in one
    * transaction: write the diagnostic under `diagnostics/`, append the conflict

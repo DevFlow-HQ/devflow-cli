@@ -17,6 +17,7 @@ export interface TimelineRow {
   readonly text: string;
   readonly value?: SessionHistoryValue;
   readonly preview?: boolean;
+  readonly failurePanel?: true;
   readonly event?: RunTimelineEvent["event"];
   readonly at?: string;
   readonly placementRank?: number;
@@ -36,6 +37,18 @@ export interface TimelineRow {
   };
   /** Live rows have none: they carry no Step or Session of their own. */
   readonly dividers?: readonly Rule[];
+}
+
+/** The latest failed Attempt's evidence used by details until Resting causes
+ *  identify the stopping subject (#529). */
+export function latestAttemptFailure(run: RunView) {
+  return [...run.timeline]
+    .reverse()
+    .find(
+      (event) =>
+        event.event === "attempt-settled" &&
+        (event.detail === "failed" || event.detail === "indeterminate"),
+    )?.failure;
 }
 
 /** Where a Step begins: a thin rule naming the Step (#289). */
@@ -137,10 +150,13 @@ function durableTimelineRows(
       session: event.session,
       sessionName: event.sessionName,
       ...(event.event === "iteration" ? { iterationEnd: true } : {}),
+      ...(event.failure === undefined ? {} : { failurePanel: true as const }),
       text:
-        event.endedBy === "agent"
-          ? durableLabel(event)
-          : `${event.at} ${durableLabel(event)}`,
+        event.failure !== undefined
+          ? `✗ Step Attempt ${event.detail ?? "failed"}\n${event.failure.explanation}\nNext: ${event.failure.nextStep}`
+          : event.endedBy === "agent"
+            ? durableLabel(event)
+            : `${event.at} ${durableLabel(event)}`,
       ...(event.agentCall !== undefined || event.endedBy === "agent"
         ? { oneLine: true }
         : {}),

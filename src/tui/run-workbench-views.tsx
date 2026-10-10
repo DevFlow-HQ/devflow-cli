@@ -1,3 +1,4 @@
+import { latestAttemptFailure } from "./run-timeline-rows.js";
 import { TextAttributes, type TextareaRenderable } from "@opentui/core";
 import {
   batch,
@@ -478,6 +479,7 @@ export function buildDetailsRows(params: {
   readonly openables: readonly (Openable | TranscriptTarget)[];
   /** The Resting cause's diagnostic was pruned (ADR 0041). */
   readonly diagnosticExpired: boolean;
+  readonly failureDiagnosticExpired: boolean;
   readonly selected: number;
   /** Set when the resting resume offer arms an indeterminate-Command-Attempt
    *  acknowledgement (#194 story 39); surfaced as recovery evidence too. */
@@ -572,7 +574,12 @@ export function buildDetailsRows(params: {
   // cause's code and possible effects in plain phrases, its diagnostic among the
   // Resources, and a transient Problem's code.
   const cause = run.restingCause;
-  if (cause !== undefined || run.problem !== undefined) {
+  const failure = latestAttemptFailure(run);
+  if (
+    cause !== undefined ||
+    failure !== undefined ||
+    run.problem !== undefined
+  ) {
     push("  Failure:", "muted");
     if (cause !== undefined) {
       push(`  Resting cause · ${cause.code}`, restingTone(run.state));
@@ -584,6 +591,23 @@ export function buildDetailsRows(params: {
             ? "  Diagnostic · Expired after 90 days"
             : "  Diagnostic · open the failure diagnostic under Resources",
         );
+    }
+    if (failure !== undefined) {
+      push(`  Source · ${failure.source}`);
+      push(`  Code · ${failure.code}`, "error");
+      if (failure.phase !== undefined) push(`  Phase · ${failure.phase}`);
+      if (failure.category !== undefined)
+        push(`  Category · ${failure.category}`);
+      push(`  Possible effects · ${EFFECTS[failure.possibleEffects]}`);
+      if (failure.nativeCode !== undefined)
+        push(`  Native code · ${failure.nativeCode}`);
+      push(
+        failure.diagnostic === undefined
+          ? "  Diagnostic · None recorded"
+          : params.failureDiagnosticExpired
+            ? "  Diagnostic · Expired after 90 days"
+            : "  Diagnostic · open the failure diagnostic under Resources",
+      );
     }
     if (run.problem !== undefined)
       push(`  Problem · ${run.problem.code}`, "error");
@@ -911,10 +935,12 @@ export function HistoryLine(props: {
   value?: SessionHistoryValue;
   event?: RunTimelineEvent["event"];
   humanPanel: boolean;
+  failurePanel: boolean;
   width: number;
   onMouseDown: () => void;
 }) {
   const tone = () => {
+    if (props.failurePanel) return props.theme.textMuted;
     const value = props.value;
     if (value === undefined)
       return props.event === "agent-call"
@@ -963,15 +989,24 @@ export function HistoryLine(props: {
       }
       onMouseDown={props.onMouseDown}
     >
-      <Show when={props.humanPanel}>
-        <text fg={props.theme.accent} width={1} flexShrink={0} wrapMode="none">
+      <Show when={props.humanPanel || props.failurePanel}>
+        <text
+          fg={props.failurePanel ? props.theme.error : props.theme.accent}
+          width={1}
+          flexShrink={0}
+          wrapMode="none"
+        >
           {"┃"}
         </text>
       </Show>
       <text
         fg={tone()}
         bg={props.humanPanel ? props.theme.backgroundPanel : undefined}
-        width={props.humanPanel ? Math.max(1, props.width - 1) : props.width}
+        width={
+          props.humanPanel || props.failurePanel
+            ? Math.max(1, props.width - 1)
+            : props.width
+        }
         flexShrink={0}
         wrapMode="none"
       >

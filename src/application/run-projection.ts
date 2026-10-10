@@ -1,3 +1,5 @@
+import { failureView } from "./failure-evidence.js";
+import type { FailureEvidenceRecord } from "../run/store/store.js";
 import type { RunNoticeSnapshot } from "./run-notices.js";
 import { readAgentCallEvent, readTurnFact } from "../run/store/store.js";
 import { readSteerEvent, readToolCallEvent } from "../run/store/store.js";
@@ -322,6 +324,8 @@ function runResult(
           calls,
           facts.routing,
           names,
+          runId,
+          owner?.failureEvidence() ?? [],
         ),
         outputs,
         ...(derivedRun.checkpoint !== undefined
@@ -1183,6 +1187,8 @@ function buildTimeline(
   calls: AgentCallSource,
   routing: readonly RoutingNode[],
   names: ReadonlyMap<string, string>,
+  runId: string,
+  failures: readonly FailureEvidenceRecord[],
 ): RunTimelineEvent[] {
   // Each event is keyed by the Step instance it belongs to (#289): the log index of
   // its Attempt, so at an equal instant one Step's events stay together instead of
@@ -1227,6 +1233,9 @@ function buildTimeline(
       .filter((step) => step.kind === "interactive-agent")
       .map((step) => step.id),
   );
+  const attemptFailures = new Map(
+    failures.filter((e) => e.turnId === undefined).map((e) => [e.attemptId, e]),
+  );
   log.forEach((attempt, index) => {
     const stepId = attemptStepId(attempt.attemptId);
     events.push({
@@ -1241,6 +1250,14 @@ function buildTimeline(
                 ? "repeat-continued"
                 : "interactive-step-ended",
         detail: attempt.outcome,
+        ...(attempt.outcome === "failed" || attempt.outcome === "indeterminate"
+          ? {
+              failure: failureView(
+                runId,
+                attemptFailures.get(attempt.attemptId),
+              ),
+            }
+          : {}),
         ...(attempt.endedBy === "agent"
           ? {
               endedBy: "agent" as const,

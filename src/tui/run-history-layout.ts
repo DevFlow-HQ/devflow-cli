@@ -21,6 +21,7 @@ function sameContent(a: TimelineRow, b: TimelineRow): boolean {
     a.text === b.text &&
     a.contentNotice === b.contentNotice &&
     a.oneLine === b.oneLine &&
+    a.failurePanel === b.failurePanel &&
     a.value?.kind === b.value?.kind &&
     (a.value?.kind !== "message" ||
       (b.value?.kind === "message" && a.value.role === b.value.role)) &&
@@ -170,6 +171,7 @@ export function createHistoryLayout(
     readonly thoughtHeader: number;
     readonly toolHeader: number;
     readonly humanPanel: boolean;
+    readonly failurePanel: boolean;
     readonly hasDetail: boolean;
     /** First row-local line of a trailing content notice, or -1. */
     readonly noticeFrom: number;
@@ -223,7 +225,9 @@ export function createHistoryLayout(
         const humanPanel =
           row.value?.kind === "steer" ||
           (row.value?.kind === "message" && row.value.role === "user");
-        const contentWidth = humanPanel ? Math.max(1, width - 1) : width;
+        const failurePanel = row.failurePanel === true;
+        const contentWidth =
+          humanPanel || failurePanel ? Math.max(1, width - 1) : width;
         const text = rowText(
           row,
           isExpanded,
@@ -273,6 +277,7 @@ export function createHistoryLayout(
               ? prefix
               : -1,
           humanPanel,
+          failurePanel,
           hasDetail: text.hasDetail,
           noticeFrom:
             text.beforeNotice === undefined

@@ -964,6 +964,7 @@ interface RunSteerEvent {
 }
 
 export interface RunTimelineEvent {
+  readonly failure?: RunFailureView;
   /** Full elicitation evidence, separate from the bounded remediation text. */
   readonly elicitation?: {
     readonly harness: "codex" | "claude-code";
@@ -1041,6 +1042,27 @@ export interface RunConflictView {
   readonly artifactName: string;
   readonly path: string; // the declared relative Workspace path
   readonly reference: DiagnosticReference;
+}
+
+/** Failure facts narrowed at read, with wording derived for both clients. */
+export interface RunFailureView {
+  readonly source: "receipt" | "unknown";
+  readonly code:
+    | "receipt-missing"
+    | "receipt-not-file"
+    | "receipt-symlink"
+    | "receipt-too-large"
+    | "receipt-invalid-utf8"
+    | "receipt-blank"
+    | "unknown";
+  readonly phase?: string;
+  readonly category?: string;
+  readonly possibleEffects: "none" | "partial" | "unknown";
+  readonly nativeCode?: string;
+  readonly details?: Readonly<Record<string, string | number | boolean | null>>;
+  readonly explanation: string;
+  readonly nextStep: string;
+  readonly diagnostic?: DiagnosticReference;
 }
 
 /** Why a `halted` or `failed` Run rests (ADR 0041). Only the code is stored;

@@ -1,3 +1,9 @@
+import { Database } from "bun:sqlite";
+import {
+  launch,
+  receiptAgent,
+  writeBundle,
+} from "../application/agent-receipt-fixture.js";
 import assert from "node:assert/strict";
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -122,3 +128,88 @@ test("m11-headless-failure-output: run show reads an expired diagnostic as expir
   assert.match(shown.out, /\nStopped because: Secant hit an internal error/);
   assert.match(shown.out, /\nDiagnostic: expired\n/);
 });
+
+test("m11-headless-failure-output: receipt failure explains each failed Attempt and adds failure to the existing JSON event", async (t) => {
+  const { wired, runId } = await launch(
+    t,
+    receiptAgent([undefined, undefined]).adapter,
+    writeBundle("none", 1),
+  );
+  const shown = await show(wired, [runId]);
+  assert.equal(shown.code, 0);
+  const failedLines = shown.out
+    .split("\n")
+    .filter((line) => line.includes("attempt-settled failed"));
+  assert.equal(failedLines.length, 2);
+  for (const line of failedLines)
+    assert.match(
+      line,
+      /attempt-settled failed · step publish · The required output "spec-ref" was not written\. It may have changed files before it stopped\.$/,
+    );
+  assert.match(shown.out, /turn-settled agent completed · step publish/);
+  const json = await show(wired, [runId, "--json"]);
+  assert.equal(json.code, 0);
+  const run = JSON.parse(json.out).result.run;
+  const events = run.timeline.filter(
+    (event: { event: string }) => event.event === "attempt-settled",
+  );
+  assert.equal(events.length, 2);
+  for (const event of events) {
+    assert.deepEqual(Object.keys(event).sort(), [
+      "at",
+      "detail",
+      "event",
+      "failure",
+      "step",
+    ]);
+    assert.equal(event.detail, "failed");
+    assert.deepEqual(event.failure, {
+      source: "receipt",
+      code: "receipt-missing",
+      possibleEffects: "unknown",
+      details: { outputName: "spec-ref" },
+      explanation:
+        'The required output "spec-ref" was not written. It may have changed files before it stopped.',
+      nextStep: "Resume the Run to try the Step again.",
+    });
+  }
+});
+
+for (const sql of [
+  "DELETE FROM failure_evidence",
+  "UPDATE failure_evidence SET source = 'new-source'",
+  "UPDATE failure_evidence SET code = 'new-code'",
+  "UPDATE failure_evidence SET details = '{'",
+  "UPDATE failure_evidence SET possible_effects = 'new-effects'",
+]) {
+  test(`m11-headless-failure-output: unknown persisted evidence stays readable (${sql})`, async (t) => {
+    const { wired, runId, home } = await launch(
+      t,
+      receiptAgent([undefined]).adapter,
+      writeBundle("none"),
+    );
+    const roots = join(home, "runs");
+    const db = new Database(
+      join(roots, readdirSync(roots)[0]!, runId, "run.db"),
+    );
+    try {
+      db.exec(sql);
+    } finally {
+      db.close();
+    }
+    const plain = await show(wired, [runId]);
+    assert.equal(plain.code, 0);
+    assert.match(plain.out, /attempt-settled failed · step publish · /);
+    assert.match(plain.out, /It may have changed files before it stopped\./);
+    const json = await show(wired, [runId, "--json"]);
+    assert.equal(json.code, 0);
+    const failed = JSON.parse(json.out).result.run.timeline.find(
+      (e: { event: string }) => e.event === "attempt-settled",
+    );
+    assert.equal(failed.failure.possibleEffects, "unknown");
+    assert.equal(
+      failed.failure.code,
+      sql.includes("possible_effects") ? "receipt-missing" : "unknown",
+    );
+  });
+}

@@ -1,9 +1,11 @@
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
   primaryKey,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 export const runRecord = sqliteTable("run_record", {
@@ -207,4 +209,31 @@ export const turnEvents = sqliteTable(
     at: text("at").notNull(),
   },
   (table) => [index("turn_event_turn_kind").on(table.turn_id, table.kind)],
+);
+
+// Immutable evidence can precede Attempt publication, so no foreign key is used.
+export const failureEvidence = sqliteTable(
+  "failure_evidence",
+  {
+    evidence_id: text("evidence_id").primaryKey(),
+    attempt_id: text("attempt_id").notNull(),
+    turn_id: text("turn_id"),
+    source: text("source").notNull(),
+    code: text("code").notNull(),
+    phase: text("phase"),
+    category: text("category"),
+    possible_effects: text("possible_effects").notNull(),
+    native_code: text("native_code"),
+    details: text("details"),
+    diagnostic_id: text("diagnostic_id"),
+    at: text("at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("failure_evidence_turn")
+      .on(table.turn_id)
+      .where(sql`${table.turn_id} IS NOT NULL`),
+    uniqueIndex("failure_evidence_attempt")
+      .on(table.attempt_id)
+      .where(sql`${table.turn_id} IS NULL`),
+  ],
 );

@@ -257,6 +257,7 @@ export function createHistoryViewport(props: {
           value: content ? source.value : undefined,
           event: content ? source.event : undefined,
           humanPanel: content && row.humanPanel,
+          failurePanel: content && row.failurePanel,
         };
       });
     });

@@ -246,6 +246,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-followup-history-seek-cost",
   "m10-followup-prompt-completion",
   "m11-execution-fault-rest",
+  "m11-receipt-failure-evidence",
   "m11-workbench-failure-presentation",
   "m11-headless-failure-output",
 ] as const;

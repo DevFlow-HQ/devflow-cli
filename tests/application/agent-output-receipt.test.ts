@@ -1,223 +1,16 @@
-import { readRun } from "./run-test-helpers.js";
-import { storedProcess } from "../helpers/wiringDoubles.js";
-import { ownPreparations } from "../harness/preparation-double.js";
+import { Database } from "bun:sqlite";
+import { readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import test, { type TestContext } from "node:test";
+import test from "node:test";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
-import {
-  CLAUDE_CODE_EXECUTABLE_ENV,
-  type HarnessAdapter,
-  type TurnResult,
-} from "../../src/harness/harness.js";
-import type {
-  OperationOutcome,
-  RunView,
-} from "../../src/application/projection-port.js";
-
-import { fakeHarnessProfile, createFake } from "../harness/fake-adapter.js";
-
+import type { RunView } from "../../src/application/projection-port.js";
+import { storedProcess } from "../helpers/wiringDoubles.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
-import { setEnvironmentForTest } from "../helpers/environment.js";
-import { makeTempDir } from "../helpers/tempDir.js";
-import { awaitSettled } from "../helpers/settleOperation.js";
-
-// [agent-output-receipt] A generic Agent Step's required text output (#215), driven
-// end to end through the shared Projection Port over the real Application and Run
-// Store with the fake Harness Adapter. Success: the agent writes the receipt file
-// its prompt names, the reference binds as a Run output, reads back through the
-// Port, and substitutes into a later Step's prompt. Failure: a completed Turn with no
-// receipt fails the Step and the Run, while the earlier binding stays readable; a
-// receipt root the Store cannot prepare fails each Attempt before any Turn (#305).
-
+import { readRun } from "./run-test-helpers.js";
+import { launch, receiptAgent, writeBundle } from "./agent-receipt-fixture.js";
 const sharedGit = createFakeGitProcess();
-
-const COMPLETED: TurnResult = {
-  kind: "completed",
-  detail: {
-    effectiveModel: { known: false },
-    session: { state: "open" },
-  },
-};
-
-const RECEIPT_LINE =
-  /Write the required output "spec-ref" as UTF-8 text to (.+) before you finish;/;
-
-/** A fake Adapter whose Turns play the agent: Turn `n` writes `receipts[n]` to the
- *  receipt path its prompt names (nothing when undefined). Every Turn input is kept.
- *  `squatReceiptRoot` leaves a file where the granted working area's receipt root
- *  belongs, so only receipt preparation — not the area — is unusable. */
-function receiptAgent(
-  receipts: readonly (string | undefined)[],
-  options: { readonly squatReceiptRoot?: boolean } = {},
-): {
-  adapter: HarnessAdapter;
-  inputs: string[];
-} {
-  const inner = createFake({
-    profile: fakeHarnessProfile({
-      executable: "/usr/bin/claude",
-      executableVersion: "1.2.3",
-    }),
-    turns: receipts.map(() => ({ result: COMPLETED })),
-  })();
-  const inputs: string[] = [];
-  return {
-    inputs,
-    adapter: ownPreparations({
-      async prepare(prepareOptions) {
-        if (
-          options.squatReceiptRoot === true &&
-          prepareOptions.writableDirectory !== undefined
-        ) {
-          writeFileSync(
-            join(prepareOptions.writableDirectory, ".receipts"),
-            "squatter",
-          );
-        }
-        const prepared = await inner.prepare(prepareOptions);
-        if (!prepared.ok) return prepared;
-        const harness = prepared.harness;
-        return {
-          ok: true,
-          harness: {
-            profile: harness.profile,
-            readDefaults: () => harness.readDefaults(),
-            startTurn(request) {
-              const receipt = receipts[inputs.length];
-              inputs.push(request.input.text);
-              const path = RECEIPT_LINE.exec(request.input.text)?.[1];
-              if (receipt !== undefined && path !== undefined) {
-                writeFileSync(path, receipt);
-              }
-              return harness.startTurn(request);
-            },
-            close: () => harness.close(),
-          },
-        };
-      },
-    }),
-  };
-}
-
-/** publish (produces spec-ref) → then either a consumer that reads spec-ref, a
- *  second producer that republishes spec-ref, or nothing. */
-function writeBundle(
-  second: "consume" | "republish" | "none",
-  publishRetry = 0,
-): {
-  folder: string;
-  id: string;
-} {
-  const folder = makeTempDir("secant-agent-receipt-bundle-");
-  mkdirSync(join(folder, "prompts"), { recursive: true });
-  writeFileSync(join(folder, "prompts", "publish.md"), "Publish the spec.\n");
-  writeFileSync(
-    join(folder, "prompts", "tickets.md"),
-    "Slice the spec at {{artifact:spec-ref}}.\n",
-  );
-  const id = `dev.secant.agent-receipt-${second}`;
-  const manifest = {
-    formatVersion: 1,
-    bundle: {
-      id,
-      version: "1.0.0",
-      name: "Agent Receipt",
-      description: "An Agent Step publishing a required text reference.",
-    },
-    platforms: ["windows", "macos", "linux"],
-    inputs: {},
-    assets: [
-      { path: "prompts/publish.md", kind: "prompt" },
-      { path: "prompts/tickets.md", kind: "prompt" },
-    ],
-    routing: [
-      {
-        id: "publish",
-        kind: "agent",
-        retry: publishRetry,
-        session: "planning",
-        prompt: { asset: "prompts/publish.md" },
-        produces: [{ name: "spec-ref", type: "text" }],
-      },
-      ...(second === "none"
-        ? []
-        : [
-            second === "consume"
-              ? {
-                  id: "tickets",
-                  kind: "agent",
-                  retry: 0,
-                  session: "planning",
-                  requires: ["spec-ref"],
-                  prompt: { asset: "prompts/tickets.md" },
-                }
-              : {
-                  id: "republish",
-                  kind: "agent",
-                  retry: 0,
-                  session: "planning",
-                  prompt: { asset: "prompts/publish.md" },
-                  produces: [{ name: "spec-ref", type: "text" }],
-                },
-          ]),
-    ],
-  };
-  writeFileSync(
-    join(folder, "manifest.json"),
-    JSON.stringify(manifest, null, 2),
-  );
-  return { folder, id };
-}
-
-/** Wire over a fresh home, install the Bundle, approve the Workspace, launch, and
- *  wait for the launch to settle. */
-async function launch(
-  t: TestContext,
-  adapter: HarnessAdapter,
-  bundle: { folder: string; id: string },
-): Promise<{ wired: Wiring; runId: string; launched: OperationOutcome }> {
-  setEnvironmentForTest(t, { [CLAUDE_CODE_EXECUTABLE_ENV]: process.execPath });
-  const workspace = makeTempDir("secant-agent-receipt-ws-");
-  const wired = wireApplication({
-    secantHome: makeTempDir("secant-agent-receipt-home-"),
-    launchCwd: workspace,
-    process: storedProcess({ git: sharedGit }),
-    harnessAdapter: adapter,
-  });
-  t.after(() => {
-    wired.runGroup.close();
-    wired.catalog.close();
-  });
-  assert.ok(
-    wired.bundleManagement.build(bundle.folder, { noInstall: false }).ok,
-  );
-  const entry = wired.catalog.listEntries().find((e) => e.id === bundle.id);
-  assert.ok(entry);
-  assert.ok(
-    wired.projectionPort.submit({
-      operationId: "op-approve",
-      operation: "approve-workspace",
-      input: { path: workspace },
-    }).admitted,
-  );
-  const admission = wired.projectionPort.submit({
-    operationId: "op-launch",
-    operation: "launch-run",
-    input: {
-      bundle: { id: bundle.id },
-      launchInputs: {},
-      trustDigest: entry.digest,
-      harness: "claude-code",
-      requestedModel: "fake-model",
-    },
-  });
-  assert.ok(admission.admitted, JSON.stringify(admission));
-  assert.ok(admission.runId);
-  const launched = await awaitSettled(wired.projectionPort, "op-launch");
-  return { wired, runId: admission.runId, launched };
-}
 
 /** The text of the Run output `name` read back through the Port's resource read. */
 function readOutput(wired: Wiring, run: RunView, name: string): string {
@@ -315,3 +108,241 @@ test("[agent-output-receipt] a receipt root the Store cannot prepare fails each 
   // The failed Attempts ran under the qualified Harness, so its identity projects.
   assert.equal(run.harness?.name, "Claude Code");
 });
+
+const INVALID_RECEIPTS = [
+  {
+    code: "receipt-missing",
+    write: (_path: string) => {},
+    wording: "was not written",
+  },
+  {
+    code: "receipt-not-file",
+    write: (path: string) => mkdirSync(path),
+    wording: "is not a regular file",
+  },
+  {
+    code: "receipt-symlink",
+    write: (path: string) => {
+      const target = `${path}-target`;
+      writeFileSync(target, "valid text");
+      symlinkSync(target, path, "file");
+    },
+    wording: "is a symbolic link",
+  },
+  {
+    code: "receipt-too-large",
+    write: (path: string) => writeFileSync(path, "x".repeat(65537)),
+    wording: "exceeds the 65536-byte limit",
+  },
+  {
+    code: "receipt-invalid-utf8",
+    write: (path: string) => writeFileSync(path, new Uint8Array([0xff])),
+    wording: "is not valid UTF-8 text",
+  },
+  {
+    code: "receipt-blank",
+    write: (path: string) => writeFileSync(path, " \n\t"),
+    wording: "is empty",
+  },
+] as const;
+
+for (const receipt of INVALID_RECEIPTS) {
+  test(`m11-receipt-failure-evidence: ${receipt.code} survives reopen with a completed Turn`, async (t) => {
+    const { wired, home, workspace, runId } = await launch(
+      t,
+      receiptAgent([receipt.write]).adapter,
+      writeBundle("none"),
+    );
+    await wired.shutdown();
+    wired.runGroup.close();
+    wired.catalog.close();
+    const reopened = wireApplication({
+      secantHome: home,
+      launchCwd: workspace,
+      process: storedProcess({ git: sharedGit }),
+      harnessAdapter: receiptAgent([]).adapter,
+    });
+    t.after(async () => {
+      await reopened.shutdown();
+      reopened.runGroup.close();
+      reopened.catalog.close();
+    });
+    const run = readRun(reopened.projectionPort, runId);
+    assert.equal(run.state, "failed");
+    assert.deepEqual(run.outputs, []);
+    assert.deepEqual(
+      run.timeline
+        .filter((e) => e.event === "turn-settled")
+        .map((e) => e.detail),
+      ["completed"],
+    );
+    const failed = run.timeline.find((e) => e.event === "attempt-settled");
+    assert.ok(
+      failed?.failure,
+      "failed Attempt carries durable Failure evidence",
+    );
+    assert.equal(failed.failure.source, "receipt");
+    assert.equal(failed.failure.code, receipt.code);
+    assert.equal(failed.failure.possibleEffects, "unknown");
+    assert.deepEqual(
+      failed.failure.details,
+      receipt.code === "receipt-too-large"
+        ? { outputName: "spec-ref", sizeLimit: 65536 }
+        : { outputName: "spec-ref" },
+    );
+    assert.match(failed.failure.explanation, /The required output "spec-ref"/);
+    assert.ok(failed.failure.explanation.includes(receipt.wording));
+    assert.match(
+      failed.failure.explanation,
+      /It may have changed files before it stopped\./,
+    );
+    assert.equal(
+      failed.failure.nextStep,
+      "Resume the Run to try the Step again.",
+    );
+    assert.equal(failed.failure.diagnostic, undefined);
+    const owner = reopened.runGroup.acquireRun(runId);
+    assert.ok(owner);
+    try {
+      const evidence = owner.failureEvidence();
+      assert.equal(evidence.length, 1);
+      assert.equal(evidence[0]?.code, receipt.code);
+      assert.equal(evidence[0]?.turnId, undefined);
+    } finally {
+      owner.close();
+    }
+    if (receipt.code === "receipt-symlink")
+      t.diagnostic(
+        `File symlink creation succeeded on ${process.platform}; receipt-symlink persisted after reopen.`,
+      );
+  });
+}
+
+for (const damaged of [
+  {
+    name: "unknown source",
+    sql: "UPDATE failure_evidence SET source = 'future'",
+    code: "unknown",
+  },
+  {
+    name: "unknown code",
+    sql: "UPDATE failure_evidence SET code = 'future'",
+    code: "unknown",
+  },
+  {
+    name: "unknown effects",
+    sql: "UPDATE failure_evidence SET possible_effects = 'future'",
+    code: "receipt-missing",
+  },
+  {
+    name: "malformed JSON",
+    sql: "UPDATE failure_evidence SET details = '{'",
+    code: "unknown",
+  },
+  {
+    name: "non-scalar details",
+    sql: "UPDATE failure_evidence SET details = '{\"outputName\":[]}'",
+    code: "unknown",
+  },
+  {
+    name: "missing details",
+    sql: "UPDATE failure_evidence SET details = NULL",
+    code: "unknown",
+  },
+  { name: "no evidence", sql: "DELETE FROM failure_evidence", code: "unknown" },
+  {
+    name: "indeterminate with no evidence",
+    sql: "DELETE FROM failure_evidence; UPDATE attempt_log SET outcome = 'indeterminate'",
+    code: "unknown",
+  },
+] as const) {
+  test(`m11-receipt-failure-evidence: ${damaged.name} narrows tolerantly at the Projection`, async (t) => {
+    const { wired, runId, home } = await launch(
+      t,
+      receiptAgent([undefined]).adapter,
+      writeBundle("none"),
+    );
+    const roots = join(home, "runs");
+    const db = new Database(
+      join(roots, readdirSync(roots)[0]!, runId, "run.db"),
+    );
+    try {
+      db.exec(damaged.sql);
+    } finally {
+      db.close();
+    }
+    const event = readRun(wired.projectionPort, runId).timeline.find(
+      (e) => e.event === "attempt-settled",
+    );
+    assert.equal(event?.failure?.code, damaged.code);
+    assert.equal(event?.failure?.possibleEffects, "unknown");
+    if (damaged.code === "unknown")
+      assert.equal(
+        event?.failure?.explanation,
+        "This Step failed for unknown reasons. It may have changed files before it stopped.",
+      );
+  });
+}
+
+test("m11-receipt-failure-evidence: an unclassified receipt filesystem error fails without inventing a seventh code", async (t) => {
+  const { wired, runId } = await launch(
+    t,
+    receiptAgent([
+      (path) => {
+        const directory = dirname(path);
+        rmSync(directory, { recursive: true });
+        writeFileSync(directory, "not a directory");
+      },
+    ]).adapter,
+    writeBundle("none"),
+  );
+  const run = readRun(wired.projectionPort, runId);
+  assert.equal(run.state, "failed");
+  assert.deepEqual(run.outputs, []);
+  assert.equal(
+    run.timeline.find((e) => e.event === "turn-settled")?.detail,
+    "completed",
+  );
+  assert.equal(
+    run.timeline.find((e) => e.event === "attempt-settled")?.failure?.code,
+    "unknown",
+  );
+  const owner = wired.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  try {
+    assert.deepEqual(owner.failureEvidence(), []);
+  } finally {
+    owner.close();
+  }
+});
+
+for (const effect of ["none", "partial"] as const) {
+  test(`m11-receipt-failure-evidence: stored ${effect} effects control the warning without losing the receipt reason`, async (t) => {
+    const { wired, runId, home } = await launch(
+      t,
+      receiptAgent([undefined]).adapter,
+      writeBundle("none"),
+    );
+    const roots = join(home, "runs");
+    const db = new Database(
+      join(roots, readdirSync(roots)[0]!, runId, "run.db"),
+    );
+    try {
+      db.query("UPDATE failure_evidence SET possible_effects = ?").run(effect);
+    } finally {
+      db.close();
+    }
+    const failure = readRun(wired.projectionPort, runId).timeline.find(
+      (e) => e.event === "attempt-settled",
+    )?.failure;
+    assert.equal(failure?.possibleEffects, effect);
+    assert.equal(failure?.code, "receipt-missing");
+    assert.equal(
+      failure?.explanation,
+      'The required output "spec-ref" was not written.' +
+        (effect === "partial"
+          ? " It may have changed files before it stopped."
+          : ""),
+    );
+  });
+}

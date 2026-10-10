@@ -595,6 +595,12 @@ jobs:
           tests/application/materialization.test.ts
           tests/application/retained-step-shutdown.test.ts
           tests/run/store/ownership-and-recovery.test.ts
+      - name: m11-receipt-failure-evidence
+        run: >-
+          bun run test --
+          -t '^m11-receipt-failure-evidence(:|$)'
+          tests/application/agent-output-receipt.test.ts
+          tests/run/store/attempt-and-artifact-publication.test.ts
       - name: m11-workbench-failure-presentation
         run: >-
           bun run test --

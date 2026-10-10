@@ -525,7 +525,11 @@ export function renderRun(run: RunView): string {
         ? ` · ${event.agentCall.answer.outcome} · ${event.agentCall.disposition} · ${event.agentCall.reason}`
         : "";
     const line = `  ${event.at} ${event.event}${kind}${elicitation}${detail}${completion}${call}${step}`;
-    lines.push(line);
+    lines.push(
+      event.failure === undefined
+        ? line
+        : `${line} · ${event.failure.explanation}`,
+    );
   }
 
   if (run.conflict !== undefined) {

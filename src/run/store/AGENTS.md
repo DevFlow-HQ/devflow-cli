@@ -64,6 +64,9 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - The Resting cause (ADR 0041, #528) lives on `run_record`'s nullable `resting_cause_*` columns. `writeState`'s optional cause is written in the state's
   transaction, and every state write sets or clears it, so a resumed Run loses its old cause; only `halted` and `failed` may carry one. The code is stored
   as given, never branched on here; the Projection narrows it at read (`resting-cause.ts`). Details and the Failure evidence pointer have no writer yet.
+- `failure_evidence` (ADR 0041, #529) records immutable Failure evidence in Attempt publication's guarded transaction. Partial unique indexes
+  allow one row per Turn and one per Attempt without a Turn, even before Attempt publication. Scalar JSON details are bounded to 4 KiB.
+  Source, code and effects stay open strings; `failureEvidence()` reads them as given and Application narrows unknown codes and malformed details.
 - Every Detailed diagnostic goes through the private `diagnostics.ts` writer inside the guarded transaction, after the epoch check and before the row
   that references it, so a fenced owner writes no file and a rollback leaves only an orphan for the prune. Its cause passes through `translateCause`.
 - Closed Store policy columns (`attempt_log.outcome`, `gate_answer.answer`, `pending_gate.shape`) validate at read ingress with `z.enum`.

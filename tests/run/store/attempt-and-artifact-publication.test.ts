@@ -828,3 +828,101 @@ test("m12-audit-working-area-boundary: an Attempt's output receipt directory is 
   );
   assert.ok(!existsSync(first));
 });
+
+test("m11-receipt-failure-evidence: publication stores immutable evidence atomically, persists it, and fences stale owners", async (t) => {
+  const home = makeTempDir("secant-failure-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-evidence");
+  assert.equal(created.outcome, "created");
+  if (created.outcome !== "created") return;
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  const request = {
+    attemptId: "a1",
+    outcome: "failed" as const,
+    required: [],
+    outputs: [],
+    at: AT,
+    failureEvidence: {
+      source: "receipt",
+      code: "receipt-missing",
+      possibleEffects: "unknown" as const,
+      details: { outputName: "spec-ref" },
+    },
+  };
+  assert.ok(owner.publishAttempt(request).ok);
+  const first = owner.failureEvidence();
+  assert.equal(first.length, 1);
+  assert.equal(first[0]?.attemptId, "a1");
+  assert.equal(first[0]?.details, '{"outputName":"spec-ref"}');
+  assert.ok(
+    owner.publishAttempt({
+      ...request,
+      failureEvidence: { ...request.failureEvidence, code: "other" },
+    }).ok,
+  );
+  assert.deepEqual(owner.failureEvidence(), first);
+  owner.close();
+  const reopened = group.acquireRun(created.runId);
+  assert.ok(reopened);
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.failureEvidence(), first);
+  assert.throws(
+    () =>
+      reopened.publishAttempt({
+        ...request,
+        attemptId: "too-big",
+        failureEvidence: {
+          ...request.failureEvidence,
+          details: { outputName: "x".repeat(4096) },
+        },
+      }),
+    /4096-byte limit/,
+  );
+  assert.deepEqual(
+    reopened.attemptLog().map((e) => e.attemptId),
+    ["a1"],
+  );
+  assert.deepEqual(reopened.failureEvidence(), first);
+  const successor = group.acquireRun(created.runId);
+  assert.ok(successor);
+  t.after(() => successor.close());
+  assert.equal(
+    reopened.publishAttempt({ ...request, attemptId: "fenced" }).ok,
+    false,
+  );
+  assert.deepEqual(successor.failureEvidence(), first);
+});
+
+test("m11-receipt-failure-evidence: the database rejects duplicate subjects but permits evidence before Attempt publication", (t) => {
+  const home = makeTempDir("secant-evidence-index-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-index");
+  assert.equal(created.outcome, "created");
+  if (created.outcome !== "created") return;
+  const db = new Database(join(groupDirOf(home), created.runId, "run.db"));
+  try {
+    const insert = db.prepare(
+      "INSERT INTO failure_evidence (evidence_id, attempt_id, turn_id, source, code, possible_effects, at) VALUES (?, ?, ?, 'receipt', 'receipt-missing', 'unknown', ?)",
+    );
+    insert.run("e1", "unpublished", null, AT.toISOString());
+    assert.throws(
+      () => insert.run("e2", "unpublished", null, AT.toISOString()),
+      /UNIQUE constraint/,
+    );
+    insert.run("e3", "unpublished", "t1", AT.toISOString());
+    assert.throws(
+      () => insert.run("e4", "another", "t1", AT.toISOString()),
+      /UNIQUE constraint/,
+    );
+    insert.run("e5", "unpublished", "t2", AT.toISOString());
+    assert.deepEqual(
+      db.query("SELECT count(*) AS n FROM failure_evidence").get(),
+      { n: 3 },
+    );
+  } finally {
+    db.close();
+  }
+});
