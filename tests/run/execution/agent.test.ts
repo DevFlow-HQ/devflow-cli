@@ -780,6 +780,125 @@ test("a second Interrupt holds the Step again, and a lost follow-up halts (#354)
   );
 });
 
+// A crash mid-follow-up leaves the human Turn `lost` inside the still-open Attempt.
+// Resume repeats that Turn as it was — the human's text, human origin, the Attempt's
+// receipts kept — never the Bundle prompt in the human's place (#492).
+test("a resume after a crash mid-follow-up re-sends the human's text verbatim as a human Turn of the same Attempt (#492)", async (t) => {
+  const home = makeTempDir("secant-agent-home-");
+  const workspace = makeTempDir("secant-agent-workspace-");
+  const assets = promptAssets(workspace, "Do the work.\n");
+  const step = agentStep({
+    session: "fresh",
+    produces: [{ name: "summary", type: "text" }],
+  });
+  const walk = (
+    owner: RunOwner,
+    prepared: PreparedHarness,
+    extra: Partial<Pick<ExecutionDeps, "followUp" | "observe">> = {},
+  ) =>
+    executeRouting([step], {
+      owner,
+      platform: HOST,
+      resolveAsset: assets.resolveAsset,
+      now: () => AT,
+      process: executionProcess,
+      inputTypes: {},
+      harness: {
+        prepared,
+        inputRules: [],
+        assetKinds: { "prompt.md": "prompt" },
+      },
+      ...extra,
+    });
+
+  const crashedGroup = openRunGroup(home, workspace);
+  const created = crashedGroup.createRun({
+    operationId: "op-1",
+    bundleSnapshotDigest: "sha256:agent",
+    launch: {},
+    at: AT,
+  });
+  assert.equal(created.outcome, "created");
+  if (created.outcome !== "created") throw new Error("unreachable");
+  const crashedOwner = crashedGroup.acquireRun(created.runId);
+  assert.ok(crashedOwner);
+  const crashedRequests: TurnRequest[] = [];
+  const crashedFake = await preparedHarness(
+    fakeHarnessProfile(PROFILE_OVERRIDES),
+    [
+      { result: RESULT_CASES.interrupted.result },
+      { block: true, result: RESULT_CASES.completed.result },
+    ],
+  );
+  const crashed: PreparedHarness = {
+    profile: crashedFake.profile,
+    readDefaults: () => crashedFake.readDefaults(),
+    startTurn(request) {
+      crashedRequests.push(request);
+      // The agent wrote its receipt during the interrupted Turn.
+      if (crashedRequests.length === 1) {
+        writeFileSync(receiptPath(request, "summary"), "done");
+      }
+      return crashedFake.startTurn(request);
+    },
+    close: () => crashedFake.close(),
+  };
+  assert.deepEqual(await walk(crashedOwner, crashed), { outcome: "blocked" });
+
+  // The follow-up is admitted, then the process dies mid-Turn: the Turn blocks, is
+  // never settled, and the group closes without ending the Run.
+  let admitted: () => void = () => undefined;
+  const followUpAdmission = new Promise<void>((resolve) => {
+    admitted = resolve;
+  });
+  void walk(crashedOwner, crashed, {
+    followUp: { turnId: "0.0:agent#turn-1", text: FOLLOW_UP_TEXT },
+    observe: (event) => {
+      if (event.kind === "turn-start") admitted();
+    },
+  });
+  await followUpAdmission;
+  crashedOwner.close();
+  crashedGroup.close();
+
+  const group = openRunGroup(home, workspace);
+  t.after(() => group.close());
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  const abandoned = openAgentAttemptTurn(owner);
+  assert.equal(abandoned?.turnId, "0.0:agent#turn-2");
+  assert.equal(abandoned.origin, "human");
+  assert.equal(abandoned.resultKind, "lost");
+  // Lost is not waiting: resume runs the Turn again rather than ask the human.
+  assert.equal(waitingAgentTurn(owner), undefined);
+
+  const { prepared, requests } = await recordingHarness(t, [
+    { result: RESULT_CASES.completed.result },
+  ]);
+  const report = await walk(owner, prepared);
+
+  assert.deepEqual(report, { outcome: "succeeded" });
+  // The human's text verbatim, with no receipt lines, in the Attempt's own Session.
+  assert.equal(requests[0]?.input.text, FOLLOW_UP_TEXT);
+  assert.equal(requests[0]?.origin, "human");
+  assert.equal(requests[0]?.session, "fresh-0.0:agent");
+  assert.deepEqual(turnRows(owner), [
+    ["0.0:agent#turn-1", "managed", "agent", "interrupted"],
+    ["0.0:agent#turn-2", "human", "agent", "lost"],
+    ["0.0:agent#turn-3", "human", "agent", "completed"],
+  ]);
+  assert.equal(owner.attemptLog().at(-1)?.attemptId, "0.0:agent");
+  assert.equal(owner.attemptLog().at(-1)?.outcome, "succeeded");
+  // The receipt written before the crash still validates: the directory was kept.
+  const version = owner.currentVersion("summary");
+  assert.ok(version !== undefined);
+  assert.equal(
+    new TextDecoder().decode(owner.readArtifact(version, "summary")),
+    "done",
+  );
+});
+
 test("a process signal stopping an Agent Turn still cancels the Attempt and halts (#354, ADR 0019)", async (t) => {
   const f = fixture(t);
   const controller = new AbortController();

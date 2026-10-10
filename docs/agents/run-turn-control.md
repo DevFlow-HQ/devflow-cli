@@ -48,3 +48,5 @@ Read before changing Application Turn interrupt, Steer, live Model choice change
   the detached Session. Crash recovery uses the same rule, and the halted Repeat-boundary Projection still names the interrupted Agent Step.
 - An interrupted Interactive or Entry Turn stays `blocked` across close, like any ordinary interactive wait: its next Turn already resumes the Session.
   Gates and checkpoints also retain their blocked rests. A follow-up live at close follows the existing signal-stop rule, cancelling its Attempt and halting.
+- A crash during a follow-up is not a wait: reconciliation halts the Run with the human Turn `lost` in the still-open Attempt, and resume re-sends that
+  Turn's stored text verbatim as a human-origin Turn of the same Attempt, never the Bundle prompt (#492). An orderly close's case is #537.

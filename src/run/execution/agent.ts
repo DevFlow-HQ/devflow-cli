@@ -15,7 +15,7 @@ import {
   type RoutingNode,
   type Step,
 } from "../../workflow/workflow.js";
-import { waitingAgentTurn } from "../store/store.js";
+import { openAgentAttemptTurn, waitingAgentTurn } from "../store/store.js";
 import type {
   AgentAttemptEvidence,
   CandidateOutput,
@@ -267,7 +267,9 @@ const AWAITS_FOLLOW_UP: HumanTurnPause = { pause: true, awaitsHumanTurn: true };
  * the Step pauses for the human. A later walk re-minting that Attempt sends the
  * human's follow-up verbatim as a human-origin Turn of it, keeping its receipts, and
  * the Attempt takes its outcome from that Turn; without the matching follow-up it
- * pauses again rather than re-send the prompt.
+ * pauses again rather than re-send the prompt. A crash mid-follow-up leaves that
+ * human Turn `lost` in the still-open Attempt, so resume repeats it as it was —
+ * the human's text, human origin — never the prompt in its place (#492).
  */
 export async function runAgent(
   step: AgentStep,
@@ -292,10 +294,11 @@ export async function runAgent(
   if (waiting?.attemptId === attemptId && followUp === undefined) {
     return AWAITS_FOLLOW_UP;
   }
+  const humanText = followUp?.text ?? lostFollowUpText(owner, attemptId);
   const rendered =
-    followUp === undefined
+    humanText === undefined
       ? renderAgentPrompt(step, context, harness)
-      : ({ ok: true, prompt: followUp.text } as const);
+      : ({ ok: true, prompt: humanText } as const);
   if (!rendered.ok) {
     return mapTurnResult(rendered.result, harness.prepared.profile);
   }
@@ -324,7 +327,7 @@ export async function runAgent(
   // failure admits and sends no Turn. A follow-up keeps the Attempt's directory: the
   // receipt lines went into its first Turn, and the agent may have written there.
   const prepared = prepareReceipts(step, owner, attemptId, {
-    keep: followUp !== undefined,
+    keep: humanText !== undefined,
   });
   if (!prepared.ok) {
     return mapTurnResult(
@@ -336,7 +339,7 @@ export async function runAgent(
   // The human's text is the Turn's input verbatim; only the prompt carries the
   // receipt lines.
   const input =
-    followUp !== undefined || receipts.length === 0
+    humanText !== undefined || receipts.length === 0
       ? rendered.prompt
       : `${rendered.prompt}\n\n${receipts.map(receiptInstruction).join("\n")}`;
 
@@ -344,7 +347,7 @@ export async function runAgent(
     routing: context.routing,
     step,
     session,
-    origin: followUp !== undefined ? "human" : "managed",
+    origin: humanText !== undefined ? "human" : "managed",
     kind: "agent",
     attemptId,
     turnId,
@@ -396,6 +399,20 @@ function nextAgentTurnId(
   attemptId: string,
 ): string {
   return `${attemptId}#turn-${attemptTurns(owner, attemptId).length + 1}`;
+}
+
+/** The input of the open Attempt's latest Turn when a crash left a human follow-up
+ *  `lost` in it (#492), so resume repeats that Turn rather than send the prompt. */
+function lostFollowUpText(
+  owner: Pick<RunOwner, "turns" | "attemptLog">,
+  attemptId: string,
+): string | undefined {
+  const open = openAgentAttemptTurn(owner);
+  return open?.attemptId === attemptId &&
+    open.origin === "human" &&
+    open.resultKind === "lost"
+    ? open.input
+    : undefined;
 }
 
 // --- Required text output receipts (#215) ----------------------------------

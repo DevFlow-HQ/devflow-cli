@@ -46,6 +46,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   A re-walk re-minting that Attempt sends `ExecutionDeps.followUp` verbatim as an `agent`,
   `human`-origin `#turn-<n>` only while its `turnId` is still that latest Turn; otherwise it pauses again and never re-sends the prompt. The follow-up
   keeps the Attempt's receipt directory, adds no receipt lines, and its Turn gives the Attempt its outcome. A signal still cancels the Attempt and halts.
+  A crash mid-follow-up leaves that human Turn `lost` in the open Attempt, which is not waiting: resume repeats its stored input as a `human` Turn the
+  same way, never the prompt in its place (`lostFollowUpText`, #492); only the Attempt's own `lost` autonomous Turn re-sends the prompt (#352).
 - An interactive-agent Step's Entry Turn (`entryTurn`) is due only while no Turn of its Attempt was admitted, so no later walk re-sends it; none publishes
   an Attempt; Application settles human controls and clean Agent calls (#212, #372). `interactiveTurnRest` decides the rest of Entry and human Turns (#353): an
   Interrupt waits `blocked`, a `lost` Turn halts. A signal also settles a live Turn `interrupted` without throwing, so the aborted signal, not the result
