@@ -611,6 +611,13 @@ jobs:
           bun run test --
           -t '^m11-headless-failure-output(:|$)'
           tests/headless/failure-output.test.ts
+      - name: m11-old-and-unknown-evidence
+        run: >-
+          bun run test --
+          -t '^m11-old-and-unknown-evidence(:|$)'
+          tests/headless/previous-release-failure-evidence.test.ts
+          tests/run/store/failure-evidence-migration.test.ts
+          tests/tui/run-workbench-previous-release.test.tsx
       - name: M10 runtime failure regressions
         run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test

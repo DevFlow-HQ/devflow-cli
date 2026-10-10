@@ -1,19 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  cpSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  renameSync,
-} from "node:fs";
-import { basename, join } from "node:path";
+import { cpSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { z } from "zod";
 import { createProcessAdapter } from "../../src/process/process.js";
 import { openRunGroup } from "../../src/run/store/store.js";
+import { relocateRunGroup } from "./relocate.js";
 
 const fixture = new URL(
   "../../tests/fixtures/previous-release-conversation/",
@@ -40,17 +33,7 @@ export function conversationConsumer(
   function relocated(name: string) {
     const home = join(root, name);
     cpSync(fixture, home, { recursive: true });
-    const runs = join(home, "runs");
-    const [old] = readdirSync(runs);
-    assert.ok(old);
-    const slug = basename(cwd)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40);
-    const digest = createHash("sha256").update(cwd).digest("hex").slice(0, 16);
-    const group = join(runs, `${slug || "workspace"}--${digest}`);
-    renameSync(join(runs, old), group);
+    const group = relocateRunGroup(home, cwd);
     const path = join(group, expected.runId, "run.db");
     const db = new Database(path);
     try {

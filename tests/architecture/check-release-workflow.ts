@@ -249,6 +249,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m11-receipt-failure-evidence",
   "m11-workbench-failure-presentation",
   "m11-headless-failure-output",
+  "m11-old-and-unknown-evidence",
 ] as const;
 
 function testFilesIn(script: string): string[] {

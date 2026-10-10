@@ -1,6 +1,5 @@
 import { embeddedRipgrepConsumer } from "./package-smoke/workspace-paths.js";
 import { spawn, spawnSync, type SpawnSyncOptions } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -15,7 +14,6 @@ import {
   mkdir,
   mkdtemp,
   readdir,
-  rename,
   rm,
   utimes,
   writeFile,
@@ -44,6 +42,8 @@ import { seedTestRepairWorkspace } from "../tests/helpers/testRepairWorkspace.js
 import { readArchiveEntries } from "../tests/helpers/zip.js";
 import { runNamedScenario, withCleanup } from "./package-smoke/scenario.js";
 import { conversationConsumer } from "./package-smoke/conversation.js";
+import { failureEvidenceConsumer } from "./package-smoke/failure-evidence.js";
+import { relocateRunGroup } from "./package-smoke/relocate.js";
 import { settingsConsumer } from "./package-smoke/settings.js";
 import { posixExitedRootAcceptance } from "./package-smoke/posix-exited-root.js";
 
@@ -376,26 +376,7 @@ await withCleanup(
       const legacyWorkspace = join(smokeRoot, "pre-drizzle-workspace");
       await mkdir(legacyWorkspace, { recursive: true });
       const canonicalLegacyWorkspace = realpathSync.native(legacyWorkspace);
-      const runsRoot = join(legacyHome, "runs");
-      const [fixtureGroup] = await readdir(runsRoot);
-      if (fixtureGroup === undefined) {
-        throw new Error("The pre-Drizzle fixture has no Run group.");
-      }
-      const slug = basename(canonicalLegacyWorkspace)
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 40);
-      const digest = createHash("sha256")
-        .update(canonicalLegacyWorkspace)
-        .digest("hex")
-        .slice(0, 16);
-      const relocatedGroup = `${slug || "workspace"}--${digest}`;
-      await rename(
-        join(runsRoot, fixtureGroup),
-        join(runsRoot, relocatedGroup),
-      );
-      const groupDir = join(runsRoot, relocatedGroup);
+      const groupDir = relocateRunGroup(legacyHome, canonicalLegacyWorkspace);
       const [runId] = (await readdir(groupDir)).filter(
         (entry) => entry !== "coordination.db",
       );
@@ -444,6 +425,10 @@ await withCleanup(
 
     await runNamedScenario("m10-previous-release-conversation", async () =>
       conversationConsumer(binary, smokeRoot, workspaceEnv),
+    );
+
+    await runNamedScenario("m11-old-and-unknown-evidence", async () =>
+      failureEvidenceConsumer(binary, smokeRoot, workspaceEnv),
     );
 
     async function workspaceCatalogScenario(): Promise<string> {

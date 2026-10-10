@@ -1,0 +1,37 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { buildBundle } from "./src/bundle/bundle.ts";
+import { openCatalog } from "./src/catalog/catalog.ts";
+import { createProcessAdapter } from "./src/process/process.ts";
+import { openRunGroup } from "./src/run/store/store.ts";
+const home = process.env.FIXTURE_HOME;
+if (home === undefined) throw new Error("FIXTURE_HOME is required");
+const folder = `${home}-bundle`;
+mkdirSync(folder, { recursive: true });
+const command = (id: string) => ({ executable: "bun", arguments: ["-e", `console.log("${id}")`] });
+writeFileSync(join(folder, "manifest.json"), JSON.stringify({ formatVersion: 1, bundle: { id: "dev.secant.failure-evidence-fixture", version: "1.0.0", name: "Failure evidence fixture", description: "Frozen predecessor failures" }, platforms: ["linux", "macos", "windows"], inputs: {}, assets: [], routing: [{ id: "prepare", kind: "command", produces: [{ name: "prepare-log", type: "text" }], command: command("prepare") }, { id: "build", kind: "command", retry: 1, produces: [{ name: "build-log", type: "text" }], command: command("build") }] }));
+const built = buildBundle(folder, []);
+if (!built.ok) throw new Error(JSON.stringify(built));
+const catalog = openCatalog(home);
+catalog.installBundle({ identity: { id: "dev.secant.failure-evidence-fixture", version: "1.0.0" }, digest: built.built.digest, bytes: built.built.bytes, origin: { kind: "local-build", folder }, installedAt: new Date("2026-10-09T00:00:00.000Z") });
+catalog.close();
+const group = openRunGroup(home, "/fixture/failure-evidence", { process: createProcessAdapter() });
+const runs = [];
+// The halted Run ends on an indeterminate Attempt; the failed Run exhausts its retry.
+for (const [index, rest] of (["halted", "failed"] as const).entries()) {
+  const at = (second: number) => new Date(Date.UTC(2026, 9, 9, index, 0, second));
+  const created = group.createRun({ operationId: `fixture-${rest}`, bundleSnapshotDigest: built.built.digest, launch: {}, at: at(0) });
+  const owner = group.acquireRun(created.runId);
+  if (owner === undefined) throw new Error(`cannot own ${rest}`);
+  owner.writeState("running");
+  owner.publishAttempt({ attemptId: "0.0:prepare", outcome: "succeeded", required: [{ name: "prepare-log", type: "text" }], outputs: [{ name: "prepare-log", type: "text", content: `${rest} retained artifact` }], at: at(1) });
+  owner.publishAttempt({ attemptId: "0.0:build", outcome: "failed", required: [{ name: "build-log", type: "text" }], outputs: [], at: at(2) });
+  owner.publishAttempt({ attemptId: "0.1:build", outcome: rest === "halted" ? "indeterminate" : "failed", required: [{ name: "build-log", type: "text" }], outputs: [], at: at(3), advanceState: rest });
+  const read = group.readRun(created.runId);
+  if (!read.ok) throw new Error(JSON.stringify(read));
+  runs.push({ rest, runId: created.runId, state: read.run.state, createdAt: read.run.createdAt, attempts: owner.attemptLog() });
+  owner.release();
+  owner.close();
+}
+group.close();
+writeFileSync(join(home, "expected.json"), JSON.stringify({ runs }, null, 2) + "\n");

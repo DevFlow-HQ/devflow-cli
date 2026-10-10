@@ -1,0 +1,63 @@
+{
+  "sourceCommit": "d869a6a74c7d41db17f99c87db62f782b95246ea",
+  "workspace": "/fixture/failure-evidence",
+  "reproduction": "cp tests/fixtures/previous-release-failure-evidence/seed.txt .fixture-seed.ts; FIXTURE_HOME=/tmp/secant-536-authentic-home bun .fixture-seed.ts",
+  "redactions": [],
+  "databases": [
+    {
+      "path": "catalog.db",
+      "sha256": "8e8d94936a7838b12cf771d4cb5877fc3b5e3f7730166a3a35150282e8ec30dd",
+      "journal": ["chubby_vanisher", "high_norrin_radd"]
+    },
+    {
+      "path": "runs/failure-evidence--5da71e530c82715d/coordination.db",
+      "sha256": "50659cccb92fc107caa5cf49d3d8d1ee5702ffdd2cc3fdbda10a6896a04606b2",
+      "journal": ["yellow_forge", "white_alex_power"]
+    },
+    {
+      "path": "runs/failure-evidence--5da71e530c82715d/f3b1f6cf-3c3c-4742-99f1-307405dc1cbd/run.db",
+      "sha256": "c5eb2a6e2d74c3bb19ff03734482b36158071e08dfbb0e3b772a913ef2ea2db9",
+      "journal": [
+        "hesitant_silverclaw",
+        "mighty_vivisector",
+        "cooing_squadron_supreme",
+        "ambiguous_the_hand",
+        "easy_iceman",
+        "curvy_piledriver",
+        "sudden_black_tom",
+        "ancient_rocket_racer",
+        "superb_lily_hollister",
+        "gate_suggestions",
+        "stage_ended",
+        "turn_model_choice",
+        "run_model_choice",
+        "agent_ended",
+        "canonical_conversation",
+        "chemical_sugar_man"
+      ]
+    },
+    {
+      "path": "runs/failure-evidence--5da71e530c82715d/090aaa04-7a4f-4d35-b3f6-ee3bf7289188/run.db",
+      "sha256": "d35c144fd535ad60c777a2284e5272759458857808e0467f1c57fe48a74bcbec",
+      "journal": [
+        "hesitant_silverclaw",
+        "mighty_vivisector",
+        "cooing_squadron_supreme",
+        "ambiguous_the_hand",
+        "easy_iceman",
+        "curvy_piledriver",
+        "sudden_black_tom",
+        "ancient_rocket_racer",
+        "superb_lily_hollister",
+        "gate_suggestions",
+        "stage_ended",
+        "turn_model_choice",
+        "run_model_choice",
+        "agent_ended",
+        "canonical_conversation",
+        "chemical_sugar_man"
+      ]
+    }
+  ],
+  "mutations": "No database or canonical Artifact mutation. Unused Git sample hooks removed. Both Runs, their failed and indeterminate Attempts, their halted and failed rests and their released ownership were created through the predecessor public Bundle, Catalog and Store Interfaces."
+}

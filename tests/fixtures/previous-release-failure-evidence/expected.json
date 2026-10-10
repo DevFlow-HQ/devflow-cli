@@ -1,0 +1,50 @@
+{
+  "runs": [
+    {
+      "rest": "halted",
+      "runId": "f3b1f6cf-3c3c-4742-99f1-307405dc1cbd",
+      "state": "halted",
+      "createdAt": "2026-10-09T00:00:00.000Z",
+      "attempts": [
+        {
+          "attemptId": "0.0:prepare",
+          "outcome": "succeeded",
+          "at": "2026-10-09T00:00:01.000Z"
+        },
+        {
+          "attemptId": "0.0:build",
+          "outcome": "failed",
+          "at": "2026-10-09T00:00:02.000Z"
+        },
+        {
+          "attemptId": "0.1:build",
+          "outcome": "indeterminate",
+          "at": "2026-10-09T00:00:03.000Z"
+        }
+      ]
+    },
+    {
+      "rest": "failed",
+      "runId": "090aaa04-7a4f-4d35-b3f6-ee3bf7289188",
+      "state": "failed",
+      "createdAt": "2026-10-09T01:00:00.000Z",
+      "attempts": [
+        {
+          "attemptId": "0.0:prepare",
+          "outcome": "succeeded",
+          "at": "2026-10-09T01:00:01.000Z"
+        },
+        {
+          "attemptId": "0.0:build",
+          "outcome": "failed",
+          "at": "2026-10-09T01:00:02.000Z"
+        },
+        {
+          "attemptId": "0.1:build",
+          "outcome": "failed",
+          "at": "2026-10-09T01:00:03.000Z"
+        }
+      ]
+    }
+  ]
+}

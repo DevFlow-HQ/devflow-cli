@@ -67,6 +67,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - `failure_evidence` (ADR 0041, #529) records immutable Failure evidence in Attempt publication's guarded transaction. Partial unique indexes
   allow one row per Turn and one per Attempt without a Turn, even before Attempt publication. Scalar JSON details are bounded to 4 KiB.
   Source, code and effects stay open strings; `failureEvidence()` reads them as given and Application narrows unknown codes and malformed details.
+  Neither M11 migration backfills: a predecessor rest keeps no cause and its Attempts no evidence, so both read as unknown (#536).
 - Every Detailed diagnostic goes through the private `diagnostics.ts` writer inside the guarded transaction, after the epoch check and before the row
   that references it, so a fenced owner writes no file and a rollback leaves only an orphan for the prune. Its cause passes through `translateCause`.
 - Closed Store policy columns (`attempt_log.outcome`, `gate_answer.answer`, `pending_gate.shape`) validate at read ingress with `z.enum`.
@@ -105,7 +106,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 ## Tests
 
 - Store Interface tests are split by concern into `ownership-and-recovery.test.ts`, `attempt-and-artifact-publication.test.ts`,
-  `session-and-transcript-evidence.test.ts`, `conversation-migration.test.ts`, `materialization.test.ts`, `reconcile-turn.test.ts`, and
-  `working-area.test.ts`, with the private Artifact
+  `session-and-transcript-evidence.test.ts`, `conversation-migration.test.ts`, `failure-evidence-migration.test.ts`, `materialization.test.ts`,
+  `reconcile-turn.test.ts`, and `working-area.test.ts`, with the private Artifact
   Module's own `artifacts/artifacts.test.ts` beside them; keep every file independently runnable with explicit fixtures.
 - Contention cases inject `busyTimeoutMs` on the contending group; the production 5 s lock wait exhausts plain `bun test`'s 5 s test bound.

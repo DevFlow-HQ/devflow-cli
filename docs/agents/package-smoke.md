@@ -62,6 +62,9 @@ binary downloaded from the Linux `build` job. Every scenario below runs on Windo
 - **m10-previous-release-conversation** (#411): an authentic transcript-bearing predecessor home relocates before the copied binary migrates it.
   Two binary reopens retain authoritative empty/divergent messages and exact page/export envelopes; later Turns append normally. Store reads retain
   outcomes, gates, artifact bytes and released ownership. Orphan Turn/Session and injected rollback copies fail without losing rows or journal, then recover.
+- **m11-old-and-unknown-evidence** (#536): the authentic pre-M11 `halted` and `failed` home relocates before the copied binary migrates it. Two
+  reopens read the same `run show --json`: each rest and failed or `indeterminate` Attempt reads unknown, and `run show` prints the unknown reason.
+  `run read` returns each retained Artifact. Every journal matches its declared registry exactly; no Failure evidence, Resting cause or owner was added.
 - **workspace-materialization** (#88): a `home: workspace` text Artifact is materialized to its declared path; a middle Step modifies that copy; the
   next Step's byte-for-byte verify rests the Run `halted` with the conflict `run show` names; restoring the file and `run resume` continues it.
 - **durable-human-gate** (#85): a Repeat group blocks at its Review checkpoint under one invocation; a second invocation answers `--continue` and the
