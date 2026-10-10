@@ -20,8 +20,9 @@ export function openAgentAttemptTurn(
 }
 
 /** The Attempt-level waiting basis (#354): the open Agent Attempt's latest Turn
- *  when an Interrupt ended it. A process signal cancels its Attempt instead, and a
- *  crash leaves the Turn `lost`, so neither waits. The Run-level rest — `blocked`,
+ *  when an Interrupt ended it, or a process signal stopped a human follow-up (#537).
+ *  A signal cancels the autonomous Turn's Attempt instead, and a crash leaves the
+ *  Turn `lost`, so neither waits. The Run-level rest — `blocked`,
  *  with no gate or checkpoint — is the caller's to add. */
 export function waitingAgentTurn(
   run: Pick<RunOwner, "turns" | "attemptLog">,

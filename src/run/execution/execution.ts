@@ -309,14 +309,15 @@ interface GatePause {
 }
 /** The Step awaits the human's next Turn, with no Attempt published: an
  *  interactive-agent Step between Turns (settled later by `end-interactive-step`,
- *  #122), or an Agent Step whose Attempt an Interrupt left open, continued by the
- *  follow-up (#354). Both derive their controls rather than record a gate. */
+ *  #122), or an Agent Step whose Attempt an Interrupt or a signal-stopped follow-up
+ *  left open, continued by the next follow-up (#354, #537). Both derive their controls rather than record a gate. */
 export interface HumanTurnPause {
   readonly pause: true;
   readonly awaitsHumanTurn: true;
-  /** The authored entry Turn was lost, or a process signal stopped it (#212, ADR
-   *  0019): rest `halted` for a human resume instead of `blocked`, with no Attempt
-   *  published. An Interrupt alone returns the Step to waiting (#353). */
+  /** The authored entry Turn was lost, or a process signal stopped it or an Agent
+   *  Step's follow-up (#212, #537, ADR 0019): rest `halted` for a human resume
+   *  instead of `blocked`, with no Attempt published. An Interrupt alone returns
+   *  the Step to waiting (#353). */
   readonly halted?: true;
 }
 
@@ -861,9 +862,10 @@ async function runStepAttempts(
       // result: it is settled `indeterminate`, never retried, and rests the Run
       // `halted` in the same transaction for human resume (ADR 0019, #86). A `lost`
       // Agent Turn maps to `indeterminate` too (#116): terminal truth is unknown.
-      // A `cancelled` Attempt is an Agent Turn a process signal stopped (#116, ADR
-      // 0019): the Attempt ends `cancelled` and the Run rests `halted` for human
-      // resume, never retried. A Port Interrupt pauses above instead (#354).
+      // A `cancelled` Attempt is an autonomous Agent Turn a process signal stopped
+      // (#116, ADR 0019): the Attempt ends `cancelled` and the Run rests `halted`
+      // for human resume, never retried. A Port Interrupt, and a signal stopping a
+      // human follow-up, pause above instead (#354, #537).
       if (
         result.outcome === "indeterminate" ||
         result.outcome === "cancelled"

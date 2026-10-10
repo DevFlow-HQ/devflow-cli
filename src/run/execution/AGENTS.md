@@ -47,7 +47,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Attempt-level waiting basis shared with Store reconciliation (#355), and the walk rests `blocked`. Resume from `halted` pauses without a retry or prompt.
   A re-walk re-minting that Attempt sends `ExecutionDeps.followUp` verbatim as an `agent`,
   `human`-origin `#turn-<n>` only while its `turnId` is still that latest Turn; otherwise it pauses again and never re-sends the prompt. The follow-up
-  keeps the Attempt's receipt directory, adds no receipt lines, and its Turn gives the Attempt its outcome. A signal still cancels the Attempt and halts.
+  keeps the Attempt's receipt directory, adds no receipt lines, and its Turn gives the Attempt its outcome. A signal stopping
+  the autonomous Turn still cancels the Attempt and halts; one stopping a human Turn halts with the Attempt open, so resume waits again (#537).
   A crash mid-follow-up leaves that human Turn `lost` in the open Attempt, which is not waiting: resume repeats its stored input as a `human` Turn the
   same way, never the prompt in its place (`lostFollowUpText`, #492); only the Attempt's own `lost` autonomous Turn re-sends the prompt (#352).
 - An interactive-agent Step's Entry Turn (`entryTurn`) is due only while no Turn of its Attempt was admitted, so no later walk re-sends it; none publishes

@@ -929,6 +929,68 @@ test("a process signal stopping an Agent Turn still cancels the Attempt and halt
   assert.equal(waitingAgentTurn(f.owner), undefined);
 });
 
+test("a process signal stopping a follow-up halts with the Attempt open, and resume waits on the human rather than send the prompt (#537)", async (t) => {
+  const f = fixture(t);
+  const controller = new AbortController();
+  const { prepared, requests } = await recordingHarness(
+    t,
+    [
+      { result: RESULT_CASES.interrupted.result },
+      {
+        block: true,
+        result: RESULT_CASES.completed.result,
+        interruptResult: RESULT_CASES.interrupted.result,
+      },
+      { result: RESULT_CASES.completed.result },
+    ],
+    (_request, index) => {
+      if (index === 1) controller.abort(SIGNAL_ABORT);
+    },
+  );
+  assert.deepEqual(await walkAgent(f, agentStep(), prepared), {
+    outcome: "blocked",
+  });
+
+  assert.deepEqual(
+    await walkAgent(f, agentStep(), prepared, {
+      followUp: { turnId: "0.0:agent#turn-1", text: FOLLOW_UP_TEXT },
+      cancelSignal: controller.signal,
+    }),
+    { outcome: "halted" },
+  );
+  assert.equal(f.state(), "halted");
+  assert.deepEqual(f.owner.attemptLog(), []);
+  assert.equal(waitingAgentTurn(f.owner)?.turnId, "0.0:agent#turn-2");
+
+  // Resume carries no follow-up: it waits again, sending neither the prompt nor the
+  // stopped text, and opens no fresh Attempt.
+  assert.deepEqual(await walkAgent(f, agentStep(), prepared), {
+    outcome: "blocked",
+  });
+  assert.equal(f.state(), "blocked");
+  assert.equal(requests.length, 2);
+  assert.deepEqual(f.owner.attemptLog(), []);
+
+  assert.deepEqual(
+    await walkAgent(f, agentStep(), prepared, {
+      followUp: { turnId: "0.0:agent#turn-2", text: "the correction again" },
+    }),
+    { outcome: "succeeded" },
+  );
+  assert.equal(requests[2]?.input.text, "the correction again");
+  assert.equal(requests[2]?.origin, "human");
+  assert.equal(requests[2]?.session, requests[1]?.session);
+  assert.deepEqual(turnRows(f.owner), [
+    ["0.0:agent#turn-1", "managed", "agent", "interrupted"],
+    ["0.0:agent#turn-2", "human", "agent", "interrupted"],
+    ["0.0:agent#turn-3", "human", "agent", "completed"],
+  ]);
+  assert.deepEqual(
+    f.owner.attemptLog().map((entry) => [entry.attemptId, entry.outcome]),
+    [["0.0:agent", "succeeded"]],
+  );
+});
+
 // A Run written before #352 holds its Agent Turn under the one-per-Attempt id. A Turn
 // joining that Attempt counts the old row, never reusing its id (#352).
 test("a Turn joining an Attempt that holds a pre-change `#turn` row takes the next id (#352)", async (t) => {

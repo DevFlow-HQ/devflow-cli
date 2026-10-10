@@ -249,6 +249,13 @@ interface StepContext {
 /** An Agent Step's Attempt waits for the human's follow-up (#354). */
 const AWAITS_FOLLOW_UP: HumanTurnPause = { pause: true, awaitsHumanTurn: true };
 
+/** A process signal stopped the human's follow-up: the Run halts with the Attempt
+ *  open, so resume waits on the human's next message (#537). */
+const HALTED_FOR_FOLLOW_UP: HumanTurnPause = {
+  ...AWAITS_FOLLOW_UP,
+  halted: true,
+};
+
 // --- Agent step (a Harness Turn dispatch entry, #116) ----------------------
 
 /**
@@ -271,7 +278,9 @@ const AWAITS_FOLLOW_UP: HumanTurnPause = { pause: true, awaitsHumanTurn: true };
  * the Attempt takes its outcome from that Turn; without the matching follow-up it
  * pauses again rather than re-send the prompt. A crash mid-follow-up leaves that
  * human Turn `lost` in the still-open Attempt, so resume repeats it as it was —
- * the human's text, human origin — never the prompt in its place (#492).
+ * the human's text, human origin — never the prompt in its place (#492). A process
+ * signal stopping a human Turn halts with the Attempt open instead of cancelling it,
+ * so resume waits on the human as after an Interrupt (#537).
  */
 export async function runAgent(
   step: AgentStep,
@@ -365,6 +374,11 @@ export async function runAgent(
   });
   if (interruptWaits(result.kind, context.cancelSignal)) {
     return AWAITS_FOLLOW_UP;
+  }
+  // An `interrupted` human Turn reaching here was stopped by a process signal: halt
+  // with the Attempt open, its Turn the waiting basis as an Interrupt's (#537).
+  if (result.kind === "interrupted" && humanText !== undefined) {
+    return HALTED_FOR_FOLLOW_UP;
   }
   const attempt = mapTurnResult(result, harness.prepared.profile);
   if (attempt.outcome !== "succeeded" || receipts.length === 0) return attempt;

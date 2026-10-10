@@ -20,6 +20,8 @@ human's message. That message starts a human-origin follow-up Turn in the same S
 its last Turn: a clean end completes the Step and the Routing advances without the human, exactly as an uninterrupted Agent step does, and a failure
 takes the Step's ordinary retry policy. A second Interrupt is the only way to hold the Step again. A `lost` Turn keeps its current meaning. When
 Secant closes while a Run waits after an Interrupt, the Run halts as any live Run does, and resuming returns it to waiting on the human's message.
+Amended 2026-10-10 ([#537](https://github.com/secantdev/secant/issues/537)): closing Secant or Ctrl+C during a follow-up Turn likewise halts the
+Run with the Attempt open, and resuming returns it to waiting on the human's message rather than starting a fresh Attempt with the prompt.
 
 **Steer.** Steer now means native mid-Turn delivery of the human's own text, landing at the Harness's next boundary; it is offered in Agent steps and
 Interactive agent steps alike, wherever the profile's Steer evidence says the Harness supports it. Codex delivers it through `turn/steer` with
