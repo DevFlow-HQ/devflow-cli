@@ -215,3 +215,13 @@ A fact nothing consumes is neither required nor optional: it leaves the lists, a
 its classification private beside its check, and a test holds the Codex lists equal to the facts the Adapter reads. We rejected requiring every
 consumed fact, where any display rename removes the Harness, and T3 Code's posture of checking nothing in the stream, where a renamed terminal would
 leave Turns hanging.
+
+## Amendment (2026-10-10): live evidence types do not derive from storage
+
+Recorded while deciding [where stored Turn-event shapes live](https://github.com/secantdev/secant/issues/518), hand-over A18 of the
+[M10 follow-up audit](https://github.com/secantdev/secant/issues/510). The Seam's `ToolCall`, `TurnDiff`, and `CommandOutput` had been declared as the
+stored Turn-fact schemas minus their history order, and the Harness entry exported those schemas, so a storage-only change, such as a Steer waiting
+state, an Agent-call expiry, or a retired kind kept for old rows, edited this Interface. No Adapter builds a stored fact: Run execution translates each
+Turn event. The Seam now declares its live evidence types on its own and exports no stored-fact schema or `TurnFact`; the Run Store owns those
+([ADR 0023](./0023-own-durable-run-truth-in-isolated-run-stores.md)'s 2026-10-10 amendment) and may reuse these types and `retainCommandOutput` where the
+meaning is identical. This supersedes only the placement in [#435](https://github.com/secantdev/secant/issues/435).

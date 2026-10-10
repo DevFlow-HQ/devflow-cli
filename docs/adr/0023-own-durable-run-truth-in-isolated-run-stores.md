@@ -113,3 +113,15 @@ ordinary Attempt publication, so the working area itself still holds no Run trut
 their shape. Typed **Failure evidence** rides the Attempt or Turn and a **Resting cause** rides a `halted` or `failed` Run, both until Run
 deletion; the verbose cause, output tail, and Harness diagnostics are a **Detailed diagnostic** file under `diagnostics/`, pruned after 90 days.
 Canonical content stays exact; only Secant-introduced secrets are redacted from a Detailed diagnostic. No other decision here changes.
+
+## Amendment (2026-10-10): the Run Store owns the shape of recorded Turn facts
+
+Recorded while deciding [where stored Turn-event shapes live](https://github.com/secantdev/secant/issues/518), hand-over A18 of the
+[M10 follow-up audit](https://github.com/secantdev/secant/issues/510). The Run Store owns the schema of every recorded Turn-fact kind: those that
+mirror Harness Turn events, the ones Run execution writes (Steer `waiting`, Agent call, Agent-call expiry), the retired kind kept to read old rows,
+and the history-order field, whose value Application still stamps. The schemas stay private to the Store; its entry exports the `TurnFact` type beside
+the validated readers and checked writes it already owned. A stored tool call or Turn diff reuses the Harness live type
+([ADR 0022](./0022-own-a-truthful-deep-harness-seam.md)'s 2026-10-10 amendment), and a type check fails the build when the stored shape without its
+history order stops equalling it; a separate stored shape and translation step waits until the two must differ. The Store keeps re-applying the
+Harness output retention when it checks or reads a fact. This supersedes only [#435](https://github.com/secantdev/secant/issues/435)'s choice to own
+the definitions with the Harness facts; its reader and receipt split stands.
