@@ -180,7 +180,7 @@ test("m10-audit-history-tool-content: every tool field and 200 maximum command t
     updated.value?.kind === "durable" && updated.value.snapshot.result.found,
   );
   const value = updated.value.snapshot.result.history.rows.at(-1)!.value;
-  assert.ok(value.kind === "tool" && value.detail && value.filesReference);
+  assert.ok(value.kind === "tool" && value.detail && value.filesDetail);
   assert.equal(value.fileCount, 500);
   assert.equal(value.files?.length, 10);
   assert.ok(Buffer.byteLength(JSON.stringify(value)) < 32768);
@@ -194,33 +194,37 @@ test("m10-audit-history-tool-content: every tool field and 200 maximum command t
     "FILE 499 " + "p".repeat(3000),
   ])
     assert.ok(detail.includes(supplied));
-  const list = await run.port.readHistoryContent({
-    reference: value.filesReference,
-  });
-  assert.ok(list.found && list.type === "history-items");
-  assert.equal(list.items.length, 8);
-  const first = list.items[0]!;
-  assert.ok(first.kind === "file" && first.patch?.kind === "structured");
-  assert.equal(await text(run, first.path), "FILE 0 " + "p".repeat(3000));
-  assert.equal(first.change, "update");
-  assert.equal(first.additions, 0);
-  assert.equal(first.removals, 2);
-  const hunks = await run.port.readHistoryContent({
-    reference: first.patch.hunks,
-  });
-  assert.ok(hunks.found && hunks.type === "history-items");
-  const hunk = hunks.items[0]!;
-  assert.ok(hunk.kind === "hunk");
-  assert.equal(hunk.oldStart, 1);
-  assert.equal(hunk.newLines, 1);
-  const lines = await run.port.readHistoryContent({ reference: hunk.lines });
-  assert.ok(lines.found && lines.type === "history-items");
-  for (const [i, line] of lines.items.entries()) {
-    assert.ok(line.kind === "line");
-    assert.equal(await text(run, line.content), ["-界", "+😀"][i]);
-  }
-  for (const read of [list, hunks, lines])
-    run.port.releaseHistoryRead(read.readId);
+  assert.ok(
+    detail.includes(
+      "\n\nFILE 499 " +
+        "p".repeat(3000) +
+        "\nupdate +499 -2\n" +
+        "@@ -1,1 +1,1 @@\n-界\n+😀\n",
+    ),
+  );
+  // The complete list reads through the Port in bounded portions.
+  let continuation: string | undefined,
+    listed = "",
+    readId: string;
+  do {
+    const read = await run.port.readHistoryContent({
+      reference: value.filesDetail,
+      continuation,
+    });
+    assert.ok(read.found && read.type === "history-text");
+    assert.ok(read.content.length <= 4095);
+    listed += read.content;
+    continuation = read.next;
+    readId = read.readId;
+  } while (continuation);
+  run.port.releaseHistoryRead(readId);
+  assert.equal(
+    listed,
+    Array.from(
+      { length: 500 },
+      (_, i) => `update FILE ${i} ${"p".repeat(3000)} +${i} -2\n`,
+    ).join(""),
+  );
 });
 
 for (const length of [29999, 30000, 30001])
@@ -379,9 +383,13 @@ test("m10-audit-history-tool-content: live versions pin only active reads; recla
   });
   assert.ok(!wrongRun.found);
   const wrongType = await run.port.readHistoryContent({
-    reference: { ...stored.output.reference, type: "history-items" },
+    reference: {
+      ...stored.output.reference,
+      type: "history-unknown" as "history-text",
+    },
   });
   assert.ok(!wrongType.found);
+  assert.equal(wrongType.problem.code, "history-content-invalid");
 });
 
 for (const final of ["empty", "absent"] as const)

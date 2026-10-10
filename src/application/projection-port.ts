@@ -1260,7 +1260,7 @@ export interface SessionHistoryRow {
   readonly value: SessionHistoryValue;
 }
 /** Supplied file facts, with no native ids or inferred line totals. */
-export interface SessionFileChange {
+interface SessionFileChange {
   readonly path: string;
   readonly kind?: "create" | "update" | "delete";
   readonly additions?: number;
@@ -1270,7 +1270,6 @@ export interface SessionFileChange {
 /** Complete tool value with Application-derived Turn liveness. No correlation ids cross the Port. */
 interface SessionToolValue {
   readonly detail?: HistoryTextReference;
-  readonly filesReference?: HistoryItemsReference;
   readonly filesDetail?: HistoryTextReference;
   readonly fileCount?: number;
   readonly kind: "tool";
@@ -1306,7 +1305,6 @@ export type SessionHistoryValue =
   | {
       readonly kind: "turn-diff";
       readonly detail?: HistoryTextReference;
-      readonly filesReference?: HistoryItemsReference;
       readonly filesDetail?: HistoryTextReference;
       readonly fileCount?: number;
       readonly content: string;
@@ -1922,35 +1920,6 @@ export interface HistoryTextReference {
   readonly runId: string;
   readonly id: string;
 }
-export interface HistoryItemsReference {
-  readonly type: "history-items";
-  readonly runId: string;
-  readonly id: string;
-}
-type HistoryContentReference = HistoryTextReference | HistoryItemsReference;
-export type HistoryContentItem =
-  | {
-      readonly kind: "file";
-      readonly path: HistoryTextReference;
-      readonly change?: "create" | "update" | "delete";
-      readonly additions?: number;
-      readonly removals?: number;
-      readonly patch?:
-        | { readonly kind: "unified"; readonly content: HistoryTextReference }
-        | {
-            readonly kind: "structured";
-            readonly hunks: HistoryItemsReference;
-          };
-    }
-  | {
-      readonly kind: "hunk";
-      readonly oldStart: number;
-      readonly oldLines: number;
-      readonly newStart: number;
-      readonly newLines: number;
-      readonly lines: HistoryItemsReference;
-    }
-  | { readonly kind: "line"; readonly content: HistoryTextReference };
 export interface HistoryTextEdges {
   readonly dropLeading: number;
   readonly dropTrailing: number;
@@ -1962,13 +1931,13 @@ export interface HistoryTextEdges {
  * that Application seals on a text continuation and hands back unchanged. */
 export type HistoryTextEdgeResume = { readonly [field: string]: unknown };
 export interface HistoryContentRequest {
-  readonly reference: HistoryContentReference;
+  readonly reference: HistoryTextReference;
   readonly continuation?: string;
   /** Abort releases the traversal, including a pinned superseded live version. */
   readonly signal?: AbortSignal;
 }
 /** Text reads deliver at most 4095 UTF-16 units, 4096 when one keeps a surrogate pair
- * split at its start; item reads at most eight items.
+ * split at its start.
  * A traversal pins one exact version until release, abort, observer close or shutdown.
  * Previous/next address bounded portions without retaining previously read bodies. */
 export type HistoryContentRead =
@@ -1977,16 +1946,6 @@ export type HistoryContentRead =
       readonly type: "history-text";
       readonly content: string;
       readonly edges?: HistoryTextEdges;
-      readonly readId: string;
-      readonly first?: string;
-      readonly last?: string;
-      readonly previous?: string;
-      readonly next?: string;
-    }
-  | {
-      readonly found: true;
-      readonly type: "history-items";
-      readonly items: readonly HistoryContentItem[];
       readonly readId: string;
       readonly first?: string;
       readonly last?: string;

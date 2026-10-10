@@ -27,8 +27,8 @@ The [Application notes](../../src/application/AGENTS.md) keep write and admissio
 - `SubscriptionLifecycle` privately creates every stream, including delegated and idle views (#310); termination unregisters its producer and drops retained delivery
   state. Shutdown ends observation before owner cleanup and awaiting work; [run-control](run-control.md) owns its claim rules.
   Keep empty Run observer Sets: live fan-out retains their identity. Later opens remain supported; shutdown memoizes in-flight cleanup only.
-- History content (#489, #490) reads UTF-16 portions of at most 4,095 units (4,096 when one keeps a surrogate pair split at its start) or eight normalized
-  items, with at most 32 active traversals per Application.
+- History content (#489, #490) reads UTF-16 portions of at most 4,095 units (4,096 when one keeps a surrogate pair split at its start), with at most
+  32 active traversals per Application; content reads return text only (#519).
   Continuations stay on one exact version. Stored references keep append-only event coordinates, or the immutable index fact for Turn inputs and
   migrated messages, never cached bodies; release drops a traversal's body. A text continuation carries the total, its resuming part, and the edge
   analyser's state, so a sequential read is linear (#514). A seek walks from its traversal's nearest checkpoint (part position and analyser state,

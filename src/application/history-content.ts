@@ -14,10 +14,8 @@ import type {
   StoredHistoryValue,
 } from "./history-facts.js";
 import type {
-  HistoryContentItem,
   HistoryContentRead,
   HistoryContentRequest,
-  HistoryItemsReference,
   HistoryTextEdgeResume,
   HistoryTextEdges,
   HistoryTextReference,
@@ -26,7 +24,6 @@ import type {
 } from "./projection-port.js";
 
 const TEXT_SIZE = 4095;
-const ITEM_SIZE = 8;
 const ACTIVE_LIMIT = 32;
 // A traversal keeps a checkpoint every eight pages, widening the spacing so it
 // never keeps more than 128 (#520).
@@ -48,21 +45,8 @@ function preview(text: string, [units, bytes]: Limit = PREVIEW): string {
 const addressSchema = z.object({
   version: z.string(),
   scope: z.string(),
-  field: z.enum([
-    "content",
-    "detail",
-    "file-list",
-    "output",
-    "files",
-    "path",
-    "patch",
-    "hunks",
-    "lines",
-    "line",
-  ]),
+  field: z.enum(["content", "detail", "file-list", "output", "path"]),
   file: z.number().int().nonnegative().optional(),
-  hunk: z.number().int().nonnegative().optional(),
-  line: z.number().int().nonnegative().optional(),
 });
 type Address = z.infer<typeof addressSchema>;
 const count = z.number().int().nonnegative();
@@ -206,17 +190,6 @@ export function createHistoryContent(deps: {
   ): HistoryTextReference {
     return {
       type: "history-text",
-      runId: version.runId,
-      id: seal({ version: version.id, field, ...extra }),
-    };
-  }
-  function items(
-    version: Version,
-    field: Address["field"],
-    extra: Partial<Address> = {},
-  ): HistoryItemsReference {
-    return {
-      type: "history-items",
       runId: version.runId,
       id: seal({ version: version.id, field, ...extra }),
     };
@@ -399,8 +372,6 @@ export function createHistoryContent(deps: {
                   },
             ),
             fileCount: supplied.length,
-            filesReference:
-              tool?.filesReference ?? items(version, "files", { scope }),
             filesDetail:
               tool?.filesDetail ?? text(version, "file-list", { scope }),
           };
@@ -428,7 +399,6 @@ export function createHistoryContent(deps: {
     address: Address,
   ): readonly string[] {
     const file = filesOf(value)?.[address.file ?? -1];
-    const patch = file?.patch;
     switch (address.field) {
       case "content":
         if (
@@ -449,18 +419,6 @@ export function createHistoryContent(deps: {
       case "path":
         if (file) return [file.path];
         break;
-      case "patch":
-        if (patch?.kind === "unified") return [patch.content];
-        break;
-      case "line": {
-        const hunk =
-          patch?.kind === "structured"
-            ? patch.hunks[address.hunk ?? -1]
-            : undefined;
-        const line = hunk?.lines[address.line ?? -1];
-        if (line !== undefined) return [line];
-        break;
-      }
     }
     throw new Error("Mismatched content target");
   }
@@ -602,80 +560,6 @@ export function createHistoryContent(deps: {
       }
     }
   }
-  function itemPage(
-    value: StoredHistoryValue,
-    version: Version,
-    address: Address,
-    offset: number,
-  ): { items: HistoryContentItem[]; more: boolean } {
-    const files = filesOf(value);
-    const file = files?.[address.file ?? -1];
-    const patch = file?.patch;
-    const hunks = patch?.kind === "structured" ? patch.hunks : undefined;
-    const hunk = hunks?.[address.hunk ?? -1];
-    if (address.field === "files" && files !== undefined)
-      return {
-        items: files.slice(offset, offset + ITEM_SIZE).map((file, i) => ({
-          kind: "file",
-          path: text(version, "path", {
-            scope: address.scope,
-            file: offset + i,
-          }),
-          change: file.kind,
-          additions: file.additions,
-          removals: file.removals,
-          patch:
-            file.patch === undefined
-              ? undefined
-              : file.patch.kind === "unified"
-                ? {
-                    kind: "unified",
-                    content: text(version, "patch", {
-                      scope: address.scope,
-                      file: offset + i,
-                    }),
-                  }
-                : {
-                    kind: "structured",
-                    hunks: items(version, "hunks", {
-                      scope: address.scope,
-                      file: offset + i,
-                    }),
-                  },
-        })),
-        more: offset + ITEM_SIZE < files.length,
-      };
-    if (address.field === "hunks" && hunks)
-      return {
-        items: hunks.slice(offset, offset + ITEM_SIZE).map((hunk, i) => ({
-          kind: "hunk",
-          oldStart: hunk.oldStart,
-          oldLines: hunk.oldLines,
-          newStart: hunk.newStart,
-          newLines: hunk.newLines,
-          lines: items(version, "lines", {
-            scope: address.scope,
-            file: address.file,
-            hunk: offset + i,
-          }),
-        })),
-        more: offset + ITEM_SIZE < hunks.length,
-      };
-    if (address.field === "lines" && hunk)
-      return {
-        items: hunk.lines.slice(offset, offset + ITEM_SIZE).map((_, i) => ({
-          kind: "line",
-          content: text(version, "line", {
-            scope: address.scope,
-            file: address.file,
-            hunk: address.hunk,
-            line: offset + i,
-          }),
-        })),
-        more: offset + ITEM_SIZE < hunk.lines.length,
-      };
-    throw new Error("Mismatched item target");
-  }
   return {
     project,
     prune(current: readonly SessionHistoryValue[]): void {
@@ -711,6 +595,8 @@ export function createHistoryContent(deps: {
       let readId: string | undefined;
       try {
         const reference = request.reference;
+        if (reference.type !== "history-text")
+          return missing("history-content-invalid");
         const address = addressSchema.parse(unseal(reference.id));
         const version = versions.get(address.version);
         if (!version || version.runId !== reference.runId) return missing();
@@ -756,20 +642,6 @@ export function createHistoryContent(deps: {
           reads.set(readId, read);
         }
         const value = read.value;
-        if (reference.type === "history-items") {
-          const cursor = (at: number) =>
-            seal({ readId, reference: reference.id, offset: at });
-          const page = itemPage(value, version, address, offset);
-          return {
-            found: true,
-            type: reference.type,
-            items: page.items,
-            readId: readId!,
-            previous:
-              offset > 0 ? cursor(Math.max(0, offset - ITEM_SIZE)) : undefined,
-            next: page.more ? cursor(offset + ITEM_SIZE) : undefined,
-          };
-        }
         partsVisited = 0;
         // The exact version is immutable while pinned, so its total is walked once.
         let total = resumed?.total;

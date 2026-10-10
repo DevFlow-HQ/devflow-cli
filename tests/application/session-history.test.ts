@@ -1,7 +1,4 @@
-import {
-  readHistoryText,
-  readHistoryFiles,
-} from "./history-content-fixture.js";
+import { readHistoryText } from "./history-content-fixture.js";
 import type { SessionHistoryRow } from "../../src/application/projection-port.js";
 import { Database } from "bun:sqlite";
 import { readdirSync } from "node:fs";
@@ -1406,10 +1403,10 @@ test("m10-session-history: cumulative diffs replace one Turn row, retain full co
   );
   assert.deepEqual(rows[1].value.files, diff.files);
   assert.ok(rows[2]?.value.kind === "tool");
-  assert.ok(rows[2].value.filesReference);
-  assert.deepEqual(
-    await readHistoryFiles(run.port, rows[2].value.filesReference),
-    call.files,
+  assert.ok(rows[2].value.detail);
+  assert.equal(
+    await readHistoryText(run.port, rows[2].value.detail),
+    "Input\nobserved.ts\n\nobserved.ts\nPER_CALL_PATCH",
   );
   timer.flush();
   run.channel.observe({
@@ -2000,10 +1997,10 @@ test("m10-session-history: command tails, uncapped supplied patches, Turn diffs 
     file.value?.kind === "history-preview" &&
       file.value.row.value.kind === "tool",
   );
-  assert.ok(file.value.row.value.filesReference);
-  assert.deepEqual(
-    await readHistoryFiles(run.port, file.value.row.value.filesReference),
-    [{ path: "observed.ts", patch: { kind: "unified", content } }],
+  assert.ok(file.value.row.value.detail);
+  assert.equal(
+    await readHistoryText(run.port, file.value.row.value.detail),
+    `Input\nrequested.ts\n\nobserved.ts\n${content}`,
   );
   const diff = await reader.next();
   assert.ok(
