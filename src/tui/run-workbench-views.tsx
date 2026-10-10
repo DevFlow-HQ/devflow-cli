@@ -1,4 +1,3 @@
-import type { MentionReplacement } from "./workspace-mentions.js";
 import { TextAttributes, type TextareaRenderable } from "@opentui/core";
 import {
   batch,
@@ -51,6 +50,13 @@ export type PromptHint =
       readonly tone: "muted" | "warning";
     };
 
+/** A completion's native token edit, in editor text offsets. */
+export interface MentionReplacement {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
 /** Everything the ordinary prompt draws, resolved by the Workbench from its one
  *  bottom interaction. `promptHeight` counts exactly the rows `PromptControl` draws. */
 export interface PromptModel {
@@ -99,7 +105,7 @@ export function PromptControl(props: {
   replacement: Accessor<MentionReplacement | undefined>;
   onReplacement: () => void;
   focused: Accessor<boolean>;
-  slashOpen: Accessor<boolean>;
+  listOpen: Accessor<boolean>;
   width: Accessor<number>;
   reducedMotion: boolean;
   theme: Theme;
@@ -147,7 +153,7 @@ export function PromptControl(props: {
           replacement={props.replacement}
           onReplacement={props.onReplacement}
           focused={props.focused}
-          slashOpen={props.slashOpen}
+          listOpen={props.listOpen}
           placeholder={() => clip(props.model().placeholder, w() - 2)}
           placeholderColor={theme.textMuted}
           width={() => Math.max(1, w() - 2)}
@@ -751,7 +757,7 @@ function PromptField(props: {
   replacement: Accessor<MentionReplacement | undefined>;
   onReplacement: () => void;
   focused: Accessor<boolean>;
-  slashOpen: Accessor<boolean>;
+  listOpen: Accessor<boolean>;
   placeholder: Accessor<string>;
   placeholderColor: Theme["textMuted"];
   width: Accessor<number>;
@@ -827,8 +833,8 @@ function PromptField(props: {
         { name: "j", ctrl: true, action: "newline" },
         // The Port owns list navigation. Submit has no handler and keeps the
         // native cursor still when the same arrow reaches the focused field.
-        { name: "up", action: props.slashOpen() ? "submit" : "move-up" },
-        { name: "down", action: props.slashOpen() ? "submit" : "move-down" },
+        { name: "up", action: props.listOpen() ? "submit" : "move-up" },
+        { name: "down", action: props.listOpen() ? "submit" : "move-down" },
       ]}
       onContentChange={report}
       onCursorChange={report}

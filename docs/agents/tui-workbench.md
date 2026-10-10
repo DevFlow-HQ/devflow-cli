@@ -79,5 +79,7 @@ Before changing history rendering, scrolling, Ctrl+O, or row inspection, read [W
 
 - `run-inspection.tsx` owns bounded artifact/output inspection; `run-transcript.tsx` owns the details-opened retained Session reader (#421), whose
   anchoring and paging are in [Workbench history](./tui-history.md#rows-and-scrolling).
-  `run-workbench-views.tsx` holds the presentational leaves and prompt row model; state, focus, interaction and key dispatch stay in `run-workbench.tsx` (A12).
+  `run-workbench-views.tsx` holds the presentational leaves and prompt row model; focus, interaction, precedence and key dispatch stay in
+  `run-workbench.tsx` (A12), which asks its private controllers: drafts (`run-draft-control.ts`), history (`run-history-viewport.ts`), and both
+  prompt completion lists' state, keys, rows and hint (`run-prompt-completion.ts`).
   History geometry is in [Workbench history](./tui-history.md#rows-and-scrolling).

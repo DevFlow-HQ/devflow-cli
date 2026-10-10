@@ -244,6 +244,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-followup-history-viewport",
   "m10-followup-dead-history-code",
   "m10-followup-history-seek-cost",
+  "m10-followup-prompt-completion",
 ] as const;
 
 function testFilesIn(script: string): string[] {

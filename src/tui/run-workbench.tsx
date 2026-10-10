@@ -1,4 +1,3 @@
-import { createWorkspaceMentions } from "./workspace-mentions.js";
 import { useRenderer } from "@opentui/solid";
 import { TextAttributes } from "@opentui/core";
 import {
@@ -38,9 +37,9 @@ import {
   interactiveStep,
 } from "./run-draft-control.js";
 import { createHistoryViewport } from "./run-history-viewport.js";
+import { createPromptCompletion } from "./run-prompt-completion.js";
 import { useAppCommands, type AppCommand } from "./app-commands.js";
 import { clip } from "./clip.js";
-import { searchCommands } from "./command-search.js";
 import {
   useRunActionsView,
   type RunActionOutcome,
@@ -1005,13 +1004,14 @@ export function RunWorkbench(props: {
       tone: "muted",
     };
   };
-  const promptModel = (): PromptModel | undefined => {
+  // Everything the prompt draws but the completion list and the hint.
+  const promptBase = () => {
     const prompt = promptInteraction();
     if (prompt === undefined) return undefined;
     const note = promptNote(prompt);
     const meta = promptMeta();
     const refusal = promptRefusal();
-    const model: PromptModel = {
+    return {
       recovery: recoveryLines(),
       refusal:
         refusal === undefined
@@ -1026,137 +1026,13 @@ export function RunWorkbench(props: {
         Math.max(1, draft().split("\n").length),
       ),
       ...(meta === undefined ? {} : { meta }),
-      hint: mentions.open()
-        ? {
-            kind: "lines",
-            tone: "muted",
-            lines: [clip("↑↓ ↵/tab insert · esc", innerW())],
-          }
-        : promptHint(prompt),
-    };
-    const rows = slashMatches();
-    const budget = Math.min(
-      6,
-      Math.max(
-        0,
-        interiorH() -
-          noticeRows() -
-          STATUS_ROWS -
-          conversationMetadata().length -
-          promptHeight(model) -
-          (mentions.open() ? 1 : 2),
-      ),
-    );
-    const active = slashActive();
-    const index = rows.findIndex((entry) => entry.id === active?.id);
-    const start = Math.max(0, index - budget + 1);
-    const list = rows
-      .slice(start, start + budget)
-      .map((entry) =>
-        clip(
-          `${entry.id === active?.id ? "› " : "  "}/${entry.slash} · ${entry.name}${entry.keyHint ? ` (${entry.keyHint})` : ""}`,
-          innerW(),
-        ),
-      );
-    if (mentions.open()) {
-      const candidates = mentions.candidates();
-      const result = mentions.result();
-      const notice = result?.status === "available" ? result.notice : undefined;
-      const indexing = result !== undefined && "indexing" in result;
-      const indexingLine = "Still indexing Workspace…";
-      const statuses = [
-        ...(notice === undefined ? [] : [notice]),
-        ...(indexing && candidates.length > 0 ? [indexingLine] : []),
-      ];
-      // A selectable path, or the empty-result explanation, owns the first row.
-      const statusBudget = Math.min(statuses.length, Math.max(0, budget - 1));
-      const listBudget = Math.max(0, budget - statusBudget);
-      const start = Math.max(0, mentions.selection() - listBudget + 1);
-      const lines: NonNullable<PromptModel["commands"]>[number][] = candidates
-        .slice(start, start + listBudget)
-        .map((candidate) => ({
-          kind: "candidate",
-          text: clip(
-            `${candidate === mentions.active() ? "› " : "  "}@${candidate.path}${candidate.kind === "folder" ? "/" : ""} · ${candidate.kind}`,
-            innerW(),
-          ),
-        }));
-      if (lines.length === 0 && budget > 0)
-        lines.push({
-          kind: "status",
-          text: clip(
-            result?.status === "unavailable"
-              ? "Path search unavailable · enter sends text"
-              : indexing
-                ? indexingLine
-                : result === undefined
-                  ? "Searching Workspace paths…"
-                  : "No path suggestions · enter sends text",
-            innerW(),
-          ),
-        });
-      lines.push(
-        ...statuses.slice(0, statusBudget).map((line) => ({
-          kind: "status" as const,
-          text: clip(line, innerW()),
-        })),
-      );
-      const compact =
-        statusBudget < statuses.length
-          ? notice !== undefined
-            ? "100k cap"
-            : "indexing"
-          : undefined;
-      const sendAction =
-        prompt.send.kind === "steer"
-          ? prompt.send.offer.available
-            ? "↵ steer"
-            : "working"
-          : prompt.send.kind === "none"
-            ? ""
-            : "↵ send";
-      return {
-        ...model,
-        hint:
-          budget === 0
-            ? promptHint(prompt)
-            : compact !== undefined
-              ? {
-                  kind: "lines",
-                  tone: "muted",
-                  lines: [
-                    clip(
-                      candidates.length === 0
-                        ? `${compact} ${sendAction} · esc`
-                        : `${compact} ↑↓ ↵/tab esc`,
-                      innerW(),
-                    ),
-                  ],
-                }
-              : result !== undefined && candidates.length === 0
-                ? {
-                    kind: "lines",
-                    tone: "muted",
-                    lines: [clip(`${sendAction} · esc`, innerW())],
-                  }
-                : model.hint,
-        commands: budget === 0 ? [] : lines,
-      };
-    }
-
-    return {
-      ...model,
-      commands:
-        list.length === 0
-          ? []
-          : [
-              ...list.map((text) => ({ kind: "candidate" as const, text })),
-              {
-                kind: "status",
-                text: clip("↑/↓ select · enter/tab run · esc close", innerW()),
-              },
-            ],
-    };
+    } satisfies Omit<PromptModel, "hint">;
+  };
+  const promptModel = (): PromptModel | undefined => {
+    const base = promptBase();
+    if (base === undefined) return undefined;
+    const { hint, rows } = completion.list();
+    return { ...base, hint, commands: rows };
   };
 
   // The bottom region's rows, read from the one interaction.
@@ -1480,52 +1356,6 @@ export function RunWorkbench(props: {
     return entries;
   });
 
-  const [slashDismissed, setSlashDismissed] = createSignal<string>();
-  const [slashSelection, setSlashSelection] = createSignal<{
-    draft: string;
-    id: string;
-  }>();
-  const slashOpen = () =>
-    promptInteraction() !== undefined &&
-    focus() === "bottom" &&
-    dialog.stack.length === 0 &&
-    confirmation() === undefined &&
-    draft().startsWith("/") &&
-    !/\s/.test(draft()) &&
-    slashDismissed() !== draft();
-  const slashMatches = () =>
-    slashOpen()
-      ? searchCommands(
-          commands.entries().filter((entry) => entry.slash !== undefined),
-          draft().slice(1),
-        )
-      : [];
-  const slashActive = () => {
-    const rows = slashMatches();
-    const selected = slashSelection();
-    if (selected?.draft === draft())
-      return rows.find((entry) => entry.id === selected.id);
-    const prefix = draft().slice(1).toLowerCase();
-    return rows.find((entry) =>
-      [entry.slash, ...(entry.aliases ?? [])].some((name) =>
-        name?.startsWith(prefix),
-      ),
-    );
-  };
-  createEffect(
-    on(draft, (text) => {
-      setSlashDismissed(undefined);
-      const prefix = text.slice(1).toLowerCase();
-      const entry = slashMatches().find((entry) =>
-        [entry.slash, ...(entry.aliases ?? [])].some((name) =>
-          name?.startsWith(prefix),
-        ),
-      );
-      setSlashSelection(
-        entry === undefined ? undefined : { draft: text, id: entry.id },
-      );
-    }),
-  );
   // The prompt's native field takes text only while nothing else holds the keys:
   // no dialog, no confirmation, no focused details.
   const promptFieldFocused = () =>
@@ -1534,17 +1364,41 @@ export function RunWorkbench(props: {
     promptInteraction() !== undefined &&
     confirmation() === undefined;
 
-  const mentions = createWorkspaceMentions({
+  const completion = createPromptCompletion({
     draft,
     caret,
     runId: () => run()?.runId,
-    enabled: () =>
-      promptFieldFocused() &&
-      !slashOpen() &&
-      commands.knownSlash(draft()) === undefined,
-    selectionVisible: () =>
-      (promptModel()?.commands ?? []).some((row) => row.kind === "candidate"),
+    enabled: promptFieldFocused,
+    commands,
     search: (input) => view.searchWorkspacePaths(input),
+    width: innerW,
+    space: () => {
+      const base = promptBase();
+      return base === undefined
+        ? 0
+        : interiorH() -
+            noticeRows() -
+            STATUS_ROWS -
+            conversationMetadata().length -
+            promptHeight({
+              ...base,
+              hint: { kind: "lines", lines: [], tone: "muted" },
+            });
+    },
+    hint: () => {
+      const prompt = promptInteraction();
+      return prompt === undefined ? undefined : promptHint(prompt);
+    },
+    enter: () => {
+      const send = promptInteraction()?.send;
+      return send?.kind === "steer"
+        ? send.offer.available
+          ? "steer"
+          : "working"
+        : send === undefined || send.kind === "none"
+          ? "none"
+          : "send";
+    },
   });
   const invokeSlash = (id?: string) => {
     const known = commands.knownSlash(draft());
@@ -1573,40 +1427,6 @@ export function RunWorkbench(props: {
     entry.run();
     return true;
   };
-  const completionVisible = () => (promptModel()?.commands?.length ?? 0) > 0;
-  const slashVisible = () => slashOpen() && completionVisible();
-  const mentionsVisible = () => mentions.open() && completionVisible();
-
-  const handleSlashKey = (key: RendererKeyEvent) => {
-    if (key.ctrl || key.alt || key.shift) return false;
-    if (slashVisible()) {
-      if (key.name === "escape") {
-        setSlashDismissed(draft());
-        return true;
-      }
-      if (key.name === "up" || key.name === "down") {
-        const rows = slashMatches();
-        const index = rows.findIndex((entry) => entry.id === slashActive()?.id);
-        const entry =
-          rows[
-            Math.max(
-              0,
-              Math.min(rows.length - 1, index + (key.name === "up" ? -1 : 1)),
-            )
-          ];
-        if (entry) setSlashSelection({ draft: draft(), id: entry.id });
-        return true;
-      }
-      if (key.name === "return" || key.name === "tab") {
-        const active = slashActive();
-        if (active !== undefined) return invokeSlash(active.id);
-        const held = slashSelection();
-        if (held?.draft === draft()) return invokeSlash(held.id);
-      }
-    }
-    return key.name === "return" && invokeSlash();
-  };
-
   const history = createHistoryViewport({
     view,
     run,
@@ -1823,11 +1643,20 @@ export function RunWorkbench(props: {
       gateControl.handleKey(name);
       return;
     }
-    if (
-      current.kind === "prompt" &&
-      (handleSlashKey(key) || (mentionsVisible() && mentions.handleKey(key)))
-    )
-      return;
+    if (current.kind === "prompt") {
+      // Slash precedes `@`, and both precede the prompt's own keys.
+      const completed = completion.handleKey(key);
+      if (completed?.kind === "run") invokeSlash(completed.id);
+      if (completed !== undefined) return;
+      if (
+        name === "return" &&
+        !key.ctrl &&
+        !key.alt &&
+        !key.shift &&
+        invokeSlash()
+      )
+        return;
+    }
     if (name === "tab" && detailsShown()) {
       setFocus("details");
       return;
@@ -2178,14 +2007,10 @@ export function RunWorkbench(props: {
                         draft={draft}
                         onInput={drafts.input}
                         focused={promptFieldFocused}
-                        slashOpen={() =>
-                          slashVisible() ||
-                          (mentionsVisible() &&
-                            mentions.candidates().length > 0)
-                        }
+                        listOpen={completion.listOpen}
                         onCaret={setCaret}
-                        replacement={mentions.replacement}
-                        onReplacement={mentions.replaced}
+                        replacement={completion.replacement}
+                        onReplacement={completion.replaced}
                         width={innerW}
                         reducedMotion={props.reducedMotion}
                         theme={theme}

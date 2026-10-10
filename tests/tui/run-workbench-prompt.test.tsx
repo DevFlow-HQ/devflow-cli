@@ -2645,7 +2645,9 @@ for (const change of [
     await type(wb.t, "@old");
     await until(() => pending.length === 1);
     await wb.t.renderOnce();
-    assert.match(wb.t.captureCharFrame(), /↵\/tab insert/);
+    // No candidate exists while the search is pending, so Enter sends.
+    assert.match(wb.t.captureCharFrame(), /↵ send · esc/);
+    assert.doesNotMatch(wb.t.captureCharFrame(), /↵\/tab insert/);
     assert.equal(pending[0]?.input.runId, "run-1");
     assert.deepEqual(Object.keys(pending[0]?.input ?? {}).sort(), [
       "onProgress",

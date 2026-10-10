@@ -3,13 +3,18 @@
 Read before changing Workspace path completion, Slash discovery, prompt captures, or draft restoration.
 [Workbench interaction](./tui-workbench.md) owns bottom precedence, keys, and confirmation targets.
 
+The private prompt-completion controller (`run-prompt-completion.ts`, #516) owns both lists' open and dismissed state, selection, keys, rows and
+hint, including the Enter cue. The Workbench keeps precedence and dispatch, supplies the ordinary hint and what Enter does, and runs a chosen
+Slash entry; no other site builds list rows or list hint wording.
+
 ## Workspace path completion
 
 - `searchWorkspacePaths` ranks ten paths from ripgrep's ignore and no-symlink listing; dot segments show only when named.
   Unavailable leaves text sendable. It reads no candidate content.
-- `workspace-mentions.ts` keys replies by Run, draft and caret. Its stable token signal survives query edits; closing or replacing the token aborts it (#484).
+- Path completion keys replies by Run, draft and caret. Its stable token signal survives query edits; closing or replacing the token aborts it (#484).
   The latest query receives bounded progressive matches; stale progress and settled replies are discarded independently. Known Slash names suppress mentions.
 - Selection requires visible rows. A one-row list puts the cap cue in its hint; with no list rows, the ordinary prompt hint and confirmations take priority (#484).
+  The insert hint shows only while a path row is drawn; a pending, empty or unavailable search shows what Enter does instead (#516).
 - Enter/Tab edits only the native token: quote whitespace, hashes and quotes, retain only trailing `#L<n>`/`#L<n>-<m>` file ranges,
   slash folders without ranges. Escape keeps text; arrows leave the cursor still.
 - Requests/gates have no list. Rows share `PromptModel`; key capture and native-arrow ownership require drawn list rows, including after resize.

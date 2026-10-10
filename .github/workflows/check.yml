@@ -582,6 +582,11 @@ jobs:
           bun run test --
           -t '^m10-followup-history-seek-cost(:|$)'
           tests/tui/history-seek-cost.test.ts
+      - name: m10-followup-prompt-completion
+        run: >-
+          bun run test --
+          -t '^m10-followup-prompt-completion(:|$)'
+          tests/tui/run-workbench-prompt-completion.test.tsx
       - name: M10 runtime failure regressions
         run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test
