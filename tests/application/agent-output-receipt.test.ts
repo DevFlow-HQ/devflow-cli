@@ -3,7 +3,13 @@ import { readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import type { RunView } from "../../src/application/projection-port.js";
 import { storedProcess } from "../helpers/wiringDoubles.js";
@@ -291,7 +297,21 @@ test("m11-receipt-failure-evidence: an unclassified receipt filesystem error fai
       (path) => {
         const directory = dirname(path);
         rmSync(directory, { recursive: true });
-        writeFileSync(directory, "not a directory");
+        // A file parent reports ENOENT on Windows. A directory-link cycle
+        // exercises a non-missing lstat failure on every supported platform.
+        symlinkSync(directory, directory, "dir");
+        assert.throws(
+          () => lstatSync(path),
+          (cause: unknown) => {
+            assert.ok(cause instanceof Error && "code" in cause);
+            assert.ok(typeof cause.code === "string");
+            assert.notEqual(cause.code, "ENOENT");
+            t.diagnostic(
+              `Cyclic receipt parent lookup failed with ${cause.code} on ${process.platform}.`,
+            );
+            return true;
+          },
+        );
       },
     ]).adapter,
     writeBundle("none"),
