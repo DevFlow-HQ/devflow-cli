@@ -95,6 +95,14 @@ measures encoded bytes. Secant keeps reconciliation in Application and adapts th
 output files and unbounded SSE queue, T3's client event reduction and 1 MiB diff-detail rejection, and a larger FIFO are not adopted. A strict page
 budget alone still permits repeated pages to overflow a finite queue; latest-page replacement alone still permits an arbitrarily large patch.
 
+Amendment (2026-10-10, [#519](https://github.com/secantdev/secant/issues/519)): history content reads return bounded text only. The structured
+file, hunk, and line item reads that [#489](https://github.com/secantdev/secant/issues/489) shipped for later consumers retire, because no client
+read them: the Workbench reaches every changed file and patch through the detail text and the complete file-list text, both read in bounded
+portions, and headless reads no Session history. A large file list therefore meets this section's rule as file-list text. The bounded
+text/normalized-item reads of [Spec #487](https://github.com/secantdev/secant/issues/487) narrow to text, and its visible-entry loading for large
+file lists is met by that paged list. OpenCode and T3 Code also send a file's change as unified patch text with per-file stats. A typed item read
+returns only with a client that needs it.
+
 **One record of the conversation.** `transcript_entry` retires. The Turn's input becomes its first row, `settleTurn` stops appending a final
 assistant copy, and transcript pages and exports are built from Turn rows: human input, delivered Steers, and settled assistant messages.
 Previous-release databases migrate at open through the embedded journals. Amendment (2026-10-08): an eligible message or delivered Steer keeps its
