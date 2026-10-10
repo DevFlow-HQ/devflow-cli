@@ -22,12 +22,17 @@ import {
   type AppendTurnEventResult,
   type AttemptLogEntry,
   type CandidateOutput,
+  type CommandOutputTail,
   type PublishAttemptRequest,
   type FailureEvidenceRequest,
   type RunOwner,
 } from "../store/store.js";
-import { type ProcessAdapter } from "../../process/process.js";
-import type { HarnessFailure, TurnResult } from "../../harness/harness.js";
+import { type OutputTail, type ProcessAdapter } from "../../process/process.js";
+import {
+  COMMAND_OUTPUT_TAIL_CHARACTERS,
+  type HarnessFailure,
+  type TurnResult,
+} from "../../harness/harness.js";
 import {
   attemptEvidence,
   interactiveTurnRest,
@@ -293,6 +298,10 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 // private to the Run Store and this one cannot import it.
 export const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 export const TRUNCATION_MARKER = `\n[secant: output truncated at ${MAX_CAPTURE_BYTES / (1024 * 1024)} MiB]\n`;
+// Each stream's tail a timed-out Command keeps for its Detailed diagnostic. Four
+// bytes per character covers the retained character bound in any UTF-8, and
+// three more cover a leading character the byte cut split.
+const COMMAND_TAIL_BYTES = 4 * COMMAND_OUTPUT_TAIL_CHARACTERS + 3;
 
 /** A durable pause an executor returns instead of an Attempt (#108, #122): the Step
  *  did not run to a settled outcome — it rests the Run `blocked` and waits for a
@@ -1103,7 +1112,15 @@ async function runCommand(
     // Preflight already refused an unresolvable executable or an unsupported shim;
     // reaching here means it was removed between Preflight and spawn — the command
     // could not execute, so the Attempt failed and is retryable (ADR 0020).
-    return { outcome: "failed", outputs: [] };
+    return {
+      outcome: "failed",
+      outputs: [],
+      failureEvidence: {
+        source: "command",
+        code: "executable-missing",
+        possibleEffects: "none",
+      },
+    };
   }
 
   const result = await context.process.spawnCommand({
@@ -1126,23 +1143,51 @@ async function runCommand(
     // Execution owns the capture cap policy; the process Module enforces the value.
     maxCaptureBytes: MAX_CAPTURE_BYTES,
     truncationMarker: TRUNCATION_MARKER,
+    maxTailBytes: COMMAND_TAIL_BYTES,
     ...(context.cancelSignal !== undefined
       ? { cancelSignal: context.cancelSignal }
       : {}),
   });
 
   // Translate the OS outcome at this Seam into a typed Attempt outcome (D-rule:
-  // external failures become typed domain failures at their owning Seam).
+  // external failures become typed domain failures at their owning Seam), with
+  // the Failure evidence that says why (ADR 0041). The diagnostic names the
+  // Command as the Bundle declares it, never its resolved environment.
+  const command = declaredCommand(invocation);
   switch (result.kind) {
-    // A spawn error (ENOENT missing binary) or our own timeout kill means the
-    // command could not run to an exit -> the Attempt failed and is retryable.
-    // ponytail: the original cause (the spawn error / partial stderr) is dropped —
-    // the Run Store's `diagnostics/` has a writer (materialization conflicts, #88)
-    // but no channel for a failed Attempt yet. Route this cause there when that
-    // channel lands, so a user can see why a Step could not execute.
+    // A spawn error (ENOENT missing binary) means the command never ran -> the
+    // Attempt failed and is retryable. A spawn-time ENOENT keeps its errno.
     case "spawn-error":
+      return {
+        outcome: "failed",
+        outputs: [],
+        failureEvidence: {
+          source: "command",
+          code: "spawn-failed",
+          possibleEffects: "none",
+          ...(result.errno !== undefined ? { nativeCode: result.errno } : {}),
+          diagnostic: { kind: "spawn-failed", command, cause: result.cause },
+        },
+      };
+    // Our own timeout kill: the Attempt failed and is retryable. The command ran,
+    // so what it changed is unknown; its last output is kept for the human.
     case "timeout":
-      return { outcome: "failed", outputs: [] };
+      return {
+        outcome: "failed",
+        outputs: [],
+        failureEvidence: {
+          source: "command",
+          code: "timed-out",
+          possibleEffects: "unknown",
+          details: { timeLimitMs: context.commandTimeoutMs },
+          diagnostic: {
+            kind: "timed-out",
+            command,
+            stdoutTail: decodeTail(result.stdout),
+            stderrTail: decodeTail(result.stderr),
+          },
+        },
+      };
     // The caller's cancel signal aborted the command: kill the group and unwind
     // without publishing, so `cancel-run` (T4) owns the `cancelled` rest.
     case "cancelled":
@@ -1150,23 +1195,48 @@ async function runCommand(
     // Death by an external signal with no exit — Ctrl+C, an outside SIGTERM, the
     // terminal closing during a live Run. The Attempt's result is genuinely
     // unknown, so it is `indeterminate`: never retried, and the Run rests `halted`
-    // for human resume (ADR 0019, #86).
+    // for human resume (ADR 0019, #86). Its evidence records the signal itself.
     // ponytail: every external signal death maps to `indeterminate`, including a
     // command that faults in its own code (segfault, abort). Splitting crash
     // signals to a retryable `failed` would stop a deterministically crashing
     // command from looping `halted` on manual resume, but reliably telling crash
     // from interrupt by the reported signal is not portable across Bun on the
     // three OSes (macOS reports SIGABRT for abort(); Linux does not, and hangs
-    // ~30s first), so the split was withdrawn. Revisit with a diagnostic channel
-    // that records the signal, not a by-signal-name classifier.
+    // ~30s first), so the split was withdrawn.
     case "signal":
-      return { outcome: "indeterminate", outputs: [] };
+      return {
+        outcome: "indeterminate",
+        outputs: [],
+        failureEvidence: {
+          source: "command",
+          code: "killed",
+          possibleEffects: "unknown",
+          ...(result.signal !== null ? { nativeCode: result.signal } : {}),
+        },
+      };
     case "exited":
       return {
         outcome: "succeeded",
         outputs: commandOutputs(step, result.status === 0, result.text),
       };
   }
+}
+
+/** The selected invocation as the Bundle declares it: references stay unresolved,
+ *  and the environment is left out because its values may be credentials. */
+function declaredCommand(invocation: CommandInvocation): string {
+  return JSON.stringify({
+    executable: invocation.executable,
+    arguments: invocation.arguments,
+    ...(invocation.workingDirectory !== undefined
+      ? { workingDirectory: invocation.workingDirectory }
+      : {}),
+  });
+}
+
+/** One stream's tail as text, decoded exactly as declared output would be. */
+function decodeTail(tail: OutputTail): CommandOutputTail {
+  return { text: new TextDecoder().decode(tail.bytes), omitted: tail.omitted };
 }
 
 /** The Command's `verdict` (pass/fail from the exit status) and `text` (captured

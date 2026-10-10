@@ -24,7 +24,11 @@ import type { ProcessAdapter } from "../../../src/process/process.js";
 import type { RunOwner } from "../../../src/run/store/store.js";
 import { makeTempDir } from "../../helpers/tempDir.js";
 import { setEnvironmentForTest } from "../../helpers/environment.js";
-import { createFakeProcess } from "../../process/fake-adapter.js";
+import {
+  createFakeProcess,
+  spawnFailed,
+  timedOut,
+} from "../../process/fake-adapter.js";
 import { openFakeRunGroup as openRunGroup } from "../store/fake-git-process.js";
 
 const WORKSPACE = "/work/example-project";
@@ -42,6 +46,13 @@ const semanticProcess = createFakeProcess({
 
 const dec = (bytes: Uint8Array | undefined) =>
   bytes === undefined ? undefined : new TextDecoder().decode(bytes);
+
+/** The Run's stored Failure evidence, without its ids and timestamps. */
+function evidenceOf(owner: RunOwner) {
+  return owner
+    .failureEvidence()
+    .map(({ evidenceId: _e, attemptId: _a, at: _at, ...evidence }) => evidence);
+}
 
 /** Acquire an owner for a fresh Run under a temporary Secant home. */
 function ownerForFreshRun(
@@ -141,10 +152,11 @@ function fakeCommand(options: Parameters<SpawnCommand>[0]) {
         );
       });
     }
-    return { kind: "timeout" as const };
+    return timedOut();
   }
-  if (script.includes("Atomics.wait")) return { kind: "timeout" as const };
-  if (script.includes("SIGKILL")) return { kind: "signal" as const };
+  if (script.includes("Atomics.wait")) return timedOut("waiting\n", "slow\n");
+  if (script.includes("SIGKILL"))
+    return { kind: "signal" as const, signal: "SIGKILL" as const };
   if (script.includes("repeat(")) {
     return {
       kind: "exited" as const,
@@ -388,6 +400,16 @@ test(
       owner.attemptLog().map((entry) => entry.outcome),
       ["indeterminate"],
     );
+    // Its evidence names the signal; a killed Command has no diagnostic.
+    assert.deepEqual(evidenceOf(owner), [
+      {
+        source: "command",
+        code: "killed",
+        possibleEffects: "unknown",
+        nativeCode: "SIGKILL",
+      },
+    ]);
+    assert.equal(owner.currentVersion("v"), undefined);
   },
 );
 
@@ -446,6 +468,15 @@ test("a missing executable is retried within the bound, then rests the Run faile
   );
   // A failed Attempt binds nothing.
   assert.equal(owner.currentVersion("v"), undefined);
+  // Each records the program missing at resolution, with no diagnostic.
+  assert.deepEqual(
+    evidenceOf(owner),
+    Array.from({ length: 3 }, () => ({
+      source: "command",
+      code: "executable-missing",
+      possibleEffects: "none",
+    })),
+  );
 });
 
 test("a timed-out command is retried within the bound, then rests the Run failed", async (t) => {
@@ -467,6 +498,62 @@ test("a timed-out command is retried within the bound, then rests the Run failed
   assert.deepEqual(
     owner.attemptLog().map((entry) => entry.outcome),
     ["failed", "failed"],
+  );
+  // Each records its time limit, and its diagnostic keeps both streams' tails.
+  assert.deepEqual(
+    evidenceOf(owner).map(({ diagnosticId: _id, ...evidence }) => evidence),
+    Array.from({ length: 2 }, () => ({
+      source: "command",
+      code: "timed-out",
+      possibleEffects: "unknown",
+      details: '{"timeLimitMs":200}',
+    })),
+  );
+  const diagnosticId = evidenceOf(owner)[0]?.diagnosticId;
+  assert.ok(diagnosticId);
+  const diagnostic = dec(owner.readDiagnostic(diagnosticId)) ?? "";
+  assert.equal(
+    diagnostic,
+    "Kind: timed-out\n\nCommand stdout tail:\nwaiting\n\n\n" +
+      "Command stderr tail:\nslow\n\n\n" +
+      `Command: ${JSON.stringify({ executable: NODE, arguments: ["-e", sleep] })}\n`,
+  );
+});
+
+test("a spawn error keeps its errno and translated cause, is retried, then rests the Run failed", async (t) => {
+  const { owner, state } = ownerForFreshRun(t);
+  const routing: RoutingNode[] = [
+    commandStep(
+      "unstartable",
+      { executable: NODE, arguments: ["-e", "console.log('never')"] },
+      { retry: 1, produces: produces({ name: "v", type: "verdict" }) },
+    ),
+  ];
+
+  const report = await run(routing, owner, {
+    spawnCommand: async () => spawnFailed("EACCES"),
+  });
+  assert.deepEqual(report, { outcome: "failed" });
+  assert.equal(state(), "failed");
+  assert.deepEqual(
+    owner.attemptLog().map((entry) => entry.outcome),
+    ["failed", "failed"],
+  );
+  assert.equal(owner.currentVersion("v"), undefined);
+  const evidence = evidenceOf(owner);
+  assert.deepEqual(
+    evidence.map(({ diagnosticId: _id, ...fact }) => fact),
+    Array.from({ length: 2 }, () => ({
+      source: "command",
+      code: "spawn-failed",
+      possibleEffects: "none",
+      nativeCode: "EACCES",
+    })),
+  );
+  const diagnostic = dec(owner.readDiagnostic(evidence[0]!.diagnosticId!));
+  assert.match(
+    diagnostic ?? "",
+    /^Kind: spawn-failed\n\nCause: Error\nMessage: spawn scripted-command EACCES\nCode: EACCES\n[\s\S]*\n\nCommand: .+\n$/,
   );
 });
 

@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  COMMAND_OUTPUT_TAIL_CHARACTERS,
   redactDiagnosticText,
   translateCause,
   type SafeCause,
 } from "../../harness/harness.js";
-import type { DiagnosticContent } from "./store.js";
+import type { CommandOutputTail, DiagnosticContent } from "./store.js";
 
 // Detailed diagnostics (ADR 0041, spec #527 decisions 12 and 13). Every writer
 // calls `writeDiagnostic` inside its guarded transaction, after the epoch check
@@ -38,6 +39,12 @@ export function renderDiagnostic(content: DiagnosticContent): string {
   if (content.cause !== undefined) {
     sections.push(renderCause(translateCause(content.cause)));
   }
+  if (present(content.stdoutTail)) {
+    sections.push(renderTail("Command stdout tail", content.stdoutTail));
+  }
+  if (present(content.stderrTail)) {
+    sections.push(renderTail("Command stderr tail", content.stderrTail));
+  }
   const harnessSections: readonly (readonly [string, string | undefined])[] = [
     ["Partial output", content.partialOutput],
     ["Retry evidence", content.retryEvidence],
@@ -48,7 +55,33 @@ export function renderDiagnostic(content: DiagnosticContent): string {
     if (text !== undefined)
       sections.push(`${label}:\n${boundDiagnosticText(text, label)}`);
   }
+  if (content.command !== undefined) {
+    sections.push(`Command: ${content.command}`);
+  }
   return `${sections.join("\n\n")}\n`;
+}
+
+// Spec #527 decision 13: a Command tail keeps M10's retained-output bound of
+// last characters, exactly as captured, behind one omission marker.
+const OMISSION_MARKER = "[secant: earlier output omitted]";
+
+/** An empty stream with nothing dropped has no tail to write. */
+function present(
+  tail: CommandOutputTail | undefined,
+): tail is CommandOutputTail {
+  return tail !== undefined && (tail.text.length > 0 || tail.omitted);
+}
+
+function renderTail(label: string, tail: CommandOutputTail): string {
+  // Count code points, so the cut never splits a surrogate pair.
+  const characters = Array.from(tail.text);
+  const cut = characters.length > COMMAND_OUTPUT_TAIL_CHARACTERS;
+  const kept = cut
+    ? characters.slice(-COMMAND_OUTPUT_TAIL_CHARACTERS).join("")
+    : tail.text;
+  return cut || tail.omitted
+    ? `${label}:\n${OMISSION_MARKER}\n${kept}`
+    : `${label}:\n${kept}`;
 }
 
 function renderCause(cause: SafeCause): string {

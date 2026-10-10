@@ -483,17 +483,35 @@ function watchChild(
 
 /** What became of one spawned Command. `timeout` and `cancelled` are our own
  *  aborts (we killed the group); `signal` is a death by an outside signal we did
- *  not cause; `spawn-error` means launch failed or cleanup could not produce a complete result. */
+ *  not cause; `spawn-error` means launch failed or cleanup could not produce a complete result.
+ *  Each failure keeps its typed cause (ADR 0041): the errno name, when the cause
+ *  has one, and the cause itself; each stream's tail captured before a timeout;
+ *  and the observed signal, `null` when its number has no name. */
 export type SpawnResult =
   | {
       readonly kind: "exited";
       readonly status: number;
       readonly text: Uint8Array;
     }
-  | { readonly kind: "spawn-error" }
-  | { readonly kind: "timeout" }
+  | {
+      readonly kind: "spawn-error";
+      readonly errno?: string;
+      readonly cause: unknown;
+    }
+  | {
+      readonly kind: "timeout";
+      readonly stdout: OutputTail;
+      readonly stderr: OutputTail;
+    }
   | { readonly kind: "cancelled" }
-  | { readonly kind: "signal" };
+  | { readonly kind: "signal"; readonly signal: NodeJS.Signals | null };
+
+/** The last bytes one Command stream wrote, at most the caller's `maxTailBytes`,
+ *  and whether earlier bytes were dropped to keep that bound. */
+export interface OutputTail {
+  readonly bytes: Uint8Array;
+  readonly omitted: boolean;
+}
 
 export interface SpawnOptions {
   readonly role: SpawnRole;
@@ -508,6 +526,9 @@ export interface SpawnOptions {
    *  this Module only enforces the value it is given. */
   readonly maxCaptureBytes: number;
   readonly truncationMarker: string;
+  /** The caller's per-stream byte bound on the tail a `timeout` result carries,
+   *  kept apart from the shared capture above; absent keeps no tail bytes. */
+  readonly maxTailBytes?: number;
   readonly cancelSignal?: AbortSignal;
 }
 
@@ -1125,6 +1146,52 @@ async function settleWithin<T>(
   return result;
 }
 
+/** One stream's rolling tail: whole chunks are kept until the bytes beyond the
+ *  bound are a complete earlier chunk, so memory stays near `limit`. */
+class StreamTail {
+  private chunks: Buffer[] = [];
+  private size = 0;
+  private dropped = false;
+
+  constructor(private readonly limit: number) {}
+
+  push(chunk: Buffer): void {
+    this.chunks.push(chunk);
+    this.size += chunk.length;
+    while (
+      this.chunks.length > 0 &&
+      this.size - this.chunks[0]!.length >= this.limit
+    ) {
+      this.size -= this.chunks.shift()!.length;
+      this.dropped = true;
+    }
+  }
+
+  tail(): OutputTail {
+    const all = Buffer.concat(this.chunks);
+    return all.length > this.limit
+      ? { bytes: all.subarray(all.length - this.limit), omitted: true }
+      : { bytes: all, omitted: this.dropped };
+  }
+}
+
+/** The errno name a spawn or cleanup cause carries, if any. */
+function errnoOf(cause: unknown): string | undefined {
+  const code = (cause as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "string" && /^E[A-Z0-9]+$/.test(code)
+    ? code
+    : undefined;
+}
+
+function spawnError(cause: unknown): SpawnResult {
+  const errno = errnoOf(cause);
+  return {
+    kind: "spawn-error",
+    ...(errno !== undefined ? { errno } : {}),
+    cause,
+  };
+}
+
 /** Windows Command route: direct execution, capped streamed output, and
  * taskkill /T /F cleanup. POSIX asynchronous roots use native lifetime ownership. */
 function spawnCommandWithNode(
@@ -1168,8 +1235,16 @@ function spawnCommandWithNode(
         captured += chunk.length;
       }
     };
-    child.stdout?.on("data", (chunk: Buffer) => collect(stdoutChunks, chunk));
-    child.stderr?.on("data", (chunk: Buffer) => collect(stderrChunks, chunk));
+    const stdoutTail = new StreamTail(options.maxTailBytes ?? 0);
+    const stderrTail = new StreamTail(options.maxTailBytes ?? 0);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      collect(stdoutChunks, chunk);
+      stdoutTail.push(chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      collect(stderrChunks, chunk);
+      stderrTail.push(chunk);
+    });
 
     let escalation: ReturnType<typeof setTimeout> | undefined;
     const onAbort = (): void => {
@@ -1195,18 +1270,26 @@ function spawnCommandWithNode(
       resolve(result);
     };
 
-    child.on("error", () => finish({ kind: "spawn-error" }));
+    child.on("error", (cause) => finish(spawnError(cause)));
     // `close` fires after the process exited and its stdio streams closed, so all
     // captured output is in hand — and, with the group killed, only once a
     // grandchild holding stdout open has died too.
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       // taskkill /F yields a native status, so cancellation/timeout flags
       // attribute Windows cleanup. POSIX retains its independent root evidence.
       if (options.cancelSignal?.aborted) {
         return finish({ kind: "cancelled" });
       }
-      if (timeoutSignal.aborted) return finish({ kind: "timeout" });
-      if (code === null) return finish({ kind: "signal" });
+      if (timeoutSignal.aborted) {
+        return finish({
+          kind: "timeout",
+          stdout: stdoutTail.tail(),
+          stderr: stderrTail.tail(),
+        });
+      }
+      // An outside termination leaves Windows a native exit status, so this
+      // branch reports only a signal Node itself observed (#530).
+      if (code === null) return finish({ kind: "signal", signal });
       let text = Buffer.concat([...stdoutChunks, ...stderrChunks]);
       if (truncated) {
         text = Buffer.concat([text, Buffer.from(options.truncationMarker)]);
@@ -1241,10 +1324,12 @@ async function spawnCommandWithPosix(
     );
   } catch (cause) {
     watch.failed(cause);
-    return { kind: "spawn-error" };
+    return spawnError(cause);
   }
   const stdout: Buffer[] = [],
     stderr: Buffer[] = [];
+  const stdoutTail = new StreamTail(options.maxTailBytes ?? 0),
+    stderrTail = new StreamTail(options.maxTailBytes ?? 0);
   let captured = 0,
     truncated = false;
   const collect = (into: Buffer[], bytes: Buffer): void => {
@@ -1256,8 +1341,14 @@ async function spawnCommandWithPosix(
       captured += chunk.length;
     }
   };
-  child.stdout.on("data", (bytes: Buffer) => collect(stdout, bytes));
-  child.stderr.on("data", (bytes: Buffer) => collect(stderr, bytes));
+  child.stdout.on("data", (bytes: Buffer) => {
+    collect(stdout, bytes);
+    stdoutTail.push(bytes);
+  });
+  child.stderr.on("data", (bytes: Buffer) => {
+    collect(stderr, bytes);
+    stderrTail.push(bytes);
+  });
   child.stdin.end();
   let escalation: ReturnType<typeof setTimeout> | undefined;
   let forceBound: ReturnType<typeof setTimeout> | undefined;
@@ -1291,10 +1382,17 @@ async function spawnCommandWithPosix(
     if (close.kind === "signal") {
       if (child.rootSignalled() && options.cancelSignal?.aborted)
         return { kind: "cancelled" };
-      if (child.rootSignalled() && timeout.aborted) return { kind: "timeout" };
-      return { kind: "signal" };
+      if (child.rootSignalled() && timeout.aborted)
+        return {
+          kind: "timeout",
+          stdout: stdoutTail.tail(),
+          stderr: stderrTail.tail(),
+        };
+      return { kind: "signal", signal: close.signal };
     }
-    if (close.kind !== "exited") return { kind: "spawn-error" };
+    // A cleanup failure cannot prove a complete result; it keeps its cause.
+    if (close.kind !== "exited")
+      return spawnError("cause" in close ? close.cause : undefined);
     let text = Buffer.concat([...stdout, ...stderr]);
     if (truncated)
       text = Buffer.concat([text, Buffer.from(options.truncationMarker)]);

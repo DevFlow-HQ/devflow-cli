@@ -1,3 +1,4 @@
+import { timedOut } from "../process/fake-adapter.js";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import type {
   ProcessAdapter,
@@ -94,7 +95,7 @@ function fakeBundleCommand(
   // else `timeout`, matching a real child killed by our own timeout.
   if (script.includes("setTimeout(")) {
     const signal = options.cancelSignal;
-    if (signal === undefined) return { kind: "timeout" };
+    if (signal === undefined) return timedOut();
     return new Promise<SpawnResult>((resolve) => {
       signal.addEventListener("abort", () => resolve({ kind: "cancelled" }), {
         once: true,

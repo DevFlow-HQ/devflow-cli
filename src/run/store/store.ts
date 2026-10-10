@@ -110,14 +110,24 @@ export interface RestingCauseRequest {
 }
 
 /** What a Detailed diagnostic holds (ADR 0041). The Store renders it to plain
- *  text, passing `cause` through the safe cause translator. */
+ *  text, passing `cause` through the safe cause translator. A Command appears as
+ *  the Bundle declares it, and its tails stay as captured apart from the bound. */
 export interface DiagnosticContent {
   readonly kind: string;
   readonly cause?: unknown;
+  readonly command?: string;
+  readonly stdoutTail?: CommandOutputTail;
+  readonly stderrTail?: CommandOutputTail;
   readonly partialOutput?: string;
   readonly retryEvidence?: string;
   readonly harnessDiagnostics?: string;
   readonly lastObservation?: string;
+}
+
+/** One Command stream's last output; `omitted` says earlier output was dropped. */
+export interface CommandOutputTail {
+  readonly text: string;
+  readonly omitted: boolean;
 }
 
 /** One registered Run and its ownership (ADR 0031). `live` is whether the Run is

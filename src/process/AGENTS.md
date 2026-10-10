@@ -28,6 +28,12 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   SIGCHLD plus yielding 25 ms live-root probes cover Bun's fallback waiter; native state never blocks the JS thread.
   Unix stdio is one-way: end parent output sockets' unused write halves before launch to avoid Darwin's kqueue EOF reset.
   Oversized TMPDIR socket names use a short private acquisition folder; child cwd, argv, and environment remain authored.
+- A Command's `SpawnResult` keeps its typed cause (ADR 0041, #530): `spawn-error` carries the errno name when the cause has one and the cause
+  itself, including a POSIX cleanup failure; `timeout` carries each stream's last `maxTailBytes`, kept apart from the shared capped prefix that
+  successful output uses, with `omitted` when earlier bytes were dropped; `signal` carries the observed name, `null` for an unnamed number.
+  Unlike the child fact, the cause may name the executable; its caller translates it before anything is stored.
+- Windows has no Command signal observation (#530): an outside termination (`taskkill /F` from another process) leaves exit status 1, so the Command
+  reports `exited` and its Attempt a fail Verdict, never `killed`. Process conformance records that native outcome; only POSIX proves `signal`.
 - Interrupt is a two-stage shutdown that shares one `gracefulMs`: the process gets the whole bound to exit on the graceful signal, then the same bound
   again to die once force-killed. The bound is not split between the stages.
 - Owned stdin keeps its own `error` listener through teardown; child-process errors do not cover pipe errors. `closeStdin` reaps before returning that cause
@@ -37,7 +43,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Child facts (#321): every spawn path reports through one `ChildWatch`, so its role, PID, and kill state agree across paths and it settles once.
   The role set and observer are type-only, so the one runtime export above stays the only one. A synchronous spawn reports `spawn` before it
   blocks and gets its PID only on settlement. `exit` means Secant sent no kill and `reap` means it did; `kill-escalation` follows the first kill on
-  Windows, matching `interrupt`'s `escalated`. A `spawn-error` keeps only the native code, because the message, syscall, and stack name the
+  Windows, matching `interrupt`'s `escalated`. A `spawn-error` fact keeps only the native code, because the message, syscall, and stack name the
   executable. A sync child killed for overrunning `maxBuffer` returns an error and a PID, so it is a `reap`. A throwing observer is swallowed.
 - Because the primary PATH walk cannot see a Windows App Execution Alias, a miss falls back to the first `where.exe` match (#165). The `.cmd`/`.bat` shim
   rule still applies to that path; Secant passes an alias path to the OS at spawn and never reads or resolves its AppExecLink target itself.

@@ -2,7 +2,7 @@ import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { withClients } from "../../src/composition/main.js";
-import { createFakeProcess } from "../process/fake-adapter.js";
+import { createFakeProcess, timedOut } from "../process/fake-adapter.js";
 import { createFakeGitProcess } from "../run/store/fake-git-process.js";
 import { writeCommandBundle } from "../helpers/commandBundle.js";
 import { setEnvironmentForTest } from "../helpers/environment.js";
@@ -192,7 +192,7 @@ test("a refused spawn and a timed-out child warn, with the native code and no PI
               executable: name,
               prefixArgs: [],
             }),
-            commandHandler: () => ({ kind: "timeout" }),
+            commandHandler: () => timedOut(),
             // The Preflight worktree probe's git never runs.
             syncCommandHandler: () => ({
               kind: "spawn-error",

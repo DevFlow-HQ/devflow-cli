@@ -39,16 +39,6 @@ export interface TimelineRow {
   readonly dividers?: readonly Rule[];
 }
 
-/** The latest failed Attempt or Turn's evidence used by details until Resting causes
- *  identify the stopping subject (#529). */
-export function latestFailure(run: RunView) {
-  for (const event of [...run.timeline].reverse()) {
-    if (event.failure !== undefined && !("turnId" in event.failure))
-      return event.failure;
-  }
-  return undefined;
-}
-
 /** Where a Step begins: a thin rule naming the Step (#289). */
 export function stepDivider(step: string): Rule {
   return { glyph: "─", title: `Step · ${step}` };

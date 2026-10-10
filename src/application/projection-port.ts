@@ -946,6 +946,17 @@ export type RunTimelineKind =
  *  A subset of `StepKindName`, and independent of the Turn's `origin`. */
 export type RunTurnKind = "agent" | "interactive-agent";
 
+/** The latest failed Attempt or Turn's evidence, which both clients' details
+ *  read until Resting causes identify the stopping subject (#529, #533). An
+ *  Attempt that points at its Turn's evidence defers to that Turn. */
+export function latestFailure(run: RunView): RunFailureView | undefined {
+  for (const event of [...run.timeline].reverse()) {
+    if (event.failure !== undefined && !("turnId" in event.failure))
+      return event.failure;
+  }
+  return undefined;
+}
+
 /** Explicit suffix on a bounded timeline detail. Clients preserve this wording at
  * the end of the displayed content instead of inferring truncation from length. */
 export const RUN_TIMELINE_TRUNCATION_MARKER = "… output truncated";
@@ -1049,8 +1060,12 @@ export interface RunConflictView {
 
 /** Failure facts narrowed at read, with wording derived for both clients. */
 export interface RunFailureView {
-  readonly source: "receipt" | "agent" | "harness" | "unknown";
+  readonly source: "receipt" | "command" | "agent" | "harness" | "unknown";
   readonly code:
+    | "spawn-failed"
+    | "executable-missing"
+    | "timed-out"
+    | "killed"
     | "receipt-missing"
     | "receipt-not-file"
     | "receipt-symlink"

@@ -1,4 +1,4 @@
-import { latestFailure } from "./run-timeline-rows.js";
+import { latestFailure } from "../application/projection-port.js";
 import { useRenderer } from "@opentui/solid";
 import { TextAttributes } from "@opentui/core";
 import {

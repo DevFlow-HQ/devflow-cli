@@ -1,3 +1,4 @@
+import { timedOut } from "../process/fake-adapter.js";
 import { readRun } from "./run-test-helpers.js";
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
@@ -66,7 +67,7 @@ function home(
     started = resolve;
   });
   const { process, runs } = countingBundleProcess((step, options) => {
-    if (firstAttempts[step] === "timeout") return { kind: "timeout" };
+    if (firstAttempts[step] === "timeout") return timedOut();
     if (firstAttempts[step] !== "interrupted") return undefined;
     started();
     return new Promise<SpawnResult>((resolve) =>

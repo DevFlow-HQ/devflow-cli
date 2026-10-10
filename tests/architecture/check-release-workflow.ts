@@ -247,6 +247,7 @@ export const NAMED_CHECK_SCENARIOS = [
   "m10-followup-prompt-completion",
   "m11-execution-fault-rest",
   "m11-receipt-failure-evidence",
+  "m11-command-failure-evidence",
   "m11-pre-turn-agent-evidence",
 
   "m11-harness-failure-evidence",

@@ -601,6 +601,12 @@ jobs:
           -t '^m11-receipt-failure-evidence(:|$)'
           tests/application/agent-output-receipt.test.ts
           tests/run/store/attempt-and-artifact-publication.test.ts
+      - name: m11-command-failure-evidence
+        run: >-
+          bun run test --
+          -t '^m11-command-failure-evidence(:|$)'
+          tests/application/command-failure-evidence.test.ts
+          tests/run/store/attempt-and-artifact-publication.test.ts
       - name: m11-pre-turn-agent-evidence
         run: >-
           bun run test --

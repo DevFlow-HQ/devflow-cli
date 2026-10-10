@@ -1,4 +1,4 @@
-import { latestFailure } from "./run-timeline-rows.js";
+import { latestFailure } from "../application/projection-port.js";
 import { TextAttributes, type TextareaRenderable } from "@opentui/core";
 import {
   batch,

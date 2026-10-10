@@ -267,7 +267,7 @@ async function exitedRootCleanup(options: {
         ),
         rootExit === "status"
           ? { kind: "exited", status: 17, text: Buffer.from("outerr") }
-          : { kind: "signal" },
+          : { kind: "signal", signal: "SIGTERM" },
       );
     } else {
       assert.ok(owned !== undefined);
@@ -484,7 +484,9 @@ async function liveRootStops(): Promise<void> {
         else writeFileSync(release, "release");
         assert.deepEqual(
           await withTimeout(pending, 5000, "live root did not settle"),
-          stop === "cancellation" ? { kind: "cancelled" } : { kind: "signal" },
+          stop === "cancellation"
+            ? { kind: "cancelled" }
+            : { kind: "signal", signal: "SIGTERM" },
         );
         const lifecycle = facts.filter(
           (fact) => "pid" in fact && fact.pid === pid,

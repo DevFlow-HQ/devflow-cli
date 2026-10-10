@@ -1,3 +1,4 @@
+import { spawnFailed } from "../process/fake-adapter.js";
 import { writeAgentBundle } from "../helpers/agentBundle.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
@@ -663,7 +664,7 @@ test("m12-wiring-test-helpers: a resume runs Preflight again and settles it befo
     ...base,
     spawnCommand: (options) =>
       failures-- > 0
-        ? Promise.resolve({ kind: "spawn-error" })
+        ? Promise.resolve(spawnFailed())
         : base.spawnCommand(options),
   };
   const cmd = writeCommandBundle({ retry: 0 });

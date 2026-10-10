@@ -1055,3 +1055,100 @@ test("m11-pre-turn-agent-evidence: diagnostics redact before bounding Harness te
   assert.match(section, /Secant omitted further Harness diagnostics/);
   assert.ok(!section.includes("END"));
 });
+
+test("m11-command-failure-evidence: publication writes a Command diagnostic with exact bounded tails, once, and never for a fenced owner", (t) => {
+  const home = makeTempDir("secant-command-diagnostic-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-command-diagnostic");
+  assert.equal(created.outcome, "created");
+  if (created.outcome !== "created") return;
+  const diagnostics = join(groupDirOf(home), created.runId, "diagnostics");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  // Past the 30,000-character bound only the last characters stay, behind the
+  // omission marker; a short stream stays exactly as captured.
+  // The bound counts characters, so a cut never splits a surrogate pair.
+  const kept = "y".repeat(29_996) + "\u{1F600}END";
+  const stderr = "line 1\r\n\ttabbed é\u0000 line 2";
+  const command = '{"executable":"bun","arguments":["-e","hang()"]}';
+  const request = {
+    attemptId: "c1",
+    outcome: "failed" as const,
+    required: [],
+    outputs: [],
+    at: AT,
+    failureEvidence: {
+      source: "command",
+      code: "timed-out",
+      possibleEffects: "unknown" as const,
+      details: { timeLimitMs: 600_000 },
+      diagnostic: {
+        kind: "timed-out",
+        command,
+        stdoutTail: { text: `\u{1F600}dropped-${kept}`, omitted: false },
+        stderrTail: { text: stderr, omitted: false },
+      },
+    },
+  };
+  assert.ok(owner.publishAttempt(request).ok);
+  const [evidence] = owner.failureEvidence();
+  const diagnosticId = evidence?.diagnosticId;
+  assert.ok(diagnosticId);
+  assert.deepEqual(readdirSync(diagnostics), [diagnosticId]);
+  assert.equal(
+    dec(owner.readDiagnostic(diagnosticId)),
+    "Kind: timed-out\n\n" +
+      `Command stdout tail:\n[secant: earlier output omitted]\n${kept}\n\n` +
+      `Command stderr tail:\n${stderr}\n\nCommand: ${command}\n`,
+  );
+
+  // A stream the Process already cut carries the marker even within the bound,
+  // and an empty uncut stream writes no section. Replaying the published
+  // Attempt writes no second file.
+  assert.ok(owner.publishAttempt(request).ok);
+  assert.deepEqual(readdirSync(diagnostics), [diagnosticId]);
+  assert.ok(
+    owner.publishAttempt({
+      ...request,
+      attemptId: "c2",
+      failureEvidence: {
+        ...request.failureEvidence,
+        diagnostic: {
+          kind: "timed-out",
+          command,
+          stdoutTail: { text: "", omitted: true },
+          stderrTail: { text: "", omitted: false },
+        },
+      },
+    }).ok,
+  );
+  const second = owner
+    .failureEvidence()
+    .find((e) => e.attemptId === "c2")?.diagnosticId;
+  assert.ok(second);
+  assert.equal(
+    dec(owner.readDiagnostic(second)),
+    "Kind: timed-out\n\n" +
+      "Command stdout tail:\n[secant: earlier output omitted]\n\n\n" +
+      `Command: ${command}\n`,
+  );
+
+  // A fenced owner writes neither the row nor its diagnostic.
+  const successor = group.acquireRun(created.runId);
+  assert.ok(successor);
+  t.after(() => successor.close());
+  assert.equal(
+    owner.publishAttempt({ ...request, attemptId: "fenced" }).ok,
+    false,
+  );
+  owner.close();
+  assert.equal(readdirSync(diagnostics).length, 2);
+  assert.deepEqual(
+    successor
+      .failureEvidence()
+      .map((e) => e.attemptId)
+      .sort(),
+    ["c1", "c2"],
+  );
+});

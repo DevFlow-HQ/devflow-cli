@@ -1,3 +1,4 @@
+import { timedOut } from "../process/fake-adapter.js";
 import { readRun } from "./run-test-helpers.js";
 import { storedProcess } from "../helpers/wiringDoubles.js";
 import assert from "node:assert/strict";
@@ -40,7 +41,7 @@ function fakeCommand(
 ): SpawnResult | Promise<SpawnResult> {
   const script = options.args[1] ?? "";
   if (script.includes("setInterval") || script.includes("setTimeout")) {
-    if (options.cancelSignal === undefined) return { kind: "timeout" };
+    if (options.cancelSignal === undefined) return timedOut();
     if (options.cancelSignal.aborted) return { kind: "cancelled" };
     return new Promise<SpawnResult>((resolve) => {
       options.cancelSignal!.addEventListener(

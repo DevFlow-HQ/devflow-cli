@@ -13,6 +13,8 @@ import {
 } from "./conformance.js";
 import {
   createFakeProcess,
+  spawnFailed,
+  timedOut,
   type FakeOwnedProcessEmission,
 } from "./fake-adapter.js";
 
@@ -97,6 +99,42 @@ const scenarios: ProcessConformanceScenarios = {
       cancel: () => controller.abort(),
     };
   },
+  commandTimeoutTails: () => ({
+    process: createFakeProcess({
+      commands: [
+        {
+          trigger: "immediate",
+          result: {
+            kind: "timeout",
+            stdout: { bytes: encoder.encode("tail-out"), omitted: true },
+            stderr: { bytes: encoder.encode("err"), omitted: false },
+          },
+        },
+      ],
+    }),
+    options: { ...basicCommandOptions, maxTailBytes: 8 },
+    stdout: { text: "tail-out", omitted: true },
+    stderr: { text: "err", omitted: false },
+  }),
+  commandSignal: () => ({
+    process: createFakeProcess({
+      commands: [
+        {
+          trigger: "immediate",
+          result:
+            process.platform === "win32"
+              ? { kind: "exited", status: 1, text: new Uint8Array() }
+              : { kind: "signal", signal: "SIGTERM" },
+        },
+      ],
+    }),
+    options: basicCommandOptions,
+    terminate: async () => {},
+    observed:
+      process.platform === "win32"
+        ? { kind: "exited", status: 1 }
+        : { kind: "signal", signal: "SIGTERM" },
+  }),
   ownedExit: () => ({
     process: createFakeProcess({
       ownedProcesses: [
@@ -209,14 +247,14 @@ const scenarios: ProcessConformanceScenarios = {
   },
   treeCleanup: () => ({
     process: createFakeProcess({
-      commands: [{ trigger: "immediate", result: { kind: "timeout" } }],
+      commands: [{ trigger: "immediate", result: timedOut() }],
     }),
     options: basicCommandOptions,
   }),
   failures: () => ({
     process: createFakeProcess({
       resolutions: [{ name: missing, result: { kind: "not-found" } }],
-      commands: [{ trigger: "immediate", result: { kind: "spawn-error" } }],
+      commands: [{ trigger: "immediate", result: spawnFailed() }],
       ownedProcesses: [
         {
           kind: "launch-failure",
@@ -288,7 +326,7 @@ test("fake process reports each scripted child's facts as the real Adapter would
   const fake = createFakeProcess(
     {
       commands: [
-        { trigger: "immediate", result: { kind: "spawn-error" } },
+        { trigger: "immediate", result: spawnFailed() },
         { trigger: "immediate", result: { kind: "cancelled" } },
       ],
       ownedProcesses: [
@@ -325,7 +363,7 @@ test("fake process reports each scripted child's facts as the real Adapter would
   const [, cancelled, interrupted, timedOut] = [40_000, 40_001, 40_002, 40_003];
   const settled = { elapsedMs: 12.6 };
   assert.deepEqual(facts, [
-    { kind: "spawn-error", role: "command", ...settled },
+    { kind: "spawn-error", role: "command", code: "ENOENT", ...settled },
     { kind: "spawn", role: "command", pid: cancelled },
     { kind: "cancellation", role: "command", pid: cancelled },
     {

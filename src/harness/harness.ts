@@ -438,14 +438,18 @@ export type ToolCall = {
     | { readonly kind: "declined"; readonly reason?: string };
 };
 
+/** M10's retained command-output bound: the last characters kept of one stream,
+ *  for Harness tool output and a timed-out Command's Detailed diagnostic alike. */
+export const COMMAND_OUTPUT_TAIL_CHARACTERS = 30_000;
+
 /** Retained command text, independent of native omissions and display collapse. */
 /** The normalized tail budget applies before observations reach any consumer. */
 export function retainCommandOutput(output: CommandOutput): CommandOutput {
-  return output.text.length <= 30_000
+  return output.text.length <= COMMAND_OUTPUT_TAIL_CHARACTERS
     ? output
     : {
         ...output,
-        text: output.text.slice(-30_000),
+        text: output.text.slice(-COMMAND_OUTPUT_TAIL_CHARACTERS),
         secantDropped: true,
       };
 }

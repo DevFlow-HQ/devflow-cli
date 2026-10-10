@@ -72,6 +72,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Neither M11 migration backfills: a predecessor rest keeps no cause and its Attempts no evidence, so both read as unknown (#536).
 - Every Detailed diagnostic goes through the private `diagnostics.ts` writer inside the guarded transaction, after the epoch check and before the row
   that references it, so a fenced owner writes no file and a rollback leaves only an orphan for the prune. Its cause passes through `translateCause`.
+  Command tails (#530) keep their last 30,000 characters exactly, behind one omission marker when anything was dropped, and come before the
+  Harness sections; a replayed publication writes no second file.
 - Closed Store policy columns (`attempt_log.outcome`, `gate_answer.answer`, `pending_gate.shape`) validate at read ingress with `z.enum`.
   Turn `origin`, `kind`, `result_kind`, event `kind`, and Session `availability` remain raw legacy-compatible strings.
   `openAgentAttemptTurn`/`waitingAgentTurn` compares Turn kinds/results by equality; unknown values never establish an Agent wait.

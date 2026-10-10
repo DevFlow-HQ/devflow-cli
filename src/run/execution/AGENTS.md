@@ -30,6 +30,10 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   64 KiB, non-empty once trimmed, or the Attempt fails (retryable) and moves no binding. Assistant prose is never read as an output or as Routing control.
   Publication records `receipt-missing`, `receipt-not-file`, `receipt-symlink`, `receipt-too-large`, `receipt-invalid-utf8`, or `receipt-blank` with
   the output name and, for too-large, the size limit (#529). The Turn remains `completed`; other receipt I/O failures record no invented code.
+- A Command Attempt keeps its outcome and records why (#530): a program missing at resolution is `executable-missing`; a spawn error is
+  `spawn-failed` with its errno and a translated-cause diagnostic; a timeout is `timed-out` with `timeLimitMs` and a diagnostic of both streams'
+  tails; all three fail and retry. A signal is `killed` with its name, `indeterminate`, and halts. The diagnostic carries the Command as the
+  Bundle declares it, never its resolved environment. Cancellation still unwinds without publishing.
 - Bundle prompts are matched after artifact-slot substitution and before Turn admission (#410), using the selected registration's rules.
   A reserved Agent prompt fails through ordinary Attempt retries with no Turn; a reserved Entry leaves the Run blocked. Both keep `prompt-refused` evidence (#531).
   An unadmitted Entry's evidence rides its blocked state write against the unpublished Attempt; Human text keeps Application admission.

@@ -647,3 +647,175 @@ for (const scenario of harnessFailureCases) {
     assert.match(t.captureCharFrame(), /Kind: turn-/);
   });
 }
+
+const COMMAND_TIMED_OUT: Failure = {
+  source: "command",
+  code: "timed-out",
+  possibleEffects: "unknown",
+  details: { timeLimitMs: 600_000 },
+  explanation:
+    "The Command ran past its 10-minute time limit and was stopped. It may have changed files before it stopped.",
+  nextStep:
+    "Resume the Run to try again. Open the details section for its last output.",
+  diagnostic: { runId: "run-1", diagnosticId: "tail-diag", type: "diagnostic" },
+};
+const COMMAND_MISSING: Failure = {
+  source: "command",
+  code: "executable-missing",
+  possibleEffects: "none",
+  explanation: "The Command's program was not found.",
+  nextStep: "Install the program or fix its path, then resume the Run.",
+};
+const COMMAND_KILLED: Failure = {
+  source: "command",
+  code: "killed",
+  possibleEffects: "unknown",
+  nativeCode: "SIGTERM",
+  explanation:
+    "A signal stopped the Command before it finished. It may have changed files before it stopped.",
+  nextStep: "Resume the Run to run the Command again.",
+};
+
+/** A frame's words without the failure row's border, so wrapped text reads whole. */
+function prose(frame: string): string {
+  return frame.replace(/┃/g, "").replace(/\s+/g, " ");
+}
+
+function commandFailed(failure: Failure, detail = "failed") {
+  return runOf({
+    state: detail === "indeterminate" ? "halted" : "failed",
+    timeline: [
+      { at: "T001", event: "run-created" },
+      { at: "T002", event: "attempt-settled", detail, step: "check", failure },
+    ],
+  });
+}
+
+test("m11-workbench-failure-presentation: a timed-out Command states its bound, warns of effects, and its details open the last output", async () => {
+  const { t, renderer, control } = await mountWorkbench(runOf(), 100, 40);
+  control.setRead("d:tail-diag", {
+    found: true,
+    type: "diagnostic",
+    content:
+      "Kind: timed-out\n\nCommand stdout tail:\nLAST_STDOUT\n\nCommand stderr tail:\nLAST_STDERR",
+  });
+  control.setRun(commandFailed(COMMAND_TIMED_OUT));
+  await t.waitForFrame((frame) => frame.includes("✗ Step Attempt failed"));
+  const flat = prose(t.captureCharFrame());
+  assert.match(
+    flat,
+    /The Command ran past its 10-minute time limit and was stopped\. It may have changed files before it stopped\./,
+  );
+  assert.match(
+    flat,
+    /Next: Resume the Run to try again\. Open the details section for its last output\./,
+  );
+  assert.doesNotMatch(flat, /timed-out|600000/);
+  await press(t, renderer, "g", { ctrl: true });
+  const panel = t.captureCharFrame();
+  assert.match(panel, /Source · command/);
+  assert.match(panel, /Code · timed-out/);
+  assert.match(panel, /Possible effects · May have changed files/);
+  assert.match(panel, /failure diagnostic: timed-out/);
+  while (!/› failure diagnostic/.test(t.captureCharFrame()))
+    await press(t, renderer, "down");
+  await press(t, renderer, "return");
+  assert.match(t.captureCharFrame(), /LAST_STDOUT[\s\S]*LAST_STDERR/);
+
+  const expired = await mountWorkbench(
+    commandFailed(COMMAND_TIMED_OUT),
+    100,
+    40,
+  );
+  await press(expired.t, expired.renderer, "g", { ctrl: true });
+  assert.match(
+    expired.t.captureCharFrame(),
+    /Diagnostic · Expired after 90 days/,
+  );
+});
+
+test("m11-workbench-failure-presentation: a Command that never started carries no effects warning and records no diagnostic", async () => {
+  const { t, renderer } = await mountWorkbench(
+    commandFailed(COMMAND_MISSING),
+    100,
+    30,
+  );
+  const flat = prose(t.captureCharFrame());
+  assert.match(
+    flat,
+    /✗ Step Attempt failed The Command's program was not found\./,
+  );
+  assert.match(
+    flat,
+    /Next: Install the program or fix its path, then resume the Run\./,
+  );
+  assert.doesNotMatch(flat, /It may have changed files/);
+  await press(t, renderer, "g", { ctrl: true });
+  const panel = t.captureCharFrame();
+  assert.match(panel, /Code · executable-missing/);
+  assert.match(panel, /Possible effects · No changes made/);
+  assert.match(panel, /Diagnostic · None recorded/);
+});
+
+test("m11-workbench-failure-presentation: a killed Command reads as stopped by a signal and keeps the signal for details", async () => {
+  const { t, renderer } = await mountWorkbench(
+    commandFailed(COMMAND_KILLED, "indeterminate"),
+    100,
+    30,
+  );
+  const flat = prose(t.captureCharFrame());
+  assert.match(
+    flat,
+    /A signal stopped the Command before it finished\. It may have changed files before it stopped\./,
+  );
+  assert.match(flat, /Next: Resume the Run to run the Command again\./);
+  assert.doesNotMatch(flat, /SIGTERM/);
+  await press(t, renderer, "g", { ctrl: true });
+  assert.match(t.captureCharFrame(), /Native code · SIGTERM/);
+});
+
+for (const appearance of ["dark", "light"] as const) {
+  test(`m11-workbench-failure-presentation: ${appearance} Command rows wrap completely at every width and height`, async () => {
+    const preferences = previewPreferences();
+    const { t, renderer } = await mountWorkbench(
+      commandFailed(COMMAND_TIMED_OUT),
+      140,
+      50,
+      undefined,
+      false,
+      0,
+      {
+        ...preferences,
+        snapshot: () => ({
+          ...preferences.snapshot(),
+          preferences: { theme: "everforest", appearance },
+        }),
+      },
+    );
+    assert.equal(
+      colourOf(t, /┃/),
+      appearance === "dark" ? "230,126,128" : "248,85,82",
+    );
+    for (const [width, height] of [
+      [140, 50],
+      [100, 40],
+      [40, 40],
+      [40, 12],
+    ] as const) {
+      resizeWorkbench(t, renderer, width, height);
+      await t.renderOnce();
+      noOverflow(t.captureCharFrame(), width);
+      const collected: string[] = [t.captureCharFrame()];
+      for (let i = 0; i < 10; i++) {
+        await press(t, renderer, "pageup");
+        collected.push(t.captureCharFrame());
+      }
+      const all = prose(collected.join("\n"));
+      assert.match(all, /10-minute time limit/, `${width}x${height}`);
+      assert.match(all, /before it stopped\./, `${width}x${height}`);
+      assert.match(all, /for its last output\./, `${width}x${height}`);
+      assert.doesNotMatch(all, /…/);
+      await press(t, renderer, "end", { alt: true });
+    }
+  });
+}

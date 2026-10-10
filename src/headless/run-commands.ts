@@ -1,3 +1,4 @@
+import { latestFailure } from "../application/projection-port.js";
 import type { CommandIO } from "./output.js";
 import { headlessJson } from "./json.js";
 import { createRunNoticeReporter, runSnapshotJson } from "./run-notice.js";
@@ -792,6 +793,16 @@ async function showRun(
         read.found
           ? `\nDiagnostic:\n${read.content}`
           : "\nDiagnostic: expired\n",
+      );
+    }
+    // The latest failure's diagnostic, as the Workbench details offer it.
+    const failure = latestFailure(run);
+    if (failure?.diagnostic !== undefined) {
+      const read = port.readResource(failure.diagnostic);
+      io.out(
+        read.found
+          ? `\nFailure diagnostic:\n${read.content}`
+          : "\nFailure diagnostic: expired\n",
       );
     }
     return 0;

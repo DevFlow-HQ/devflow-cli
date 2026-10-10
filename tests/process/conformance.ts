@@ -4,6 +4,7 @@ import type {
   OwnedProcessOptions,
   ProcessAdapter,
   SpawnOptions,
+  SpawnResult,
 } from "../../src/process/process.js";
 
 /** What a scenario's observer recorded. The real scenarios attach one and each
@@ -38,6 +39,19 @@ export interface ProcessConformanceScenarios {
   };
   commandCancellation(): ProcessConformanceCase<SpawnOptions> & {
     cancel(): void;
+  };
+  /** A Command that writes `stdout` and `stderr`, then outlives its time limit. */
+  commandTimeoutTails(): ProcessConformanceCase<SpawnOptions> & {
+    readonly stdout: { readonly text: string; readonly omitted: boolean };
+    readonly stderr: { readonly text: string; readonly omitted: boolean };
+  };
+  /** A Command stopped by an outside termination once it runs: POSIX observes
+   *  its signal, while Windows observes the native exit status it left. */
+  commandSignal(): ProcessConformanceCase<SpawnOptions> & {
+    terminate(): Promise<void>;
+    readonly observed:
+      | Extract<SpawnResult, { kind: "signal" }>
+      | { readonly kind: "exited"; readonly status: number };
   };
   ownedExit(): ProcessConformanceCase<OwnedProcessOptions> & {
     readonly stdout: string;
@@ -141,6 +155,61 @@ export function registerProcessConformanceCases(
   );
 
   register(
+    name("a timeout keeps each stream's bounded tail separately"),
+    async () => {
+      const scenario = scenarios.commandTimeoutTails();
+      const result = await scenario.process.spawnCommand(scenario.options);
+      assert.equal(result.kind, "timeout", JSON.stringify(result));
+      if (result.kind !== "timeout") throw new Error("unreachable");
+      const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+      assert.deepEqual(
+        {
+          stdout: {
+            text: decode(result.stdout.bytes),
+            omitted: result.stdout.omitted,
+          },
+          stderr: {
+            text: decode(result.stderr.bytes),
+            omitted: result.stderr.omitted,
+          },
+        },
+        { stdout: scenario.stdout, stderr: scenario.stderr },
+      );
+      if (scenario.facts === undefined) return;
+      assertChildFacts(scenario.facts, "command", [
+        "spawn",
+        "timeout",
+        ...forcedOnWindows,
+        "reap",
+      ]);
+    },
+  );
+
+  register(
+    name("an outside termination keeps its native observation"),
+    async () => {
+      const scenario = scenarios.commandSignal();
+      const pending = scenario.process.spawnCommand(scenario.options);
+      await scenario.terminate();
+      const result = await pending;
+      assert.deepEqual(
+        result.kind === "exited"
+          ? { kind: result.kind, status: result.status }
+          : result,
+        scenario.observed,
+      );
+      if (scenario.facts === undefined) return;
+      // Secant sent no kill, so the child's end is an exit fact either way.
+      const exit = assertChildFacts(scenario.facts, "command", [
+        "spawn",
+        "exit",
+      ]);
+      if (windows) assert.equal(exit.status, 1);
+      else assert.equal(exit.signal, "SIGTERM");
+    },
+  );
+
+  register(
     name("delivers ordered stdout and stderr before one exit result"),
     async () => {
       const scenario = scenarios.ownedExit();
@@ -229,9 +298,8 @@ export function registerProcessConformanceCases(
     name("reaps a tree whose descendant holds the output pipe"),
     async () => {
       const scenario = scenarios.treeCleanup();
-      assert.deepEqual(await scenario.process.spawnCommand(scenario.options), {
-        kind: "timeout",
-      });
+      const result = await scenario.process.spawnCommand(scenario.options);
+      assert.equal(result.kind, "timeout", JSON.stringify(result));
       if (scenario.facts === undefined) return;
       assertChildFacts(scenario.facts, "command", [
         "spawn",
@@ -248,9 +316,12 @@ export function registerProcessConformanceCases(
     assert.deepEqual(scenario.process.resolveExecutable(scenario.missingName), {
       kind: "not-found",
     });
-    assert.deepEqual(await scenario.process.spawnCommand(scenario.command), {
-      kind: "spawn-error",
-    });
+    // A Command's spawn error keeps its errno name and the original cause.
+    const command = await scenario.process.spawnCommand(scenario.command);
+    assert.equal(command.kind, "spawn-error");
+    if (command.kind !== "spawn-error") throw new Error("unreachable");
+    assert.equal(command.errno, "ENOENT");
+    assert.ok(command.cause instanceof Error, String(command.cause));
     const launched = await scenario.process.spawnOwnedProcess(scenario.owned);
     assert.equal(launched.ok, false);
     if (launched.ok) throw new Error("unreachable");

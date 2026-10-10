@@ -188,6 +188,47 @@ const scenarios: ProcessConformanceScenarios = {
       cancel: () => controller.abort(),
     };
   },
+  commandTimeoutTails: () => ({
+    ...observedProcess(),
+    options: commandOptions(
+      "process.stdout.write('0123456789abcdefOUT');" +
+        "process.stderr.write('short-err');setInterval(()=>{},1000)",
+      { timeoutMs: 3_000, maxTailBytes: 16 },
+    ),
+    stdout: { text: "3456789abcdefOUT", omitted: true },
+    stderr: { text: "short-err", omitted: false },
+  }),
+  // Another process stops the running Command: `taskkill /F` on Windows, whose
+  // termination leaves exit status 1 rather than a signal, and SIGTERM on POSIX
+  // (#530). Secant sends neither, so neither is a reap.
+  commandSignal: () => {
+    const observed = observedProcess();
+    return {
+      ...observed,
+      options: commandOptions("setInterval(()=>{},1000)"),
+      terminate: async () => {
+        let spawned: ChildFact | undefined;
+        while (
+          (spawned = observed.facts.find(
+            (fact) => fact.role === "command" && fact.kind === "spawn",
+          )) === undefined
+        )
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        const pid = "pid" in spawned ? spawned.pid : undefined;
+        assert.ok(pid !== undefined, JSON.stringify(spawned));
+        if (process.platform === "win32") {
+          const stop = spawnSync("taskkill", ["/PID", String(pid), "/F"], {
+            windowsHide: true,
+          });
+          assert.equal(stop.status, 0, String(stop.stderr));
+        } else process.kill(pid, "SIGTERM");
+      },
+      observed:
+        process.platform === "win32"
+          ? { kind: "exited", status: 1 }
+          : { kind: "signal", signal: "SIGTERM" },
+    };
+  },
   ownedExit: () => ({
     ...observedProcess(),
     options: ownedOptions(

@@ -34,6 +34,30 @@ export function processWithSpawn(
   };
 }
 
+/** A scripted Command that ran past its time limit, with each stream's tail. */
+export function timedOut(
+  stdout = "",
+  stderr = "",
+  omitted = false,
+): SpawnResult {
+  const tail = (text: string) => ({
+    bytes: new TextEncoder().encode(text),
+    omitted,
+  });
+  return { kind: "timeout", stdout: tail(stdout), stderr: tail(stderr) };
+}
+
+/** A scripted Command whose spawn failed with `errno`, as the real Adapter keeps it. */
+export function spawnFailed(errno = "ENOENT"): SpawnResult {
+  return {
+    kind: "spawn-error",
+    errno,
+    cause: Object.assign(new Error(`spawn scripted-command ${errno}`), {
+      code: errno,
+    }),
+  };
+}
+
 interface FakeResolutionScript {
   readonly name: string;
   readonly result: ExecutableResolution;
@@ -117,7 +141,7 @@ export function createFakeProcess(
 
 type Observe = (fact: ChildFact) => void;
 
-// A scripted settlement's signal, which no SpawnResult names, and the fixed
+// A scripted settlement's signal when its result names none, and the fixed
 // elapsed time every settlement reports (fractional, so rounding shows).
 const FAKE_SIGNAL: NodeJS.Signals = "SIGTERM";
 const FAKE_ELAPSED_MS = 12.6;
@@ -146,7 +170,7 @@ function commandSettlement(
           kind: "exit",
           role,
           pid,
-          signal: FAKE_SIGNAL,
+          signal: result.signal ?? FAKE_SIGNAL,
           elapsedMs: FAKE_ELAPSED_MS,
         },
       ];
@@ -167,7 +191,14 @@ function commandSettlement(
         },
       ];
     case "spawn-error":
-      return [{ kind: "spawn-error", role, elapsedMs: FAKE_ELAPSED_MS }];
+      return [
+        {
+          kind: "spawn-error",
+          role,
+          ...(result.errno !== undefined ? { code: result.errno } : {}),
+          elapsedMs: FAKE_ELAPSED_MS,
+        },
+      ];
   }
 }
 

@@ -18,6 +18,12 @@ import {
 } from "../application/interactive-agent-fixture.js";
 import { fakeHarnessProfile } from "../harness/fake-adapter.js";
 import { awaitSettled, followRun } from "../helpers/settleOperation.js";
+import {
+  DECLARED_COMMAND,
+  LONG_STDOUT,
+  STDERR_TAIL,
+  launchCommandFailure,
+} from "../helpers/commandFailure.js";
 
 // `run show` for a resting Run (#528, ADR 0041): "Stopped because:" and "Next:"
 // under `State:`, an optional `restingCause` in `--json`, and the cause's
@@ -376,3 +382,91 @@ for (const scenario of harnessFailureCases) {
     }
   });
 }
+
+test("m11-headless-failure-output: Command failures explain each timeline line, keep native code and time bound in JSON, and print the failure diagnostic", async (t) => {
+  const timedOut = await launchCommandFailure(t, "timed-out");
+  const shown = await show(timedOut.wired, [timedOut.runId]);
+  assert.equal(shown.code, 0);
+  const failedLines = shown.out
+    .split("\n")
+    .filter((line) => line.includes("attempt-settled failed"));
+  assert.equal(failedLines.length, 2);
+  for (const line of failedLines)
+    assert.match(
+      line,
+      /attempt-settled failed · step check · The Command ran past its 10-minute time limit and was stopped\. It may have changed files before it stopped\.$/,
+    );
+  // The latest failed Attempt's diagnostic is read through its reference. The
+  // terminal shows a carriage return as a line end; the resource keeps it.
+  assert.ok(
+    shown.out.endsWith(
+      "\nFailure diagnostic:\nKind: timed-out\n\n" +
+        `Command stdout tail:\n[secant: earlier output omitted]\n${LONG_STDOUT.slice(-30_000)}\n\n` +
+        `Command stderr tail:\n${STDERR_TAIL.replace("\r\n", "\n")}\n\n` +
+        `Command: ${DECLARED_COMMAND}\n`,
+    ),
+    JSON.stringify(shown.out.slice(-120)),
+  );
+  const json = await show(timedOut.wired, [timedOut.runId, "--json"]);
+  assert.equal(json.code, 0);
+  const failure = JSON.parse(json.out).result.run.timeline.find(
+    (e: { event: string }) => e.event === "attempt-settled",
+  ).failure;
+  assert.deepEqual(
+    { ...failure, diagnostic: undefined },
+    {
+      source: "command",
+      code: "timed-out",
+      possibleEffects: "unknown",
+      details: { timeLimitMs: 600_000 },
+      explanation:
+        "The Command ran past its 10-minute time limit and was stopped. It may have changed files before it stopped.",
+      nextStep:
+        "Resume the Run to try again. Open the details section for its last output.",
+      diagnostic: undefined,
+    },
+  );
+  assert.equal(failure.diagnostic.type, "diagnostic");
+
+  const killed = await launchCommandFailure(t, "killed");
+  const halted = await show(killed.wired, [killed.runId]);
+  assert.equal(halted.code, 0);
+  assert.match(
+    halted.out,
+    /attempt-settled indeterminate · step check · A signal stopped the Command before it finished\. It may have changed files before it stopped\.\n/,
+  );
+  assert.doesNotMatch(halted.out, /Failure diagnostic/);
+  const killedJson = JSON.parse(
+    (await show(killed.wired, [killed.runId, "--json"])).out,
+  ).result.run.timeline.find(
+    (e: { event: string }) => e.event === "attempt-settled",
+  );
+  assert.equal(killedJson.failure.nativeCode, "SIGTERM");
+  assert.equal(killedJson.failure.code, "killed");
+
+  // A never-started Command carries no possible-effects sentence.
+  const missing = await launchCommandFailure(t, "spawn-enoent");
+  const notFound = await show(missing.wired, [missing.runId]);
+  assert.match(
+    notFound.out,
+    /attempt-settled failed · step check · The Command's program was not found\.\n/,
+  );
+  assert.match(notFound.out, /\nFailure diagnostic:\nKind: spawn-failed\n/);
+  const missingJson = JSON.parse(
+    (await show(missing.wired, [missing.runId, "--json"])).out,
+  ).result.run.timeline.find(
+    (e: { event: string }) => e.event === "attempt-settled",
+  );
+  assert.equal(missingJson.failure.nativeCode, "ENOENT");
+  assert.equal(missingJson.failure.possibleEffects, "none");
+});
+
+test("m11-headless-failure-output: a pruned Command diagnostic reads expired", async (t) => {
+  const { wired, runId, home } = await launchCommandFailure(t, "timed-out");
+  const runs = join(home, "runs");
+  const diagnostics = join(runs, readdirSync(runs)[0]!, runId, "diagnostics");
+  for (const file of readdirSync(diagnostics)) rmSync(join(diagnostics, file));
+  const shown = await show(wired, [runId]);
+  assert.equal(shown.code, 0);
+  assert.match(shown.out, /\nFailure diagnostic: expired\n$/);
+});
