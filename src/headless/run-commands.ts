@@ -784,6 +784,16 @@ async function showRun(
       const read = port.readResource(run.conflict.reference);
       if (read.found) io.out(`\nDiagnostic:\n${read.content}`);
     }
+    // A Resting cause's Detailed diagnostic is read the same way; the 90-day
+    // prune may already have removed it (ADR 0041).
+    if (run.restingCause?.diagnostic !== undefined) {
+      const read = port.readResource(run.restingCause.diagnostic);
+      io.out(
+        read.found
+          ? `\nDiagnostic:\n${read.content}`
+          : "\nDiagnostic: expired\n",
+      );
+    }
     return 0;
   } finally {
     opened.close();

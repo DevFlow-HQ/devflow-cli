@@ -587,6 +587,24 @@ jobs:
           bun run test --
           -t '^m10-followup-prompt-completion(:|$)'
           tests/tui/run-workbench-prompt-completion.test.tsx
+      - name: m11-execution-fault-rest
+        run: >-
+          bun run test --
+          -t '^m11-execution-fault-rest(:|$)'
+          tests/application/execution-fault-rest.test.ts
+          tests/application/materialization.test.ts
+          tests/application/retained-step-shutdown.test.ts
+          tests/run/store/ownership-and-recovery.test.ts
+      - name: m11-workbench-failure-presentation
+        run: >-
+          bun run test --
+          -t '^m11-workbench-failure-presentation(:|$)'
+          tests/tui/run-workbench-failure.test.tsx
+      - name: m11-headless-failure-output
+        run: >-
+          bun run test --
+          -t '^m11-headless-failure-output(:|$)'
+          tests/headless/failure-output.test.ts
       - name: M10 runtime failure regressions
         run: bun run test:runtime-conformance -- --audit-runtime-failure-causes
       - name: Test

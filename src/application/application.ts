@@ -31,6 +31,7 @@ import {
 } from "../run/execution/execution.js";
 import type {
   PublishAttemptRequest,
+  RestingCauseRequest,
   RunGroup,
   RunOwner,
   RunRecord,
@@ -912,10 +913,32 @@ export function createApplication(deps: ApplicationDependencies): Application {
     owner: RunOwner,
     runId: string,
     outcome: "cancelled" | "halted" | "blocked",
+    restingCause?: RestingCauseRequest,
   ): ReturnType<RunOwner["writeState"]> {
-    const result = owner.writeState(outcome);
+    const result = owner.writeState(outcome, restingCause);
     if (result.ok) observe({ kind: "run-rest", runId, outcome });
     return result;
+  }
+
+  // Rest a Run whose walk wrote `running` and then faulted `halted` with the
+  // `execution-fault` cause and its diagnostic (ADR 0041, #528), so it is never
+  // left `running` with no owner. False when the halting write itself failed:
+  // the caller keeps the owner, and the next start's reconciliation rests it.
+  function restExecutionFault(
+    owner: RunOwner,
+    runId: string,
+    error: unknown,
+  ): boolean {
+    try {
+      return restRun(observedOwner(owner, runId), runId, "halted", {
+        code: "execution-fault",
+        diagnostic: { kind: "execution-fault", cause: error },
+      }).ok;
+    } catch {
+      // A throwing write is a failed halt too. The Operation's Problem already
+      // carries the drive's own fault, and reconciliation recovers the Run.
+      return false;
+    }
   }
 
   // Wrap the acquired owner so each canonical write pushes a fresh Run snapshot
@@ -964,9 +987,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
         if (result.ok) pushRunUpdate(runId, owner);
         return result;
       },
-      writeState(state) {
+      writeState(state, restingCause) {
         const previous = tracking?.state;
-        const result = owner.writeState(state);
+        const result = owner.writeState(state, restingCause);
         if (result.ok && tracking !== undefined) {
           tracking.state = state;
           pushRunUpdate(runId);
@@ -1215,6 +1238,11 @@ export function createApplication(deps: ApplicationDependencies): Application {
         }
         params.setRetainOwner(true);
         return { status: "applied" };
+      }
+      // A fault before the walk wrote `running` leaves the Run as it was; after
+      // it, the Run rests `halted` before its owner is released.
+      if (tracking.state === "running") {
+        params.setRetainOwner(!restExecutionFault(owner, runId, error));
       }
       return {
         status: "not-applied",

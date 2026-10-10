@@ -41,6 +41,7 @@ import type {
   RunSnapshot,
   RunStepProgress,
   RunTimelineEvent,
+  RunRestingCauseView,
   RunView,
   SessionHistorySnapshot,
   SessionHistoryRow,
@@ -497,6 +498,24 @@ export function snapshotOf(run: RunView): RunSnapshot {
   return { family: "run", runId: run.runId, result: { found: true, run } };
 }
 
+/** The Projection's reading of a rest that recorded no Resting cause. */
+const UNKNOWN_RESTING_CAUSE: RunRestingCauseView = {
+  code: "unknown",
+  explanation: "This Step failed for unknown reasons.",
+  nextStep: "Resume the Run to try again, or delete it.",
+};
+
+/** An internal fault's Resting cause, with its Detailed diagnostic (#528). */
+export const EXECUTION_FAULT_CAUSE: RunRestingCauseView = {
+  code: "execution-fault",
+  explanation:
+    "Secant hit an internal error. It may have changed files before it stopped.",
+  nextStep:
+    "Resume the Run to try again. If it happens again, open the details section for the cause.",
+  possibleEffects: "unknown",
+  diagnostic: { runId: "run-1", diagnosticId: "diag-1", type: "diagnostic" },
+};
+
 export function runOf(over: Partial<RunView> = {}): RunView {
   return {
     runId: over.runId ?? "run-1",
@@ -519,6 +538,14 @@ export function runOf(over: Partial<RunView> = {}): RunView {
       ? { pendingGate: over.pendingGate }
       : {}),
     ...(over.conflict !== undefined ? { conflict: over.conflict } : {}),
+    // As the Projection does: a `halted` or `failed` Run without a conflict
+    // always says why it rests, reading unknown when its rest recorded no cause.
+    ...(over.restingCause !== undefined
+      ? { restingCause: over.restingCause }
+      : (over.state === "halted" || over.state === "failed") &&
+          over.conflict === undefined
+        ? { restingCause: UNKNOWN_RESTING_CAUSE }
+        : {}),
     ...(over.completion !== undefined ? { completion: over.completion } : {}),
     ...(over.pendingAgentCompletion !== undefined
       ? { pendingAgentCompletion: over.pendingAgentCompletion }

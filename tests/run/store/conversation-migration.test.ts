@@ -263,6 +263,10 @@ test("m10-audit-legacy-turn-order: authentic tool/request writes and interleaved
       const owner = group.acquireRun(before.runId);
       assert.ok(owner);
       try {
+        // The previous-release record gains the Resting-cause columns, and the
+        // dead owner's `running` Run rests with the crash cause (#528).
+        assert.equal(owner.record.state, "halted");
+        assert.deepEqual(owner.record.restingCause, { code: "secant-stopped" });
         assert.deepEqual(conversation(owner.transcript()), before.transcript);
         assert.deepEqual(owner.turnEvents(), before.events);
         assert.deepEqual(owner.turns().slice(0, 3), before.turns.slice(0, 3));

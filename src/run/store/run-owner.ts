@@ -6,7 +6,6 @@ import {
   readFileSync,
   rmSync,
   realpathSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
@@ -24,6 +23,7 @@ import { translateCause, type ModelChoice } from "../../harness/harness.js";
 import type { ProcessAdapter } from "../../process/process.js";
 import { waitingAgentTurn } from "./agent-attempt.js";
 import { openArtifactRepo } from "./artifacts/artifacts.js";
+import { renderDiagnostic, writeDiagnostic } from "./diagnostics.js";
 import {
   artifactBindings,
   artifactVersions,
@@ -41,6 +41,8 @@ import type {
   RecordConflictRequest,
   RecordGateAnswerRequest,
   RecordPendingGateRequest,
+  RestingCauseRecord,
+  RestingCauseRequest,
   RunOwner,
   RunRecord,
   SelectedHarnessId,
@@ -127,6 +129,8 @@ const runRecordRow = z.object({
   requested_effort: z.string().nullable(),
   state: z.string(),
   created_at: z.string(),
+  resting_cause_code: z.string().nullable(),
+  resting_cause_diagnostic_id: z.string().nullable(),
 });
 const selectedHarnessRow = z.object({
   selected_harness: selectedHarnessId.nullable(),
@@ -259,6 +263,16 @@ function toRunRecord(row: z.infer<typeof runRecordRow>): RunRecord {
       : {}),
     state: row.state,
     createdAt: row.created_at,
+    ...(row.resting_cause_code !== null
+      ? {
+          restingCause: {
+            code: row.resting_cause_code,
+            ...(row.resting_cause_diagnostic_id !== null
+              ? { diagnosticId: row.resting_cause_diagnostic_id }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -534,10 +548,13 @@ export function reconcileRunStore(params: TReconcileRunStoreParams): boolean {
               at: params.at.toISOString(),
             })
             .run();
-          tx.update(runRecord)
-            .set({ state: "halted" })
-            .where(eq(runRecord.run_id, parsed.data.run_id))
-            .run();
+          // Its owner died mid-walk: Secant stopped while the Step ran.
+          updateRunState({
+            db: tx,
+            runId: parsed.data.run_id,
+            state: "halted",
+            restingCause: { code: "secant-stopped" },
+          });
           settleAbandonedTurns(tx, params.at.toISOString());
         }
         if (
@@ -573,12 +590,32 @@ interface TUpdateRunStateParams {
   readonly db: SQLiteBunDatabase;
   readonly runId: string;
   readonly state: string;
+  readonly restingCause?: RestingCauseRecord;
 }
 
+// Every state write sets the Resting cause it was given, else clears the last
+// one: a resumed Run loses its old cause (ADR 0041). Only a `halted` or `failed`
+// rest carries one.
 function updateRunState(params: TUpdateRunStateParams): void {
+  const cause = params.restingCause;
+  if (
+    cause !== undefined &&
+    params.state !== "halted" &&
+    params.state !== "failed"
+  ) {
+    throw new Error(
+      `Run Store: a "${params.state}" Run carries no Resting cause.`,
+    );
+  }
   params.db
     .update(runRecord)
-    .set({ state: params.state })
+    .set({
+      state: params.state,
+      resting_cause_code: cause?.code ?? null,
+      resting_cause_details: null,
+      resting_cause_evidence_id: null,
+      resting_cause_diagnostic_id: cause?.diagnosticId ?? null,
+    })
     .where(eq(runRecord.run_id, params.runId))
     .run();
 }
@@ -921,9 +958,28 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       if (receipt.ok) record = { ...record, modelChoice: { ...choice } };
       return receipt;
     },
-    writeState(state) {
+    writeState(state, restingCause?: RestingCauseRequest) {
       const result = guardedWrite((tx) => {
-        updateRunState({ db: tx, runId: params.runId, state });
+        updateRunState({
+          db: tx,
+          runId: params.runId,
+          state,
+          ...(restingCause !== undefined
+            ? {
+                restingCause: {
+                  code: restingCause.code,
+                  ...(restingCause.diagnostic !== undefined
+                    ? {
+                        diagnosticId: writeDiagnostic(
+                          diagnosticsDir,
+                          renderDiagnostic(restingCause.diagnostic),
+                        ),
+                      }
+                    : {}),
+                },
+              }
+            : {}),
+        });
       });
       return toWriteResult(result);
     },
@@ -999,20 +1055,16 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       return readAttemptLog(db);
     },
     recordMaterializationConflict(request) {
-      const diagnosticId = randomUUID();
-      const diagnosticPath = join(diagnosticsDir, diagnosticId);
-      const recorded = guardedWrite((tx) => {
-        mkdirSync(diagnosticsDir, {
-          recursive: true,
-          mode: process.platform === "win32" ? undefined : 0o700,
-        });
-        writeFileSync(diagnosticPath, request.diagnostic, {
-          mode: process.platform === "win32" ? undefined : 0o600,
-        });
+      const recorded = guardedTransaction((tx) => {
+        const diagnosticId = writeDiagnostic(
+          diagnosticsDir,
+          request.diagnostic,
+        );
         recordConflict({ db: tx, runId: params.runId, request, diagnosticId });
+        return diagnosticId;
       });
       if (recorded.kind === "fenced") return FENCED_WRITE;
-      return { ok: true, diagnosticId };
+      return { ok: true, diagnosticId: recorded.value };
     },
     materializationConflicts() {
       return db

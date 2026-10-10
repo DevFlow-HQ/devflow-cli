@@ -16,7 +16,7 @@ write, launch, and read invariants; the abort-reason vocabulary and the resting 
   held owner); a signal throws nothing, so `runAndSettle` returns through its normal path, and a signal leaves the claim live for the next open to reconcile.
 - `cancel-run` is cancel-as-abort for active work in this process; a held blocked Run is rested directly, a non-live blocked Run is acquired and rested, and a Run live
   elsewhere takes the fresh-owner epoch-bump path. `shutdown()` drains every Run it owns with no work in flight, selected by retained ownership, never the durable
-  state (#385): a drive that faulted mid-Turn retains its owner and Step with the Run still `running`. It closes the held Harness, releases a blocked
+  state (#385): a drive whose halting write failed after a fault retains its owner and Step with the Run still `running`. It closes the held Harness, releases a blocked
   rest's claim without changing it, and leaves follow-up waiting claims and any non-blocked claim for Store reconciliation, since an unowned `running`
   record is never reconciled. It establishes `SIGNAL_ABORT` on every live Run synchronously before awaiting any retained cleanup (#437),
   so a slow Step close cannot turn preparation cancellation into a Harness Problem. It captures those drives' settlement promises, drains idle
@@ -49,6 +49,11 @@ Before changing Turn interrupt, Steer, live Model choice changes, or Agent follo
 - `send` settles `applied` at the Turn's durable admission (#290), the Run already `running`, while `tracking.promise` still spans the whole Turn for cancel
   and shutdown. A Turn ending unadmitted (unusable Session, fenced admission, stopped first) settles `not-applied` (`interactive-turn-not-admitted`, or its
   own earlier Problem); a fault after admission lands on the Run's `problem`, since the Operation already settled.
+- A drive that faults once its walk wrote `running` (launch, resume, a Gate answer, an interactive send or ending, the follow-up) rests the Run `halted`
+  with the `execution-fault` Resting cause and its Detailed diagnostic in `driveWithAbortProtocol`'s catch, then releases its owner; the Operation still
+  returns `run-execution-fault` (#528, ADR 0041). If that halting write fails, the owner and any held Step are retained so the next start's
+  reconciliation rests the Run `secant-stopped`. A fault before `running` leaves the Run as it was. Never add an ownerless-`running` sweep to
+  reconciliation; the `m11-execution-fault-rest` regression guards this path instead (#527 decision 21).
 - `interactiveStepTarget` derives the resting iteration's Attempt id and Session from the attempt log (a Step inside a Repeat group, or `fresh`, gets a
   per-Attempt Session). `end` publishes that Attempt (empty, succeeded, stages no commit) with `advanceState: "running"` and re-drives execution, which
   re-walks from the top, replays settled iterations, and skips the settled Step (#216).

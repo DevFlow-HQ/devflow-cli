@@ -52,7 +52,7 @@ Slash entry; no other site builds list rows or list hint wording.
   `Copy unsent text` through the terminal clipboard; unavailable clipboard support leaves text saved. Automatic restores preserve details or dialog focus.
 - Interrupt drops wait for the live Turn and pending receipts to leave (#356). Full text comes from `RunTimelineEvent.steer`, never its capped `detail`.
   The private draft controller (`run-draft-control.ts`) owns captures, ordered recovery, every clear (native empty input included) and its restore note,
-  and saves a finished Run's typed draft for Copy. Steer receipts, fakes included, require their opaque Operation id to match durable `steerId`, including
+  and saves a resting Run's typed draft for Copy. Steer receipts, fakes included, require their opaque Operation id to match durable `steerId`, including
   identical-text retries and different Attempts; equal text never identifies a capture.
   Captured send order wins; uncaptured drops retain recorded order. Opening old history and repeated snapshots never restore twice. Restore only into an
   interactive Step's prompt or an Agent Step's follow-up (#354); a signal-halted Agent Step's same-target drops stay history.

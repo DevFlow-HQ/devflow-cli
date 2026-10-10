@@ -233,9 +233,9 @@ test("a live-state Run shows no Run id or process at any width; the id shows onc
       new RegExp(state[0]!.toUpperCase() + state.slice(1)),
     );
 
-    // Leaving the live state brings the Run id back with the resting prose, and
-    // the bottom region counts that note: the full timeline still leaves the
-    // prompt's keys on screen.
+    // Leaving the live state brings the Run id back in the resting view, with
+    // why the Run rests, and the bottom region counts its rows: the full timeline
+    // still leaves the resting view's keys on screen.
     control.setRun(
       runOf({
         state: "halted",
@@ -249,12 +249,14 @@ test("a live-state Run shows no Run id or process at any width; the id shows onc
     const resting = t.captureCharFrame();
     assert.match(
       resting,
-      /⏸ Run run-1 halted · Execution stopped outside the Workflow\./,
+      /⏸ Run halted — This Step failed for unknown reasons\./,
     );
-    assert.match(resting, /\^G details · \^P commands · esc back/);
+    assert.match(resting, /^\s*Run run-1\s*$/m);
+    assert.match(resting, /ctrl\+g details to resume or delete · esc back/);
     resizeWorkbench(t, renderer, 50, 40);
     await t.renderOnce();
-    assert.match(t.captureCharFrame(), /⏸ Run run-1 halted/);
+    assert.match(t.captureCharFrame(), /⏸ Run halted/);
+    assert.match(t.captureCharFrame(), /^\s*Run run-1\s*$/m);
   }
 
   for (const state of ["failed", "succeeded", "cancelled"] as const) {
@@ -268,28 +270,31 @@ test("a live-state Run shows no Run id or process at any width; the id shows onc
   }
 });
 
-test("a resting Run's long id clips with an ellipsis in its outcome and the details panel", async () => {
+test("a resting Run's long id wraps in full in its resting view and clips with an ellipsis in the details panel", async () => {
   const runId = `run-${"x".repeat(120)}`;
+  /** The resting view wraps, never cuts (#528): the id reads whole once joined. */
+  const wholeId = (frame: string) =>
+    frame.replace(/\s+/g, "").includes(`Run${runId}ctrl+g`);
   const { t, renderer } = await mountWorkbench(
     runOf({ runId, state: "failed" }),
     100,
     30,
   );
-  assert.match(t.captureCharFrame(), /^\s*Run run-x+…\s*$/m);
+  assert.ok(wholeId(t.captureCharFrame()));
   await press(t, renderer, "g", { ctrl: true });
   const panel = t.captureCharFrame();
   noOverflow(panel, 100);
   const clipped = panel
     .split("\n")
     .filter((line) => /^\s*Run run-x+…\s*$/.test(line));
-  assert.equal(clipped.length, 2); // the outcome's Run line and the panel's Run row
+  assert.equal(clipped.length, 1); // the panel's Run row
 
-  await press(t, renderer, "escape"); // focus returns to the outcome
+  await press(t, renderer, "escape"); // focus returns to the resting view
   resizeWorkbench(t, renderer, 50, 30);
   await t.renderOnce();
   const narrow = t.captureCharFrame();
   noOverflow(narrow, 50);
-  assert.match(narrow, /^\s*Run run-x+…\s*$/m);
+  assert.ok(wholeId(narrow));
 });
 
 test("resize relayouts the timeline without overflow and keeps every state readable without colour", async () => {
@@ -356,9 +361,9 @@ test("the details panel carries the Run id and names whether the Run is live her
 test("every terminal resting state carries its prose beside the state word (#194 story 38)", async () => {
   for (const [state, prose] of [
     ["succeeded", "Workflow completed."],
-    ["failed", "This Run has ended."],
+    ["failed", "This Step failed for unknown reasons."],
     ["cancelled", "You cancelled this Run."],
-    ["halted", "Execution stopped outside the Workflow."],
+    ["halted", "This Step failed for unknown reasons."],
   ] as const) {
     const { t } = await mountWorkbench(runOf({ state }), 100, 30);
     assert.match(
@@ -478,7 +483,7 @@ test("the scanner stops when the Turn ends, leaving the boundary's words (#292)"
   await agent.t.renderOnce();
   frame = agent.t.captureCharFrame();
   assert.doesNotMatch(frame, /[■⬝]|\[⋯\]|working ·/);
-  assert.match(frame, /Run run-1 halted/);
+  assert.match(frame, /⏸ Run halted/);
 });
 
 test("with reduced motion the scanner is a static [⋯] and the working words stay (#292)", async () => {

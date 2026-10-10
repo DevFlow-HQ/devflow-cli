@@ -294,6 +294,14 @@ export function renderRun(run: RunView): string {
     `Workspace: ${run.workspacePath}`,
     `Launched: ${run.launchedAt}`,
     `State: ${run.state}`,
+    // Why a resting Run stopped and what to do next (ADR 0041), in the
+    // Projection's words; a Materialization conflict says why in its own block.
+    ...(run.restingCause !== undefined
+      ? [
+          `Stopped because: ${run.restingCause.explanation}`,
+          `Next: ${run.restingCause.nextStep}`,
+        ]
+      : []),
     // A confirmed End Stage (#218) completes by human declaration, never a check.
     ...(run.completion === "agent-declared"
       ? ["Completion: declared by the agent"]

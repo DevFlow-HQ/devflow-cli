@@ -19,6 +19,7 @@ import type {
   Problem,
   ResumeRunOffer,
   RunCheckpointView,
+  RunRestingCauseView,
   RunStateName,
   RunStepStatus,
   RunView,
@@ -26,6 +27,7 @@ import type {
   RunTimelineEvent,
 } from "../application/projection-port.js";
 import { clip } from "./clip.js";
+import { wrap } from "./wrap.js";
 import type { TranscriptTarget } from "./run-transcript.js";
 import type { Openable } from "./run-inspection.js";
 import type { Theme } from "./vendor/theme.js";
@@ -222,57 +224,81 @@ export function PromptControl(props: {
   );
 }
 
-/** Rows the finished-Run outcome holds in the bottom region: the outcome in words,
- *  the Run id, and its keys. */
-export const FINISHED_HEIGHT = 3;
+/** The Run states whose resting view replaces the prompt (ADR 0036, ADR 0041). */
+export type RestingState = "succeeded" | "failed" | "cancelled" | "halted";
 
-/** The terminal Run states the finished outcome names. */
-export type FinishedState = "succeeded" | "failed" | "cancelled";
-
-const FINISHED_GLYPH: Record<FinishedState, string> = {
+const RESTING_GLYPH: Record<RestingState, string> = {
   succeeded: "✓",
   failed: "✗",
   cancelled: "■",
+  halted: "⏸",
 };
 
-/** A terminal Run's outcome (ADR 0036): it replaces the prompt, names the Run id
- *  now that the Run has left an active state, and reads by glyph and words. */
-export function FinishedOutcome(props: {
-  run: Accessor<RunView>;
-  state: Accessor<FinishedState>;
-  width: Accessor<number>;
+/** One drawn row of the resting view. */
+export interface RestingLine {
+  readonly text: string;
+  readonly tone: DetailsTone;
+  readonly bold: boolean;
+}
+
+/** The resting view's rows at `width`, wrapped in full so a long explanation is
+ *  never cut (#528): the state and why the Run rests, the next step its Resting
+ *  cause names, the Run id now that the Run has left an active state, and its
+ *  keys. The Workbench reserves exactly these rows. */
+export function restingLines(
+  run: RunView,
+  state: RestingState,
+  width: number,
+): readonly RestingLine[] {
+  const prose = restingProse(run);
+  const lines = (text: string, tone: DetailsTone, bold = false) =>
+    wrap(text, width, 2).map((line) => ({ text: line, tone, bold }));
+  const next = run.restingCause?.nextStep;
+  return [
+    ...lines(
+      `${RESTING_GLYPH[state]} Run ${state}${prose === undefined ? "" : ` — ${prose}`}`,
+      restingTone(state),
+      true,
+    ),
+    ...(next === undefined ? [] : lines(`  Next: ${next}`, "text")),
+    ...lines(`  Run ${run.runId}`, "text"),
+    ...lines(
+      next === undefined
+        ? "  ctrl+g details · esc back · ctrl+c quit"
+        : "  ctrl+g details to resume or delete · esc back · ctrl+c quit",
+      "muted",
+    ),
+  ];
+}
+
+/** A resting Run's view (ADR 0036): it replaces the prompt and captures no typed
+ *  text, so the details panel's resume and delete stay the only routes. It reads by
+ *  glyph and words, never colour alone. */
+export function RestingView(props: {
+  lines: Accessor<readonly RestingLine[]>;
   theme: Theme;
 }) {
   const { theme } = props;
-  const w = () => props.width();
-  const state = () => props.state();
-  const glyph = () => FINISHED_GLYPH[state()];
-  const colour = () =>
-    state() === "succeeded"
-      ? theme.success
-      : state() === "failed"
-        ? theme.error
-        : theme.textMuted;
   return (
     <box
       flexDirection="column"
-      height={FINISHED_HEIGHT}
+      height={props.lines().length}
       flexShrink={0}
       overflow="hidden"
       backgroundColor={theme.backgroundPanel}
     >
-      <text fg={colour()} attributes={TextAttributes.BOLD} flexShrink={0}>
-        {clip(
-          `${glyph()} Run ${state()} — ${restingProse(props.run()) ?? ""}`,
-          w(),
+      <For each={props.lines()}>
+        {(line) => (
+          <text
+            fg={toneColour(theme, line.tone)}
+            attributes={line.bold ? TextAttributes.BOLD : 0}
+            flexShrink={0}
+            wrapMode="none"
+          >
+            {line.text}
+          </text>
         )}
-      </text>
-      <text fg={theme.text} flexShrink={0}>
-        {clip(`  Run ${props.run().runId}`, w())}
-      </text>
-      <text fg={theme.textMuted} flexShrink={0}>
-        {clip("  ctrl+g details · esc back · ctrl+c quit", w())}
-      </text>
+      </For>
     </box>
   );
 }
@@ -370,13 +396,15 @@ export function CheckpointInteraction(props: {
   );
 }
 
-/** Short prose stating why a resting Run rests (#194 story 38), derived purely in
- *  presentation from the Run view's `state` and — for `halted`/`blocked` — the
- *  conflict/checkpoint/gate facts. Exhaustive over `RunStateName` so a new state
- *  must be given prose here to compile. `running` is not a resting state. The finished
- *  outcome or the halted prompt's note (beside the state word, so colour is never the
- *  only signal, AC4) and the panel's recovery evidence (AC2) render this one string. */
-export function restingProse(run: RunView): string | undefined {
+/** Short prose stating why a resting Run rests (#194 story 38). A `halted` or
+ *  `failed` Run reads its Resting cause's explanation, which the Projection
+ *  derives (ADR 0041), except that a Materialization conflict keeps its own reason
+ *  until its cause is recorded; the other states are worded here from the Run
+ *  view's facts. Exhaustive over `RunStateName` so a new state must be given prose
+ *  here to compile. `running` is not a resting state. The resting view (beside the
+ *  state word, so colour is never the only signal, AC4) and the panel's recovery
+ *  evidence (AC2) render this one string. */
+function restingProse(run: RunView): string | undefined {
   switch (run.state) {
     case "running":
       return undefined;
@@ -388,13 +416,13 @@ export function restingProse(run: RunView): string | undefined {
           ? "You declared the stage complete; Secant did not check the tracker."
           : "Workflow completed.";
     case "failed":
-      return "This Run has ended.";
+      return run.restingCause?.explanation;
     case "cancelled":
       return "You cancelled this Run.";
     case "halted":
       return run.conflict !== undefined
         ? "A required file changed, so execution stopped outside the Workflow."
-        : "Execution stopped outside the Workflow.";
+        : run.restingCause?.explanation;
     case "blocked":
       return run.checkpoint !== undefined
         ? "You stopped at the Review checkpoint."
@@ -411,6 +439,17 @@ export interface DetailsRow {
   readonly tone: DetailsTone;
   readonly bold: boolean;
 }
+
+/** Possible effects in plain phrases, so the stored `partial` is never misread
+ *  as a half-finished Step (#527 decision 28). */
+const EFFECTS: Record<
+  NonNullable<RunRestingCauseView["possibleEffects"]>,
+  string
+> = {
+  none: "No changes made",
+  unknown: "May have changed files",
+  partial: "Changed files before it stopped",
+};
 
 function restingTone(state: RunStateName): DetailsTone {
   switch (state) {
@@ -437,6 +476,8 @@ export function buildDetailsRows(params: {
   readonly compact: boolean;
   readonly focused: boolean;
   readonly openables: readonly (Openable | TranscriptTarget)[];
+  /** The Resting cause's diagnostic was pruned (ADR 0041). */
+  readonly diagnosticExpired: boolean;
   readonly selected: number;
   /** Set when the resting resume offer arms an indeterminate-Command-Attempt
    *  acknowledgement (#194 story 39); surfaced as recovery evidence too. */
@@ -525,6 +566,27 @@ export function buildDetailsRows(params: {
   if (recovery.length > 0) {
     push("  Recovery:", "muted");
     rows.push(...recovery);
+  }
+
+  // The technical cause the everyday screen leaves out (ADR 0041): the Resting
+  // cause's code and possible effects in plain phrases, its diagnostic among the
+  // Resources, and a transient Problem's code.
+  const cause = run.restingCause;
+  if (cause !== undefined || run.problem !== undefined) {
+    push("  Failure:", "muted");
+    if (cause !== undefined) {
+      push(`  Resting cause · ${cause.code}`, restingTone(run.state));
+      if (cause.possibleEffects !== undefined)
+        push(`  Possible effects · ${EFFECTS[cause.possibleEffects]}`);
+      if (cause.diagnostic !== undefined)
+        push(
+          params.diagnosticExpired
+            ? "  Diagnostic · Expired after 90 days"
+            : "  Diagnostic · open the failure diagnostic under Resources",
+        );
+    }
+    if (run.problem !== undefined)
+      push(`  Problem · ${run.problem.code}`, "error");
   }
 
   push("  Resources:", "muted");

@@ -7,12 +7,16 @@ the controls it dispatches is in [run-control](./run-control.md). [ADR 0036](../
 
 ## One bottom interaction
 
-- `interaction` (`run-workbench.tsx`, H1 #419) resolves one closed value — `request`, `gate`, `checkpoint`, `finished`, or `prompt` — in that precedence: a
-  Harness Request before a Human Gate or Review checkpoint, then the Run's authoritative terminal state from the snapshot, then the ordinary prompt. Bottom-row
+- `interaction` (`run-workbench.tsx`, H1 #419) resolves one closed value — `request`, `gate`, `checkpoint`, `resting`, or `prompt` — in that precedence: a
+  Harness Request before a Human Gate or Review checkpoint, then the Run's authoritative resting state from the snapshot, then the ordinary prompt. Bottom-row
   accounting (`interactionRows`), the render `<Switch>`, focus effects, the key dispatcher, the prompt's hints, and the App commands the Workbench registers
   all read it. Never re-derive precedence from Offers or flags beside it. The `prompt` variant also carries the Step endings on offer (none while a Turn
   works or an Operation is in flight), so keys, hints, palette, and Slash agree, and what a gate or checkpoint without a current Offer waits on.
   Dialogs are a separate layer above it, never a bottom variant.
+- `resting` holds every Run at `succeeded`, `failed`, `cancelled`, or `halted` (#528). `restingLines` (`run-workbench-views.tsx`) wraps, never clips, the
+  state word with why the Run rests and, for `halted` or `failed`, the Resting cause's next step, then the Run id and keys; the Workbench reserves exactly
+  those rows. The words are the Projection's `restingCause` (ADR 0041); a Materialization conflict keeps its own reason. It mounts no field, so typed text
+  is never captured, and resume and delete stay in details. A halted Run keeps the Model and Effort commands for its resume; an ended one does not.
 - The request and gate controls keep their private state and key branches (`run-request-control.tsx`, `run-gate-control.tsx`); the interaction only decides
   that one holds the bottom. A free-text gate is `gateHeight()` rows, 5 with authored suggestions (#213), whose `up`/`down` its control takes. An authored
   approve-reject gate keeps its headless path and shows only as the prompt's note, as does a checkpoint whose answer Offer is not current.
@@ -20,7 +24,8 @@ the controls it dispatches is in [run-control](./run-control.md). [ADR 0036](../
   plain name carries any Iteration), Harness, Model choice beside a differing observed model and any requested change still pending, and reported
   context and usage in two fixed slots outside history (#418). At 120 or less the prompt's meta row carries
   Step, Session, and Model choice, and the two #418 metadata slots sit above the bottom region.
-  Notices (Problem, conflict, view freshness, Operation receipts and refusals, Model choice messages) lead the conversation column and are counted; one
+  Notices (Problem, conflict, view freshness, Operation receipts and refusals, Model choice messages) lead the conversation column and are counted; a
+  Problem shows its explanation and remediation, its code only in details' Failure section (#528). One
   status row under it carries the paused badge.
 - `PromptModel`/`promptHeight` (`run-workbench-views.tsx`) count exactly what `PromptControl` draws: a note, one field row per draft line up to four, the meta
   row, bounded Slash or Workspace path list rows, wrapped refusal and recovery notices, and the hint rows. An armed Step ending or Interrupt confirm wraps its whole

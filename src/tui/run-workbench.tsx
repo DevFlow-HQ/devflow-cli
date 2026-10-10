@@ -73,17 +73,16 @@ import {
   buildSidebarRows,
   CheckpointInteraction,
   DetailsPanel,
-  FINISHED_HEIGHT,
-  FinishedOutcome,
   PromptControl,
   HistoryLine,
   promptHeight,
   modelChoiceText,
-  restingProse,
+  restingLines,
+  RestingView,
   Sidebar,
   SIDEBAR_WIDTH,
   type DetailsRow,
-  type FinishedState,
+  type RestingState,
   type PromptHint,
   type PromptModel,
 } from "./run-workbench-views.js";
@@ -103,7 +102,7 @@ import { useTheme } from "./vendor/theme-context.js";
 // (A13), so a single raw-key pipeline drives every control.
 //
 // Exactly one bottom interaction holds the bottom region (H1): a Harness Request,
-// a Human Gate, a Review checkpoint, a finished Run's outcome, or the ordinary
+// a Human Gate, a Review checkpoint, a resting Run's view, or the ordinary
 // always-editable prompt. `interaction` resolves it once; height accounting,
 // rendering, focus, key dispatch, hints, and App-command availability all read
 // that value instead of re-deciding from the same flags. Dialogs are a separate
@@ -194,7 +193,7 @@ type TPromptSend =
 
 /** The one bottom interaction (H1, ADR 0036), each variant carrying the data its
  *  readers need. Precedence: a Harness Request, then a Human Gate or Review
- *  checkpoint, then a finished Run (from its authoritative durable state), then
+ *  checkpoint, then a resting Run (from its authoritative durable state), then
  *  the ordinary prompt. */
 type TInteraction =
   | { readonly kind: "request"; readonly request: LiveRequest }
@@ -205,9 +204,9 @@ type TInteraction =
       readonly offer: AnswerHumanGateOffer;
     }
   | {
-      readonly kind: "finished";
+      readonly kind: "resting";
       readonly run: RunView;
-      readonly state: FinishedState;
+      readonly state: RestingState;
     }
   | {
       readonly kind: "prompt";
@@ -451,9 +450,10 @@ export function RunWorkbench(props: {
       current !== undefined &&
       (current.state === "succeeded" ||
         current.state === "failed" ||
-        current.state === "cancelled")
+        current.state === "cancelled" ||
+        current.state === "halted")
     )
-      return { kind: "finished", run: current, state: current.state };
+      return { kind: "resting", run: current, state: current.state };
     const available = offers();
     const working = available.interrupt;
     const endings: TStepEndings =
@@ -609,7 +609,7 @@ export function RunWorkbench(props: {
   const drafts = createDraftControl({
     run,
     prompt: () => interaction().kind === "prompt",
-    finished: () => interaction().kind === "finished",
+    resting: () => interaction().kind === "resting",
     working: () => offers().interrupt !== undefined,
     endingPending: () => endingOutcome()?.().kind === "pending",
     refocus: () => setFocus("bottom"),
@@ -753,8 +753,23 @@ export function RunWorkbench(props: {
         : { exportReference: s.transcriptExport }),
     }));
   });
+  // Whether the Resting cause's diagnostic is gone: the 90-day prune removes it
+  // (ADR 0041). Keyed on its id, so a snapshot update reads no file again.
+  const restingDiagnosticId = createMemo(
+    () => run()?.restingCause?.diagnostic?.diagnosticId,
+  );
+  const restingDiagnosticExpired = createMemo(() => {
+    const diagnosticId = restingDiagnosticId();
+    if (diagnosticId === undefined) return false;
+    return !view.readResource({
+      runId: props.runId,
+      diagnosticId,
+      type: "diagnostic",
+    }).found;
+  });
   // The evidence the details panel offers, in a stable order: bound outputs,
-  // then a blocked checkpoint's latest Verdict, a halt diagnostic, and transcript.
+  // then a blocked checkpoint's latest Verdict, a halt or failure diagnostic, and
+  // transcript.
   const openables = createMemo<readonly (Openable | TranscriptTarget)[]>(() => {
     const current = run();
     if (current === undefined) return [];
@@ -775,6 +790,15 @@ export function RunWorkbench(props: {
       list.push({
         label: `halt diagnostic: ${current.conflict.artifactName}`,
         reference: current.conflict.reference,
+      });
+    }
+    if (
+      current.restingCause?.diagnostic !== undefined &&
+      !restingDiagnosticExpired()
+    ) {
+      list.push({
+        label: `failure diagnostic: ${current.restingCause.code}`,
+        reference: current.restingCause.diagnostic,
       });
     }
     list.push(...transcriptTargets());
@@ -874,8 +898,23 @@ export function RunWorkbench(props: {
   });
   const modelChoiceLines = () =>
     modelChoice.messages().flatMap((line) => wrap(line, innerW()));
+  // A transient Problem in plain words, wrapped in full; its code is in details.
+  const problemLines = () => {
+    const problem = run()?.problem;
+    if (problem === undefined) return [];
+    return [
+      ...wrap(`✗ ${problem.explanation}`, innerW(), 2).map((text) => ({
+        text,
+        fg: theme.error,
+      })),
+      ...wrap(problem.remediation, innerW()).map((text) => ({
+        text,
+        fg: theme.textMuted,
+      })),
+    ];
+  };
   const noticeRows = () =>
-    (run()?.problem !== undefined ? 3 : 0) +
+    problemLines().length +
     (run()?.conflict !== undefined ? 1 : 0) +
     (freshnessNotice() !== undefined ? 1 : 0) +
     (!viewCurrent() && pendingOperation() !== undefined ? 1 : 0) +
@@ -901,11 +940,9 @@ export function RunWorkbench(props: {
       case "turn":
         return "◇ Your move — the agent is waiting for your next Turn";
       default:
-        return run()?.state === "halted"
-          ? "⏸ The Run is halted — resume it from details"
-          : interactiveStep(run())
-            ? "◇ Your move — the agent is waiting for your next Turn"
-            : "· The Workflow is running — nothing to send yet";
+        return interactiveStep(run())
+          ? "◇ Your move — the agent is waiting for your next Turn"
+          : "· The Workflow is running — nothing to send yet";
     }
   };
   const promptNote = (
@@ -915,9 +952,6 @@ export function RunWorkbench(props: {
     if (prompt.send.kind === "follow-up")
       return "◇ You stopped the agent — it is waiting on your reply";
     const current = run();
-    // A halted Run has left an active state, so its id shows (ADR 0036).
-    if (current?.state === "halted")
-      return `⏸ Run ${current.runId} halted · ${restingProse(current) ?? ""}`;
     if (prompt.waiting !== undefined) return prompt.waiting;
     // After an interactive Step's Interrupt the agent waits on the person
     // (story 75), until a later Turn settles.
@@ -1045,8 +1079,8 @@ export function RunWorkbench(props: {
         return gateHeight(current.gate);
       case "checkpoint":
         return CHECKPOINT_HEIGHT;
-      case "finished":
-        return FINISHED_HEIGHT;
+      case "resting":
+        return restingLines(current.run, current.state, innerW()).length;
       case "prompt": {
         const model = promptModel();
         return model === undefined ? 0 : promptHeight(model);
@@ -1132,6 +1166,7 @@ export function RunWorkbench(props: {
       compact: innerW() + 2 < DETAILS_COMPACT_WIDTH,
       focused: focus() === "details",
       openables: openables(),
+      diagnosticExpired: restingDiagnosticExpired(),
       selected: selectedRef(),
       resumeAcknowledgement:
         resume?.available === true ? resume.acknowledgement : undefined,
@@ -1278,8 +1313,9 @@ export function RunWorkbench(props: {
   // shared arm-then-confirm path; Application still admits the Operation.
   commands.register(() => {
     const current = interaction();
+    // A halted Run keeps its Model choice for the resume; an ended one does not.
     const modelAvailable =
-      current.kind !== "finished" &&
+      (current.kind !== "resting" || current.state === "halted") &&
       offers().modelChoice?.available === true &&
       !modelChoice.pending();
     const endings = current.kind === "prompt" ? current.endings : {};
@@ -1670,7 +1706,7 @@ export function RunWorkbench(props: {
         else if (name === "return") dispatchAnswer(control());
         else if (name === "escape") props.onLeave();
         return;
-      case "finished":
+      case "resting":
         if (name === "escape") props.onLeave();
         return;
       case "prompt":
@@ -1794,23 +1830,16 @@ export function RunWorkbench(props: {
                 flexShrink={0}
                 overflow="hidden"
               >
-                {/* A selected-Harness preparation Problem and a Materialization
-                    conflict are notices, readable without colour. */}
-                <Show when={current().problem}>
-                  {(problem) => (
-                    <box flexDirection="column" flexShrink={0}>
-                      <text fg={theme.error} flexShrink={0}>
-                        {clip(`✗ ${problem().code}`, innerW())}
-                      </text>
-                      <text fg={theme.text} flexShrink={0}>
-                        {clip(problem().explanation, innerW())}
-                      </text>
-                      <text fg={theme.textMuted} flexShrink={0}>
-                        {clip(problem().remediation, innerW())}
-                      </text>
-                    </box>
+                {/* A transient Problem and a Materialization conflict are
+                    notices, readable without colour. The Problem's code is
+                    kept for details (ADR 0041). */}
+                <For each={problemLines()}>
+                  {(line) => (
+                    <text fg={line.fg} flexShrink={0} wrapMode="none">
+                      {line.text}
+                    </text>
                   )}
-                </Show>
+                </For>
                 <Show when={current().conflict}>
                   {(conflict) => (
                     <text fg={theme.warning} flexShrink={0}>
@@ -1988,14 +2017,14 @@ export function RunWorkbench(props: {
                   <Match
                     when={(() => {
                       const value = interaction();
-                      return value.kind === "finished" ? value : undefined;
+                      return value.kind === "resting" ? value : undefined;
                     })()}
                   >
-                    {(finished) => (
-                      <FinishedOutcome
-                        run={() => finished().run}
-                        state={() => finished().state}
-                        width={innerW}
+                    {(resting) => (
+                      <RestingView
+                        lines={() =>
+                          restingLines(resting().run, resting().state, innerW())
+                        }
                         theme={theme}
                       />
                     )}

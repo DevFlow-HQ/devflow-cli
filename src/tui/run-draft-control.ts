@@ -25,7 +25,8 @@ interface TPromptTarget {
 export function createDraftControl(props: {
   run: Accessor<RunView | undefined>;
   prompt: Accessor<boolean>;
-  finished: Accessor<boolean>;
+  /** The resting view holds the bottom, so typed text is saved for Copy. */
+  resting: Accessor<boolean>;
   working: Accessor<boolean>;
   endingPending: Accessor<boolean>;
   refocus(): void;
@@ -118,7 +119,7 @@ export function createDraftControl(props: {
     const target = promptTarget();
     const previous = lastTarget;
     const fresh = previous !== undefined && previous.epoch !== target.epoch;
-    if (props.finished() && untrack(draft) !== "") {
+    if (props.resting() && untrack(draft) !== "") {
       const text = untrack(draft);
       setRecoverable((saved) =>
         [
@@ -271,7 +272,7 @@ export function createDraftControl(props: {
     const ready: Restoration[] = [];
     const old: CapturedText[] = [];
     for (const text of restoreQueue) {
-      if (!sameTarget(text.target, target) || props.finished()) old.push(text);
+      if (!sameTarget(text.target, target) || props.resting()) old.push(text);
       else if (
         !props.prompt() ||
         flights.some(

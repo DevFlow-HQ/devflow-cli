@@ -39,7 +39,8 @@ Read before changing Application Turn interrupt, Steer, live Model choice change
 - It re-walks the Routing through `executeTrackedRouting` with the human's text as `followUp`; execution decides whether it still applies. The walk
   takes over the held Harness (`heldStep`, cleared from tracking first), so composition reuses it or, after a reopen, prepares one that resumes the
   detached Session. Like `send`, it settles at the follow-up Turn's admission (`settleAtAdmission`); a drive resting without admitting it settles
-  `follow-up-turn-not-admitted`, and a fault after admission lands on the Run.
+  `follow-up-turn-not-admitted`, and a fault after admission rests the Run `halted` with its cause, as every faulted drive does
+  ([run-control](./run-control.md)), and puts the Problem on the Run.
 - A follow-up while the previous drive is still in flight is refused as not waiting: the walk's `blocked` write pushes the Offer just before that drive's
   `finally` clears `tracking.promise`, so a client acting on the very first waiting snapshot can be refused once, exactly as an interactive send is.
 - Closing on this Agent-step waiting basis leaves the claim for Store reconciliation, which halts it without an `indeterminate` marker (#355, ADR 0035).

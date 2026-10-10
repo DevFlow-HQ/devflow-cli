@@ -23,6 +23,15 @@ export const runRecord = sqliteTable("run_record", {
   requested_effort: text("requested_effort"),
   state: text("state").notNull(),
   created_at: text("created_at").notNull(),
+  // The Resting cause (ADR 0041): why the Run rests `halted` or `failed`, written
+  // in the transaction that writes the state and cleared by every other state
+  // write. The code is stored as given and narrowed by the Projection at read.
+  // Details and the Failure evidence pointer are written by later M11 slices;
+  // the diagnostic id names a file under the Run's `diagnostics/`.
+  resting_cause_code: text("resting_cause_code"),
+  resting_cause_details: text("resting_cause_details"),
+  resting_cause_evidence_id: text("resting_cause_evidence_id"),
+  resting_cause_diagnostic_id: text("resting_cause_diagnostic_id"),
 });
 
 // One row per Run Store. The fixed singleton key makes the invariant structural;

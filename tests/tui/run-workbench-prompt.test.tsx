@@ -1225,10 +1225,11 @@ test("a signal-halted Agent Step parks no compose for Steers its Turn dropped (#
     /Steer · dropped by interrupt · guidance that cannot be sent/,
   );
   assert.doesNotMatch(frame, /^\s*>.*guidance that cannot be sent/m);
-  assert.match(frame, /Run run-1 halted/);
+  assert.match(frame, /⏸ Run halted/);
+  // The resting view replaced the compose and captures no typed text (#528).
   await type(wb.t, "FRESH_DRAFT");
   await press(wb.t, wb.renderer, "return");
-  assert.match(wb.t.captureCharFrame(), /^\s*> FRESH_DRAFT/m);
+  assert.doesNotMatch(wb.t.captureCharFrame(), /FRESH_DRAFT/);
   assert.doesNotMatch(
     wb.t.captureCharFrame(),
     /^\s*>.*guidance that cannot be sent/m,

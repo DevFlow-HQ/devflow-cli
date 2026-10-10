@@ -1043,6 +1043,19 @@ export interface RunConflictView {
   readonly reference: DiagnosticReference;
 }
 
+/** Why a `halted` or `failed` Run rests (ADR 0041). Only the code is stored;
+ *  the explanation and next step are derived in plain words at read, so wording
+ *  improves without migrating old Runs. A rest that recorded no cause, or a code
+ *  this Secant does not know, reads `unknown`. */
+export interface RunRestingCauseView {
+  readonly code: "execution-fault" | "secant-stopped" | "unknown";
+  readonly explanation: string;
+  readonly nextStep: string;
+  readonly possibleEffects?: "none" | "partial" | "unknown";
+  /** The Detailed diagnostic, read through `readResource`. */
+  readonly diagnostic?: DiagnosticReference;
+}
+
 /** One Run output, reachable through `readResource`. Only `text` and `verdict`
  *  are reachable in M2; file/file-set materialization is a later slice. */
 export interface RunOutputView {
@@ -1190,6 +1203,9 @@ export interface RunView {
   readonly actionOffers: readonly ActionOffer[];
   /** Present only while the Run rests `halted` on a Materialization conflict. */
   readonly conflict?: RunConflictView;
+  /** Why the Run rests, present only while it rests `halted` or `failed` and no
+   *  `conflict` already says why. Additive to the frozen `--json`. */
+  readonly restingCause?: RunRestingCauseView;
   /** The named Harness Sessions this Run opened and their last availability (#116).
    *  Additive to the frozen `--json`; absent for a Command-only Run. */
   readonly sessions?: readonly RunSessionView[];

@@ -316,3 +316,60 @@ export function humanRepeatRouting(): readonly unknown[] {
     },
   ];
 }
+
+/** The message of the fault `scriptedAdapter` throws after a Turn settles. */
+export const FAULT = "scripted Secant fault after the Turn settled";
+
+/** One prepared Harness per entry, in prepare order; the last entry serves every
+ *  later prepare. A `fault` entry's Turns, from its `faultFrom`th (the first by
+ *  default), settle and then their result throws, which the Turn driver surfaces
+ *  as a Secant fault after admission. `beforeFault` runs just before that throw. */
+export function scriptedAdapter(
+  prepares: readonly {
+    readonly turns: FakeScript["turns"];
+    readonly fault?: boolean;
+    readonly faultFrom?: number;
+  }[],
+  beforeFault?: () => void,
+): HarnessAdapter {
+  let count = 0;
+  return ownPreparations({
+    async prepare(options) {
+      const entry = prepares[Math.min(count, prepares.length - 1)]!;
+      count += 1;
+      const prepared = await createFake({
+        profile: fakeHarnessProfile(),
+        turns: entry.turns,
+      })().prepare(options);
+      if (!prepared.ok || entry.fault !== true) return prepared;
+      const harness = prepared.harness;
+      let started = 0;
+      return {
+        ok: true,
+        harness: {
+          profile: harness.profile,
+          readDefaults: () => harness.readDefaults(),
+          close: () => harness.close(),
+          startTurn(request) {
+            const turn = harness.startTurn(request);
+            started += 1;
+            if (started <= (entry.faultFrom ?? 0)) return turn;
+            return {
+              subscribe: (listener) => turn.subscribe(listener),
+              steer: (input) => turn.steer(input),
+              interrupt: () => turn.interrupt(),
+              answerRequest: (answer) => turn.answerRequest(answer),
+              answerAgentCall: (answer) => turn.answerAgentCall(answer),
+              changeModel: (choice) => turn.changeModel(choice),
+              async result() {
+                await turn.result();
+                beforeFault?.();
+                throw new Error(FAULT);
+              },
+            };
+          },
+        },
+      };
+    },
+  });
+}

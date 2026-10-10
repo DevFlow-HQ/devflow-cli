@@ -34,6 +34,9 @@ const PROCESS_FREE_TEST_FILES = new Set([
   // Born process-free (#187): wireApplication runs against the fake Process, fake
   // Git, and fake Harness Adapter, so no real child is ever reached.
   "tests/application/requested-model.test.ts",
+  // Born process-free (#528): wireApplication runs against the fake Bundle Process,
+  // fake Git, and scripted fake Harness Adapters; restarts reopen the same home.
+  "tests/application/execution-fault-rest.test.ts",
   // Born process-free (#189): launch-preparation assessments create no Run, and the
   // one launch submitted is refused before creation, so the wired runExecution and
   // fake Run Group never reach a Command, Git probe, or Harness child.

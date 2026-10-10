@@ -57,6 +57,7 @@ import type {
   RunView,
 } from "./projection-port.js";
 import { RUN_TIMELINE_TRUNCATION_MARKER } from "./projection-port.js";
+import { restingCauseView } from "./resting-cause.js";
 import {
   bundleBytesCorrupt,
   bundleBytesMissing,
@@ -167,9 +168,11 @@ function runResult(
     // admit by. A persisted `halted` (#88) marks its current Step `blocked`.
     const derivedRun = deriveRun(facts.routing, trackedState, runId, owner);
     // The conflict resting the Run is the latest recorded one; earlier conflicts
-    // stay on the timeline as history. It is surfaced only while `halted`.
+    // stay on the timeline as history. It is surfaced only while `halted`, and
+    // only when the halt recorded no Resting cause: a cause written by a later
+    // rest says why the Run rests now (#528).
     const active =
-      derivedRun.state === "halted"
+      derivedRun.state === "halted" && record.restingCause === undefined
         ? conflicts[conflicts.length - 1]
         : undefined;
     // Harness Turn records (#116): the durable view of every Turn this Run ran —
@@ -430,7 +433,9 @@ function runResult(
         ],
         ...(active !== undefined
           ? { conflict: conflictView(runId, active) }
-          : {}),
+          : derivedRun.state === "halted" || derivedRun.state === "failed"
+            ? { restingCause: restingCauseView(runId, record.restingCause) }
+            : {}),
         ...(sessions.length > 0
           ? {
               sessions: sessions.map((s) =>

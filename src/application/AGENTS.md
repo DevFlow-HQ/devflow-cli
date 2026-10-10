@@ -27,6 +27,9 @@
   `gate.shape` (`free-text` ⇒ `text`, `approve-reject` ⇒ `continue`/`stop`) or it is a `gate-shape-mismatch` Problem that changes nothing. Idempotency is keyed on the
   operation id (`gate_answer` row for a checkpoint; the in-process ledger for both) — never on whether the gate settled, so a _different_ operation answering an
   already-answered gate falls through to the staleness check and is refused, not silently masked as `applied`.
+- `restingCause` (ADR 0041, #528) is derived at read in `resting-cause.ts`: the stored code is narrowed tolerantly, and the explanation and next step
+  are worded there, never stored. A `halted` or `failed` Run with no or an unknown cause reads `unknown`; a Materialization conflict omits it and keeps
+  its own `conflict` reason until that cause is recorded.
 - Cancelling an authored Human Gate retains its `pending_gate` record (#336); surface it as `derived.pendingGate` only while the stored Run state is
   `blocked`, so a terminal Run projects its stored state and offers deletion.
 - The Trust grant is written only after `createRun` succeeds: any refusal reached before creation (a mismatching trust acknowledgement, a failed
@@ -80,7 +83,7 @@
   scheduling and records, reporting admission before even inline settlement. Replays compare both kind and fingerprint before fresh authorization;
   refused ids remain unconsumed. Events carry ids, kinds, Problem codes, and typed failure fields only — never input, Turn text, or Problem prose.
   Tracked Operation admission, outcome, and replay carry their `runId`; pre-Run Operations omit it (#331). Application reports its own committed rests
-  (cancel, Gate stop, prepare refusal, and each human Turn's `interactiveTurnRest`) through `run-rest`; a fenced write reports none.
+  (cancel, Gate stop, prepare refusal, an execution fault, and each human Turn's `interactiveTurnRest`) through `run-rest`; a fenced write reports none.
   `preflight` and `assessPreflight` share one evaluator that reports their start/settle and each check they run (`preflight-check-start`/`-settle`, #325).
 - One settle path (`submitEndInteractiveStep` → `startEndInteractiveStep`) backs `end-interactive-step`, `continue-repeat` (#217), and `end-stage` (#218), so no
   iteration settles twice. Run execution's `interactiveEndLegality` owns the position and mid-Turn rules; Application only translates its refusals

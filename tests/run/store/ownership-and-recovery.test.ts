@@ -523,6 +523,7 @@ test("startup reconciles a stale-claimed running Run to halted with an indetermi
   const read = reopened.readRun(created.runId);
   assert.ok(read.ok);
   assert.equal(read.run.state, "halted");
+  assert.deepEqual(read.run.restingCause, { code: "secant-stopped" });
   // Ownership was released by the reconcile: the Run is unowned before anyone
   // re-acquires it (acquiring would itself take ownership, ADR 0031).
   assert.equal(
@@ -535,6 +536,86 @@ test("startup reconciles a stale-claimed running Run to halted with an indetermi
   assert.ok(owner2);
   t.after(() => owner2.close());
   assert.equal(owner2.attemptLog().at(-1)?.outcome, "indeterminate");
+});
+
+test("m11-execution-fault-rest: a Resting cause and its diagnostic ride the state write, and the next state write clears it", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-1");
+  assert.ok(created.outcome === "created");
+  const diagnostics = join(groupDirOf(home), created.runId, "diagnostics");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.deepEqual(owner.writeState("running"), { ok: true });
+
+  const fault = new Error("drive fault");
+  assert.deepEqual(
+    owner.writeState("halted", {
+      code: "execution-fault",
+      diagnostic: { kind: "execution-fault", cause: fault },
+    }),
+    { ok: true },
+  );
+  const halted = group.readRun(created.runId);
+  assert.ok(halted.ok);
+  assert.equal(halted.run.state, "halted");
+  const cause = halted.run.restingCause;
+  assert.equal(cause?.code, "execution-fault");
+  assert.ok(cause?.diagnosticId);
+  assert.deepEqual(readdirSync(diagnostics), [cause.diagnosticId]);
+  const text = new TextDecoder().decode(
+    owner.readDiagnostic(cause.diagnosticId),
+  );
+  assert.match(
+    text,
+    /^Kind: execution-fault\n\nCause: Error\nMessage: drive fault\nStack:\n/,
+  );
+
+  // Any non-resting write clears the cause; the diagnostic file stays for the prune.
+  assert.deepEqual(owner.writeState("running"), { ok: true });
+  const resumed = group.readRun(created.runId);
+  assert.ok(resumed.ok);
+  assert.equal(resumed.run.restingCause, undefined);
+  // `blocked` and `cancelled` carry no cause.
+  assert.throws(
+    () => owner.writeState("blocked", { code: "execution-fault" }),
+    /carries no Resting cause/,
+  );
+  assert.deepEqual(owner.writeState("halted", { code: "execution-fault" }), {
+    ok: true,
+  });
+  const bare = group.readRun(created.runId);
+  assert.ok(bare.ok);
+  assert.deepEqual(bare.run.restingCause, { code: "execution-fault" });
+});
+
+test("m11-execution-fault-rest: a fenced owner writes neither the Resting cause nor its diagnostic", (t) => {
+  const home = makeTempDir("secant-store-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-1");
+  assert.ok(created.outcome === "created");
+  const diagnostics = join(groupDirOf(home), created.runId, "diagnostics");
+  const stale = group.acquireRun(created.runId);
+  assert.ok(stale);
+  t.after(() => stale.close());
+  assert.deepEqual(stale.writeState("running"), { ok: true });
+  group.acquireRun(created.runId)?.close();
+
+  assert.deepEqual(
+    stale.writeState("halted", {
+      code: "execution-fault",
+      diagnostic: { kind: "execution-fault", cause: new Error("late") },
+    }),
+    { ok: false, reason: "fenced" },
+  );
+  const read = group.readRun(created.runId);
+  assert.ok(read.ok);
+  assert.equal(read.run.state, "running");
+  assert.equal(read.run.restingCause, undefined);
+  assert.deepEqual(readdirSync(diagnostics), []);
 });
 
 test("startup leaves a dead owner's blocked Run blocked and unowned (ADR 0031)", (t) => {
@@ -671,6 +752,7 @@ test("startup reconciles a Run whose owner process is dead to halted (#98 S2)", 
   const read = second.readRun(created.runId);
   assert.ok(read.ok);
   assert.equal(read.run.state, "halted");
+  assert.deepEqual(read.run.restingCause, { code: "secant-stopped" });
   assert.equal(
     second.listRuns().find((run) => run.runId === created.runId)?.live,
     false,

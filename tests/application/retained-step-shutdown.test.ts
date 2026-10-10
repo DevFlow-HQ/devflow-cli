@@ -59,6 +59,8 @@ interface Fixture {
   readonly failingClose: Set<string>;
   /** Run ids whose owner `release` throws. */
   readonly failingRelease: Set<string>;
+  /** Run ids whose `halted` state write is refused as fenced, or throws. */
+  readonly failingHalt: Map<string, "fenced" | "throws">;
   /** A Run's driver `close` waits for its gate before returning. */
   readonly closeGates: Map<string, Promise<void>>;
   launch(operationId: string): Promise<string>;
@@ -107,6 +109,7 @@ function fixture(t: TestContext): Fixture {
   const store = openRunGroup(storeDir, workspace);
   const owners: OwnerCount[] = [];
   const failingRelease = new Set<string>();
+  const failingHalt = new Map<string, "fenced" | "throws">();
   const runGroup = {
     ...store,
     acquireRun(runId, options) {
@@ -118,6 +121,12 @@ function fixture(t: TestContext): Fixture {
         ...owner,
         get record() {
           return owner.record;
+        },
+        writeState(state, restingCause) {
+          const failing = state === "halted" && failingHalt.get(runId);
+          if (failing === "throws") throw new Error("the halting write threw");
+          if (failing === "fenced") return { ok: false, reason: "fenced" };
+          return owner.writeState(state, restingCause);
         },
         release(): ReturnType<RunOwner["release"]> {
           count.releases += 1;
@@ -218,6 +227,7 @@ function fixture(t: TestContext): Fixture {
     events,
     failingClose,
     failingRelease,
+    failingHalt,
     closeGates,
     working: workingFor,
     async launch(operationId) {
@@ -257,9 +267,15 @@ function stateOf(app: Application, runId: string): string {
 }
 
 /** Leave a Run owned and idle with its Step held, its durable state `running`,
- *  after the injected driver threw a coordination fault mid-Turn. */
-async function faultedRun(f: Fixture, operationId: string): Promise<string> {
+ *  after the injected driver threw a coordination fault mid-Turn and the halting
+ *  write that rests such a Run (#528) was itself refused. */
+async function faultedRun(
+  f: Fixture,
+  operationId: string,
+  halt: "fenced" | "throws" = "fenced",
+): Promise<string> {
   const runId = await f.launch(operationId);
+  f.failingHalt.set(runId, halt);
   const outcome = await awaitSettled(
     f.app.projectionPort,
     f.send(runId, "fault"),
@@ -316,6 +332,47 @@ function reopened(t: TestContext, f: Fixture, runId: string) {
     markers,
   };
 }
+
+test("m11-execution-fault-rest: a Turn that faults mid-Step rests halted, closes its Step, and releases its owner at once", async (t) => {
+  const f = fixture(t);
+  const runId = await f.launch("launch-fault");
+  const outcome = await awaitSettled(
+    f.app.projectionPort,
+    f.send(runId, "fault"),
+  );
+  assert.equal(outcome.status, "not-applied");
+  assert.deepEqual(cleanup(f, runId), {
+    driverCloses: [1],
+    ownerReleases: [1],
+    ownerCloses: [1],
+  });
+  assert.equal(stateOf(f.app, runId), "halted");
+
+  // Shutdown has nothing left to drain for it.
+  await f.app.shutdown();
+  assert.deepEqual(cleanup(f, runId).driverCloses, [1]);
+  assert.deepEqual(reopened(t, f, runId), {
+    state: "halted",
+    live: false,
+    markers: 0,
+  });
+});
+
+test("m11-execution-fault-rest: a halting write that throws keeps the owner and Step for reconciliation", async (t) => {
+  const f = fixture(t);
+  const runId = await faultedRun(f, "launch-fault", "throws");
+  assert.deepEqual(cleanup(f, runId), {
+    driverCloses: [0],
+    ownerReleases: [0],
+    ownerCloses: [0],
+  });
+  await f.app.shutdown();
+  assert.deepEqual(reopened(t, f, runId), {
+    state: "halted",
+    live: false,
+    markers: 1,
+  });
+});
 
 test("retained-step-fault-shutdown", async (t) => {
   const f = fixture(t);

@@ -60,6 +60,8 @@ test("run show names the conflict, its path, and prints the diagnostic", async (
   const shown = h.stdout();
   assert.match(shown, /State: halted/);
   assert.match(shown, /Materialization conflict:/);
+  // The conflict keeps its own reason; no unknown wording replaces it (#528).
+  assert.doesNotMatch(shown, /Stopped because:/);
   assert.match(shown, /artifact: x/);
   assert.match(shown, /path: out\/x\.txt/);
   assert.match(shown, /consume \(command\): blocked/);

@@ -32,6 +32,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Turn is live here, else nothing) and names the outstanding request. All of it is additive to the frozen `--json`, whose shape is the durable snapshot alone.
 - `run show` keeps raw event kinds and ids (it is the diagnostic surface) and ends each Step-scoped timeline line with ` · step <id>` (#289); the TUI shows
   plain labels instead. The Step and plain Session fields are additive to `--json` (`projection-port.ts` documents them).
+- `run show` prints `Stopped because:` and `Next:` under `State:` from the Run's `restingCause` and resolves its diagnostic through `readResource`,
+  printing `Diagnostic: expired` once pruned (#528, ADR 0041). `--json` carries `restingCause` only while it applies; no exit code depends on it.
 - `run show` labels the immutable `run.selectedHarness` as `Selected Harness:` and the latest Agent-step Attempt's `run.harness`/`effectiveModel` facts as
   `Observed Harness:`/`Observed executable:`/`Observed version:`/`Observed effective model:` (#125, #147). The version prints unadorned since it may contain
   parentheses. `selectedHarness` is additive, the existing observed JSON fields stay unchanged, and Command-only Runs omit all of them so their frozen shape is unchanged.

@@ -150,6 +150,8 @@ test("a modified Workspace copy is a visible conflict resting the Run halted", a
   assert.ok(run.conflict);
   assert.equal(run.conflict.artifactName, "x");
   assert.equal(run.conflict.path, "out/x.txt");
+  // The conflict says why the Run rests, so no unknown Resting cause does (#528).
+  assert.equal(run.restingCause, undefined);
   // The blocked Step is the one that would have used it (index 2: consume).
   assert.equal(run.progress[2]!.id, "consume");
   assert.equal(run.progress[2]!.status, "blocked");
@@ -202,6 +204,29 @@ test("resuming after restoring the file continues the Run to succeeded", async (
   assert.equal(
     readFileSync(join(f.workspace, "out", "x.txt"), "utf8"),
     "materialized-content",
+  );
+});
+
+test("m11-execution-fault-rest: a later halt's Resting cause, not an earlier conflict, says why the Run rests", async (t) => {
+  const f = fixture(t);
+  const { id, digest } = installMaterializationBundle(f, "modify");
+  const runId = await launch(f, id, digest);
+  assert.ok(readRun(f.app.projectionPort, runId).conflict);
+
+  // The conflict stays history; a later rest with a cause replaces its reason.
+  const owner = f.runGroup.acquireRun(runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.deepEqual(owner.writeState("running"), { ok: true });
+  assert.deepEqual(owner.writeState("halted", { code: "execution-fault" }), {
+    ok: true,
+  });
+  const run = readRun(f.app.projectionPort, runId);
+  assert.equal(run.state, "halted");
+  assert.equal(run.conflict, undefined);
+  assert.equal(run.restingCause?.code, "execution-fault");
+  assert.ok(
+    run.timeline.some((event) => event.event === "materialization-conflict"),
   );
 });
 

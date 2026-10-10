@@ -377,16 +377,20 @@ test("a selected-Harness preparation Problem is visible without colour and survi
   });
   const { t, renderer } = await mountWorkbench(run, 100, 30);
   let frame = t.captureCharFrame();
-  // The selected-Harness Problem stays a top-level header block, colour-independent.
-  assert.match(frame, /selected-harness-unavailable/);
-  assert.match(frame, /authentication/);
+  // The selected-Harness Problem stays a top-level header block, colour-independent,
+  // in plain words: its code is kept for details (ADR 0041).
+  assert.match(frame, /✗ Codex could not be prepared \(authentication\)\./);
   assert.match(frame, /Log in separately through Codex/);
+  assert.doesNotMatch(frame, /selected-harness-unavailable/);
   // A halted Run carries its resting prose beside the state word (#194 story 38).
-  assert.match(frame, /Execution stopped outside the Workflow\./);
+  assert.match(frame, /⏸ Run halted — This Step failed for unknown reasons\./);
+  await press(t, renderer, "g", { ctrl: true });
+  assert.match(t.captureCharFrame(), /Problem · selected-harness-unavailable/);
+  await press(t, renderer, "g", { ctrl: true });
   resizeWorkbench(t, renderer, 40, 24);
   await t.renderOnce();
   frame = t.captureCharFrame();
-  assert.match(frame, /selected-harness-unavailable/);
+  assert.match(frame, /✗ Codex could not be prepared/);
   noOverflow(frame, 40);
 });
 
@@ -474,12 +478,13 @@ for (const inspection of INSPECTIONS) {
     assert.deepEqual(wb.exits, []);
     assert.equal(wb.t.captureCharFrame(), open);
 
-    // Escape closes the overlay only: the Workbench stays, its prompt back.
+    // Escape closes the overlay only: the Workbench stays, its halted Run's
+    // resting view back.
     await press(wb.t, wb.renderer, "escape");
     const closed = wb.t.captureCharFrame();
     assert.doesNotMatch(closed, inspection.footer);
     assert.ok(onWorkbench(closed));
-    assert.match(closed, /\^G details · \^P commands · esc back/);
+    assert.match(closed, /ctrl\+g details to resume or delete · esc back/);
     assert.deepEqual(wb.exits, []);
 
     // Ctrl+C keeps its global quit route from inside the overlay.

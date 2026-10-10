@@ -820,7 +820,7 @@ test("[workbench-details-recovery] the panel renders recovery evidence and hosts
     actionOffers: [RESUME_UNAVAILABLE_OFFER, DELETE_OFFER],
   });
   const { t, renderer } = await mountWorkbench(run, 100, 40, okActions());
-  // The prompt's note: the halted Run's id and resting prose (story 38, AC4).
+  // The resting view: the halted Run's id and why it rests (story 38, AC4).
   const header = t.captureCharFrame();
   // Everyday rows carry neither the recorded Session name nor its availability
   // (#289 story 84); the Session divider names the conversation in plain words.
@@ -828,7 +828,7 @@ test("[workbench-details-recovery] the panel renders recovery evidence and hosts
   assert.match(everyday, /Conversation · main, iteration 1/);
   assert.doesNotMatch(everyday, /\b(?:open|detached|unusable)\b/);
   assert.doesNotMatch(everyday, /main-0\.1|session/);
-  assert.match(header, /Execution stopped outside the Workflow\./);
+  assert.match(header, /⏸ Run halted — This Step failed for unknown reasons\./);
   // Run lifecycle actions are off the everyday screen (ADR 0036).
   assert.doesNotMatch(header, /resume —|x delete/);
 
@@ -837,8 +837,9 @@ test("[workbench-details-recovery] the panel renders recovery evidence and hosts
   assert.match(panel, /Recovery:/);
   assert.match(
     panel,
-    /Resting reason · Execution stopped outside the Workflow\./,
+    /Resting reason · This Step failed for unknown reasons\./,
   );
+  assert.match(panel, /Failure: *\n *Resting cause · unknown/);
   assert.match(panel, /Latest activity · turn-settled interrupted · T0/);
   // Session availability stays in the panel, under the plain name (#289 story 85).
   assert.match(panel, /Session main, iteration 1 · unusable/);

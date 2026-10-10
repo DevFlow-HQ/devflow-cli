@@ -49,7 +49,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Startup reconciliation (#86, #98 S2, ADR 0031): at open every registration opens its `run.db`, reads the owner, probes it, and performs any rest plus
   release inside that same immediate transaction (`process.kill(pid, 0)` is injectable as `isOwnerAlive`). An owner still alive in another process is a
   Run genuinely live there — left untouched, listed with its `ownerPid` so the Application can refuse `run-live-elsewhere`. A dead owner is reconciled
-  by stored state: a `running`/`created` record rests `halted` with one `indeterminate` attempt-log marker. A `blocked` Run whose open Agent Attempt's
+  by stored state: a `running`/`created` record rests `halted` with one `indeterminate` attempt-log marker and the `secant-stopped` Resting cause
+  (#528); [run-control](../../../docs/agents/run-control.md) says why it never sweeps an ownerless `running` Run. A `blocked` Run whose open Agent Attempt's
   latest Turn is `interrupted` also halts, without a marker (#355, ADR 0035); all other blocked rests stay blocked. Both close and crash use this rule.
   Ownership is released without Step work. Unowned legacy waits remain untouched. The `pid !== selfPid` guard makes an owner equal to our own pid always
   reconcile — this handles pid reuse and lets a same-process reopen (the reconciliation tests) reconcile; `selfPid` is injectable so two `openRunGroup`s on one
@@ -60,6 +61,11 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
 - Diagnostics retention (ADR 0023, #96): `diagnostics/` has had a writer since #88, so the 90-day expiry is a best-effort prune at group open (`pruneDiagnostics`,
   driven by an injectable clock) — files with an mtime at or before `now - 90 days` are deleted, newer ones kept. It walks Run directories on the filesystem, not
   the registrations, so it runs before any Run is acquired and never fails the open.
+- The Resting cause (ADR 0041, #528) lives on `run_record`'s nullable `resting_cause_*` columns. `writeState`'s optional cause is written in the state's
+  transaction, and every state write sets or clears it, so a resumed Run loses its old cause; only `halted` and `failed` may carry one. The code is stored
+  as given, never branched on here; the Projection narrows it at read (`resting-cause.ts`). Details and the Failure evidence pointer have no writer yet.
+- Every Detailed diagnostic goes through the private `diagnostics.ts` writer inside the guarded transaction, after the epoch check and before the row
+  that references it, so a fenced owner writes no file and a rollback leaves only an orphan for the prune. Its cause passes through `translateCause`.
 - Closed Store policy columns (`attempt_log.outcome`, `gate_answer.answer`, `pending_gate.shape`) validate at read ingress with `z.enum`.
   Turn `origin`, `kind`, `result_kind`, event `kind`, and Session `availability` remain raw legacy-compatible strings.
   `openAgentAttemptTurn`/`waitingAgentTurn` compares Turn kinds/results by equality; unknown values never establish an Agent wait.

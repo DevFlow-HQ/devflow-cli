@@ -89,6 +89,31 @@ export interface RunRecord {
   readonly modelChoice?: ModelChoice;
   readonly state: string; // canonical Run state, including a durable `blocked` pause
   readonly createdAt: string; // ISO 8601
+  /** Why the Run rests `halted` or `failed` (ADR 0041), when that rest recorded
+   *  one. Absent for every other state and for a rest recorded before M11. */
+  readonly restingCause?: RestingCauseRecord;
+}
+
+/** A stored Resting cause. The code is stored as its writer gave it and never
+ *  branched on here; the Projection narrows it at read. */
+export interface RestingCauseRecord {
+  readonly code: string;
+  /** The Detailed diagnostic written with the cause, read by `readDiagnostic`. */
+  readonly diagnosticId?: string;
+}
+
+/** A Resting cause to record with a `halted` or `failed` state write. The Store
+ *  writes the diagnostic file, when given, before the row that references it. */
+export interface RestingCauseRequest {
+  readonly code: string;
+  readonly diagnostic?: DiagnosticContent;
+}
+
+/** What a Detailed diagnostic holds (ADR 0041). The Store renders it to plain
+ *  text, passing `cause` through the safe cause translator. */
+export interface DiagnosticContent {
+  readonly kind: string;
+  readonly cause?: unknown;
 }
 
 /** One registered Run and its ownership (ADR 0031). `live` is whether the Run is
@@ -581,8 +606,10 @@ export interface RunOwner {
   selectModelChoice(choice: ModelChoice): SelectModelChoiceResult;
   /** Replace the current Run-wide choice in one fenced write and refresh record. */
   changeModelChoice(choice: ModelChoice): WriteResult;
-  /** Record the Run's canonical state, unless this owner has been fenced. */
-  writeState(state: string): WriteResult;
+  /** Record the Run's canonical state, unless this owner has been fenced. The
+   *  Resting cause is written in the same transaction; any state written without
+   *  one clears the previous cause. */
+  writeState(state: string, restingCause?: RestingCauseRequest): WriteResult;
   /**
    * Publish one Step Attempt all-or-nothing. A succeeded Attempt stages one
    * commit (the version id) for its whole output set, then a single `run.db`
