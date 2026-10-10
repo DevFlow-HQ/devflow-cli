@@ -114,6 +114,7 @@ export interface RestingCauseRequest {
 export interface DiagnosticContent {
   readonly kind: string;
   readonly cause?: unknown;
+  readonly harnessDiagnostics?: string;
 }
 
 /** One registered Run and its ownership (ADR 0031). `live` is whether the Run is
@@ -248,6 +249,7 @@ export interface CandidateOutput {
 
 /** Small, safe facts supplied by execution. Codes remain open in the Store. */
 export interface FailureEvidenceRequest {
+  readonly diagnostic?: DiagnosticContent;
   readonly source: string;
   readonly code: string;
   readonly turnId?: string;
@@ -261,7 +263,7 @@ export interface FailureEvidenceRequest {
 /** Persisted evidence is narrowed by Application. Details stay opaque JSON here. */
 export interface FailureEvidenceRecord extends Omit<
   FailureEvidenceRequest,
-  "details" | "possibleEffects"
+  "details" | "possibleEffects" | "diagnostic"
 > {
   readonly evidenceId: string;
   readonly attemptId: string;
@@ -634,8 +636,17 @@ export interface RunOwner {
   changeModelChoice(choice: ModelChoice): WriteResult;
   /** Record the Run's canonical state, unless this owner has been fenced. The
    *  Resting cause is written in the same transaction; any state written without
-   *  one clears the previous cause. */
-  writeState(state: string, restingCause?: RestingCauseRequest): WriteResult;
+   *  one clears the previous cause. An unadmitted Entry may record its immutable
+   *  Failure evidence in a blocked write, before its Attempt is published. */
+  writeState(
+    state: string,
+    restingCause?: RestingCauseRequest,
+    entryFailure?: {
+      readonly attemptId: string;
+      readonly at: Date;
+      readonly failure: FailureEvidenceRequest;
+    },
+  ): WriteResult;
   /**
    * Publish one Step Attempt all-or-nothing. A succeeded Attempt stages one
    * commit (the version id) for its whole output set, then a single `run.db`

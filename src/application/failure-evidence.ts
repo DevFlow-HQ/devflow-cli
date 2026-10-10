@@ -3,6 +3,12 @@ import type { FailureEvidenceRecord } from "../run/store/store.js";
 import type { RunFailureView } from "./projection-port.js";
 
 const effects = z.enum(["none", "partial", "unknown"]);
+const agentCode = z.enum([
+  "session-unusable",
+  "prompt-render-failed",
+  "prompt-refused",
+  "not-started",
+]);
 const receiptCode = z.enum([
   "receipt-missing",
   "receipt-not-file",
@@ -80,6 +86,23 @@ export function failureView(
         }
       }
       nextStep = "Resume the Run to try the Step again.";
+    }
+  }
+  if (evidence?.source === "agent") {
+    const parsed = agentCode.safeParse(evidence.code);
+    if (parsed.success) {
+      source = "agent";
+      code = parsed.data;
+      if (code === "session-unusable") {
+        explanation = "This Step's agent conversation can no longer continue.";
+        nextStep = "Delete the Run or start a new one.";
+      } else {
+        explanation =
+          code === "prompt-refused"
+            ? "Secant did not send the prompt because it starts with a word the Harness reserves."
+            : "Secant could not prepare the prompt and did not send it.";
+        nextStep = "Fix the Bundle prompt or choose another Harness.";
+      }
     }
   }
   if (possibleEffects !== "none") explanation += ` ${MAY_HAVE_CHANGED_FILES}`;

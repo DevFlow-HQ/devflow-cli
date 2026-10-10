@@ -311,7 +311,10 @@ export async function runAgent(
       ? renderAgentPrompt(step, context, harness)
       : ({ ok: true, prompt: humanText } as const);
   if (!rendered.ok) {
-    return mapTurnResult(rendered.result, harness.prepared.profile);
+    return {
+      ...mapTurnResult(rendered.result, harness.prepared.profile),
+      failureEvidence: rendered.failureEvidence,
+    };
   }
   // `fresh` isolates a new Session per Attempt (per Iteration inside a Repeat
   // group, since the Attempt id encodes both); any other name is reused, so
@@ -329,6 +332,11 @@ export async function runAgent(
       outcome: "failed",
       outputs: [],
       harnessIdentity: profileIdentity(harness.prepared.profile),
+      failureEvidence: {
+        source: "agent",
+        code: "session-unusable",
+        possibleEffects: "none",
+      },
     };
   }
 
@@ -341,10 +349,11 @@ export async function runAgent(
     keep: humanText !== undefined,
   });
   if (!prepared.ok) {
-    return mapTurnResult(
-      unusableDirectoryFailure(prepared.problem),
-      harness.prepared.profile,
-    );
+    const result = unusableDirectoryFailure(prepared.problem);
+    return {
+      ...mapTurnResult(result, harness.prepared.profile),
+      failureEvidence: preTurnEvidence("not-started", result),
+    };
   }
   const receipts = prepared.receipts;
   // The human's text is the Turn's input verbatim; only the prompt carries the
@@ -950,7 +959,13 @@ export async function runInteractiveEntryTurn(
   attemptId: string,
   /** The Attempt's Session — scoped per iteration inside a Repeat group (#216). */
   session: string,
-): Promise<TurnResult | undefined> {
+): Promise<
+  | {
+      readonly result: TurnResult;
+      readonly failureEvidence?: FailureEvidenceRequest;
+    }
+  | undefined
+> {
   if (step.entryTurn !== true) return undefined;
   const owner = context.owner;
   if (attemptTurns(owner, attemptId).length > 0) return undefined;
@@ -961,10 +976,22 @@ export async function runInteractiveEntryTurn(
     );
   }
   const rendered = renderAgentPrompt(step, context, harness);
-  if (!rendered.ok) return rendered.result;
+  if (!rendered.ok)
+    return {
+      result: rendered.result,
+      failureEvidence: rendered.failureEvidence,
+    };
   const recovery = sessionRecovery(owner, session);
-  if (recovery.unusable) return unusableTurnResult(session);
-  return driveHarnessTurn(owner, harness.prepared, {
+  if (recovery.unusable)
+    return {
+      result: unusableTurnResult(session),
+      failureEvidence: {
+        source: "agent",
+        code: "session-unusable",
+        possibleEffects: "none",
+      },
+    };
+  const result = await driveHarnessTurn(owner, harness.prepared, {
     routing: context.routing,
     step,
     session,
@@ -984,6 +1011,7 @@ export async function runInteractiveEntryTurn(
       ? { cancelSignal: context.cancelSignal }
       : {}),
   });
+  return { result };
 }
 
 /** A settled Turn's typed failure facts, copied field by field so its diagnostics,
@@ -1104,17 +1132,30 @@ function renderAgentPrompt(
   harness: HarnessExecutionDeps,
 ):
   | { readonly ok: true; readonly prompt: string }
-  | { readonly ok: false; readonly result: TurnResult } {
+  | {
+      readonly ok: false;
+      readonly result: TurnResult;
+      readonly failureEvidence: FailureEvidenceRequest;
+    } {
   const deliveryFailure = unsupportedDeliveryFailure(harness.prepared.profile);
   if (deliveryFailure !== undefined) {
-    return { ok: false, result: deliveryFailure };
+    return {
+      ok: false,
+      result: deliveryFailure,
+      failureEvidence: preTurnEvidence("prompt-render-failed", deliveryFailure),
+    };
   }
   let base = readPromptText(step.prompt, context);
   if (base.includes(WORKING_AREA_SLOT)) {
     // The exact directory composition granted the Harness at prepare (#214).
     const area = context.owner.workingArea();
     if (!area.ok) {
-      return { ok: false, result: unusableDirectoryFailure(area.problem) };
+      const result = unusableDirectoryFailure(area.problem);
+      return {
+        ok: false,
+        result,
+        failureEvidence: preTurnEvidence("prompt-render-failed", result),
+      };
     }
     base = base.replaceAll(WORKING_AREA_SLOT, area.path);
   }
@@ -1126,19 +1167,21 @@ function renderAgentPrompt(
     rules: harness.inputRules,
   });
   if (reserved !== undefined) {
-    return {
-      ok: false,
-      result: {
-        kind: "not-started",
-        detail: {
-          failure: {
-            phase: "turn",
-            category: "harness-input-reserved",
-            possibleEffects: "none",
-            diagnostics: `The rendered prompt starts with "${reserved}", reserved by the selected Harness.`,
-          },
+    const result: TurnResult = {
+      kind: "not-started",
+      detail: {
+        failure: {
+          phase: "turn",
+          category: "harness-input-reserved",
+          possibleEffects: "none",
+          diagnostics: `The rendered prompt starts with "${reserved}", reserved by the selected Harness.`,
         },
       },
+    };
+    return {
+      ok: false,
+      result,
+      failureEvidence: preTurnEvidence("prompt-refused", result),
     };
   }
   const skillLines: string[] = [];
@@ -1164,11 +1207,32 @@ function renderAgentPrompt(
   };
 }
 
+function preTurnEvidence(
+  code: "prompt-render-failed" | "prompt-refused" | "not-started",
+  result: Extract<TurnResult, { readonly kind: "not-started" }>,
+): FailureEvidenceRequest {
+  const failure = result.detail.failure;
+  return {
+    source: "agent",
+    code,
+    phase: failure.phase,
+    category: failure.category,
+    possibleEffects: "none",
+    diagnostic: {
+      kind: code,
+      ...(failure.cause === undefined ? {} : { cause: failure.cause }),
+      ...(failure.diagnostics === undefined
+        ? {}
+        : { harnessDiagnostics: failure.diagnostics }),
+    },
+  };
+}
+
 /** The not-started result for an unusable Run working area (#214) or receipt
  *  directory (#305): no Turn ran, and the Problem's kind is the category. */
 function unusableDirectoryFailure(
   problem: Extract<OutputReceiptDirectoryResult, { ok: false }>["problem"],
-): TurnResult {
+): Extract<TurnResult, { readonly kind: "not-started" }> {
   const what =
     problem.kind === "working-area-unavailable"
       ? "Run working area"
@@ -1192,7 +1256,7 @@ function unusableDirectoryFailure(
  *  and the profile itself proves retrying cannot change the mismatch. */
 function unsupportedDeliveryFailure(
   profile: HarnessProfile,
-): TurnResult | undefined {
+): Extract<TurnResult, { readonly kind: "not-started" }> | undefined {
   const unsupported: string[] = [];
   if (profile.skillDelivery.mode !== "plain-path") {
     unsupported.push(`skill:${profile.skillDelivery.mode}`);

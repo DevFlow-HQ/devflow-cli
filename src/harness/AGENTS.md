@@ -15,7 +15,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   recorder composes the production bridge instead of a copy (#127 D3) and so redaction tests register a bearer the way production does (#334);
   its surface is named Session attachments (token-free launch flags, opaque stdin configuration, bearer, URL, and opaque call declarations) and teardown, never an MCP type;
   and the safe cause translator (`translateCause`, #316), the one bounded, redacting record of a failure cause that M8's operational log and
-  M11's Detailed diagnostics write; and the optional phase observer each prepare takes (`HarnessPhaseObserver`, #322), which carries only the
+  M11's Detailed diagnostics write, and `redactDiagnosticText`, which applies the same secret registry to their free text (#531);
+  and the optional phase observer each prepare takes (`HarnessPhaseObserver`, #322), which carries only the
   semantic phase, an optional closed semantic `step` (#325), the Session key, elapsed time, and a typed `HarnessFailure`; no typed field carries a
   frame, argv, RPC name, or coordinate (mapping in harness-adapters), though a translated Codex cause may name its RPC method in bounded message or stack text.
   Recovery coordinates cross the Seam only as opaque `RecoveryCoordinate` values, never Run truth; callers never decide from their contents. Native

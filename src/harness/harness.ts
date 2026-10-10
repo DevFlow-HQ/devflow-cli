@@ -1062,6 +1062,8 @@ export { startPermissionBridge } from "./permission-bridge.js";
 // failure cause that diagnostics may write. The secret registry it redacts from
 // and its bounds stay private; nothing registers a secret through this entry.
 export { translateCause } from "./safe-cause.js";
+// Diagnostics redact before applying their own free-text byte bound.
+export { redactText as redactDiagnosticText } from "./secrets.js";
 export type { SafeCause } from "./safe-cause.js";
 
 // Named normalized test Seams. Doubles compose the production policies rather

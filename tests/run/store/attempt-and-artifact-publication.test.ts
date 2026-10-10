@@ -11,6 +11,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
 import { Database } from "bun:sqlite";
+import { startPermissionBridge } from "../../../src/harness/harness.js";
 import type { ProducedArtifact } from "../../../src/workflow/workflow.js";
 import {
   type OutputReceiptDirectoryResult,
@@ -925,4 +926,132 @@ test("m11-receipt-failure-evidence: the database rejects duplicate subjects but 
   } finally {
     db.close();
   }
+});
+
+test("m11-pre-turn-agent-evidence: blocked Entry evidence survives rewalk, reopen, later publication, and fencing", (t) => {
+  const home = makeTempDir("secant-entry-evidence-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-entry");
+  assert.equal(created.outcome, "created");
+  if (created.outcome !== "created") return;
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  const failure = {
+    source: "agent",
+    code: "prompt-refused",
+    possibleEffects: "none" as const,
+    diagnostic: {
+      kind: "prompt-refused",
+      harnessDiagnostics: 'The prompt starts with "/model".',
+    },
+  };
+  const entry = { attemptId: "entry", at: AT, failure };
+  assert.ok(owner.writeState("blocked", undefined, entry).ok);
+  assert.deepEqual(owner.attemptLog(), []);
+  const blocked = group.readRun(created.runId);
+  assert.ok(blocked.ok);
+  assert.equal(blocked.run.state, "blocked");
+  const first = owner.failureEvidence();
+  assert.equal(first.length, 1);
+  const id = first[0]?.diagnosticId;
+  assert.ok(id);
+  const diagnostic = owner.readDiagnostic(id);
+  assert.match(
+    new TextDecoder().decode(diagnostic),
+    /Harness diagnostics:\nThe prompt starts with "\/model"/,
+  );
+  assert.ok(
+    owner.writeState("blocked", undefined, {
+      ...entry,
+      failure: { ...failure, code: "different" },
+    }).ok,
+  );
+  assert.deepEqual(owner.failureEvidence(), first);
+  owner.close();
+  const reopened = group.acquireRun(created.runId);
+  assert.ok(reopened);
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.failureEvidence(), first);
+  assert.ok(
+    reopened.publishAttempt({
+      attemptId: "entry",
+      outcome: "failed",
+      required: [],
+      outputs: [],
+      at: AT,
+      failureEvidence: { ...failure, code: "replacement" },
+    }).ok,
+  );
+  assert.deepEqual(reopened.failureEvidence(), first);
+  assert.deepEqual(reopened.readDiagnostic(id), diagnostic);
+  const dir = join(groupDirOf(home), created.runId, "diagnostics");
+  assert.deepEqual(readdirSync(dir), [id]);
+  const successor = group.acquireRun(created.runId);
+  assert.ok(successor);
+  t.after(() => successor.close());
+  assert.equal(
+    reopened.writeState("blocked", undefined, { ...entry, attemptId: "stale" })
+      .ok,
+    false,
+  );
+  assert.deepEqual(successor.failureEvidence(), first);
+  assert.deepEqual(readdirSync(dir), [id]);
+  assert.throws(
+    () =>
+      successor.writeState("running", undefined, {
+        ...entry,
+        attemptId: "invalid",
+      }),
+    /blocked state/,
+  );
+  assert.deepEqual(successor.failureEvidence(), first);
+});
+
+test("m11-pre-turn-agent-evidence: diagnostics redact before bounding Harness text and keep cause sections first", async (t) => {
+  const bridge = await startPermissionBridge(async () => ({
+    decision: "deny",
+    message: "unused",
+  }));
+  const token = bridge.session("failure").bearer;
+  await bridge.close();
+  const home = makeTempDir("secant-entry-diagnostic-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "op-bounded-entry");
+  assert.equal(created.outcome, "created");
+  if (created.outcome !== "created") return;
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  assert.ok(
+    owner.writeState("blocked", undefined, {
+      attemptId: "entry",
+      at: AT,
+      failure: {
+        source: "agent",
+        code: "prompt-render-failed",
+        possibleEffects: "none",
+        diagnostic: {
+          kind: "prompt-render-failed",
+          cause: new Error(`failure ${token}`),
+          harnessDiagnostics: `${token} ${"界".repeat(8000)} END`,
+        },
+      },
+    }).ok,
+  );
+  const id = owner.failureEvidence()[0]?.diagnosticId;
+  assert.ok(id);
+  const bytes = owner.readDiagnostic(id);
+  assert.ok(bytes);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  assert.ok(!text.includes(token));
+  assert.match(text, /«redacted-bearer-token»/);
+  assert.ok(text.indexOf("Kind:") < text.indexOf("Cause:"));
+  assert.ok(text.indexOf("Stack:") < text.indexOf("Harness diagnostics:"));
+  const section = text.split("Harness diagnostics:\n")[1];
+  assert.ok(section);
+  assert.ok(new TextEncoder().encode(section.trimEnd()).length <= 16384);
+  assert.match(section, /Secant omitted further Harness diagnostics/);
+  assert.ok(!section.includes("END"));
 });

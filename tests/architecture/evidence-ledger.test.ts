@@ -40,6 +40,9 @@ const PROCESS_FREE_TEST_FILES = new Set([
   // Born process-free (#536): a copied predecessor home opens through the real Run
   // Store with the fake Git process; real Git reads are the package smoke's.
   "tests/run/store/failure-evidence-migration.test.ts",
+  // Born process-free (#531): real temporary Store/Catalog over injected fake Process,
+  // fake Git and Harness; pre-Turn failures and reopened evidence spawn no child.
+  "tests/application/pre-turn-agent-evidence.test.ts",
   // Born process-free (#189): launch-preparation assessments create no Run, and the
   // one launch submitted is refused before creation, so the wired runExecution and
   // fake Run Group never reach a Command, Git probe, or Harness child.

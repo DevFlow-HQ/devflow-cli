@@ -1202,6 +1202,11 @@ function buildTimeline(
       attemptOrder.set(turn.attemptId, attemptOrder.size);
     }
   }
+  for (const failure of failures) {
+    if (!attemptOrder.has(failure.attemptId)) {
+      attemptOrder.set(failure.attemptId, attemptOrder.size);
+    }
+  }
   // An event with no Attempt of its own ranks after every Attempt that settled at or
   // before its instant.
   const afterSettled = (at: string): number =>
@@ -1269,6 +1274,21 @@ function buildTimeline(
       order: index,
     });
   });
+  for (const failure of attemptFailures.values()) {
+    if (log.some((attempt) => attempt.attemptId === failure.attemptId))
+      continue;
+    const step = attemptStepId(failure.attemptId);
+    if (step === undefined) continue;
+    events.push({
+      event: {
+        at: failure.at,
+        event: "attempt-failure",
+        step,
+        failure: failureView(runId, failure),
+      },
+      order: attemptOrder.get(failure.attemptId) ?? afterSettled(failure.at),
+    });
+  }
   // Each completed Repeat-group iteration, then the block when the Run rests at a
   // Review checkpoint (#84). ponytail: per-Attempt Verdict *values* still are not
   // tied to their Attempt through the Store Interface (no attempt→version link),
@@ -1471,6 +1491,7 @@ const TIMELINE_CATEGORY_RANK: Record<RunTimelineKind, number> = {
   "stage-ended": 9,
   "agent-call": 8,
   "attempt-settled": 10,
+  "attempt-failure": 10,
   iteration: 11,
   "checkpoint-blocked": 12,
   "gate-answered": 13,

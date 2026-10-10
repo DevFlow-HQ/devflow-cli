@@ -93,7 +93,7 @@ decided; End Step, Continue, and End Stage stay behind the existing Interactive-
 
 - A newly reserved word refuses new builds and installs of an affected Bundle; installed Bundles stay installed and launch on other Harnesses,
   and a pinned Run fails only at the affected Step. The Shipped-Bundle build script passes the merged rules.
-- A failed Attempt and a `blocked` Entry Turn still show no reason on screen, a gap shared with today's prompt-render failures.
+- The visible-reason gap for failed Attempts and `blocked` Entry prompts is closed by ADR 0041's pre-Turn Failure evidence (2026-10-10, #531). Both clients show the reason, including prompt-render failures.
 - The Claude Code Steer slice also has to match each `result` to its frames by `user_message_uuids`, treat a `local_command` result and a
   cancelled compaction (reported `success`, `compact_result: "failed"`) truthfully, tolerate repeated same-id `init` frames, and handle automatic
   compaction.

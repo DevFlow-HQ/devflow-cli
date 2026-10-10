@@ -1041,7 +1041,7 @@ test("a Turn joining an Attempt that holds a pre-change `#turn` row takes the ne
 });
 
 for (const delivery of ["skill", "file"] as const) {
-  test(`a non-plain-path ${delivery} delivery is a typed failure before a Turn starts`, async (t) => {
+  test(`m11-pre-turn-agent-evidence: a non-plain-path ${delivery} delivery is a typed failure before a Turn starts`, async (t) => {
     const launch: Readonly<Record<string, string>> =
       delivery === "file" ? { report: "reports/input.md" } : {};
     const f = fixture(t, launch);
@@ -1510,7 +1510,7 @@ test("m10-commands-and-input-rules: substituted reserved Agent prompts fail with
 
 for (const kind of ["agent", "interactive-agent"] as const) {
   for (const source of ["asset", "artifact"] as const) {
-    test(`m10-commands-and-input-rules: ${kind} ${source} prompt refuses before admission`, async (t) => {
+    test(`m11-pre-turn-agent-evidence: ${kind} ${source} prompt refuses before admission`, async (t) => {
       const f = fixture(t, { task: "\u2003/MODEL\nunsafe" });
       const assets = promptAssets(f.workspace, "{{artifact:task}}");
       if (source === "artifact") bindEarlier(f.owner, "\u2003/MODEL\nunsafe");
@@ -1552,6 +1552,15 @@ for (const kind of ["agent", "interactive-agent"] as const) {
       );
       assert.deepEqual(f.owner.turns(), []);
       assert.deepEqual(f.owner.harnessSessions(), []);
+      const evidence = f.owner.failureEvidence();
+      assert.equal(evidence.length, 1);
+      assert.equal(evidence[0]?.source, "agent");
+      assert.equal(evidence[0]?.code, "prompt-refused");
+      assert.equal(evidence[0]?.possibleEffects, "none");
+      assert.equal(evidence[0]?.turnId, undefined);
+      assert.ok(evidence[0]?.diagnosticId);
+      const diagnostic = f.owner.readDiagnostic(evidence[0].diagnosticId);
+      assert.match(new TextDecoder().decode(diagnostic), /reserved/);
       if (kind === "interactive-agent") {
         // Rewalking an unadmitted Entry stays blocked without fabricating a Turn.
         const again = await executeRouting(
@@ -1572,6 +1581,7 @@ for (const kind of ["agent", "interactive-agent"] as const) {
           },
         );
         assert.equal(again.outcome, "blocked");
+        assert.deepEqual(f.owner.failureEvidence(), evidence);
         assert.deepEqual(f.owner.turns(), []);
       }
     });
@@ -2038,5 +2048,29 @@ for (const fault of ["invalid", "storage", "malformed", "fenced"] as const) {
       );
       if (fault === "storage") assert.equal(refusal.cause, cause);
     }
+  });
+}
+
+for (const prompt of [{ asset: "missing.md" }, { artifact: "missing" }]) {
+  test("m11-pre-turn-agent-evidence: a missing prompt reference throws instead of inventing Agent evidence", async (t) => {
+    const f = fixture(t);
+    const prepared = await preparedHarness(
+      fakeHarnessProfile(PROFILE_OVERRIDES),
+      [],
+    );
+    t.after(() => prepared.close());
+    await assert.rejects(() =>
+      executeRouting([agentStep({ prompt })], {
+        owner: f.owner,
+        platform: HOST,
+        process: executionProcess,
+        inputTypes: {},
+        resolveAsset: () => undefined,
+        harness: { prepared, inputRules: [], assetKinds: {} },
+      }),
+    );
+    assert.deepEqual(f.owner.turns(), []);
+    assert.deepEqual(f.owner.failureEvidence(), []);
+    assert.deepEqual(f.owner.attemptLog(), []);
   });
 }

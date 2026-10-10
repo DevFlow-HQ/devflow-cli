@@ -5,6 +5,7 @@ import {
   EXECUTION_FAULT_CAUSE,
   RESUME_OFFER,
   mountWorkbench,
+  interactiveRunOf,
   noOverflow,
   okActions,
   press,
@@ -454,4 +455,114 @@ test("m11-workbench-failure-presentation: an Attempt diagnostic is read through 
     expired.t.captureCharFrame(),
     /Diagnostic · Expired after 90 days/,
   );
+});
+
+const ENTRY_FAILURE: Failure = {
+  source: "agent",
+  code: "prompt-refused",
+  category: "harness-input-reserved",
+  phase: "turn",
+  possibleEffects: "none",
+  explanation:
+    "Secant did not send the prompt because it starts with a word the Harness reserves.",
+  nextStep: "Fix the Bundle prompt or choose another Harness.",
+  diagnostic: {
+    runId: "run-1",
+    diagnosticId: "entry-diag",
+    type: "diagnostic",
+  },
+};
+
+function entryBlocked() {
+  return interactiveRunOf({
+    timeline: [
+      {
+        at: "T001",
+        event: "attempt-settled",
+        detail: "succeeded",
+        step: "before",
+      },
+      {
+        at: "T002",
+        event: "attempt-failure",
+        step: "discuss",
+        failure: ENTRY_FAILURE,
+      },
+    ],
+  });
+}
+
+for (const appearance of ["dark", "light"] as const) {
+  test(`m11-pre-turn-agent-evidence: ${appearance} Entry failure keeps Workflow order, error styling, and prompt focus`, async () => {
+    const preferences = previewPreferences();
+    const { t, renderer } = await mountWorkbench(
+      entryBlocked(),
+      100,
+      35,
+      undefined,
+      false,
+      0,
+      {
+        ...preferences,
+        snapshot: () => ({
+          ...preferences.snapshot(),
+          preferences: { theme: "everforest", appearance },
+        }),
+      },
+    );
+    const frame = t.captureCharFrame();
+    const flat = frame.replace(/\s+/g, " ");
+    assert.match(flat, /✗ Step Attempt failed/);
+    assert.match(
+      flat,
+      /Secant did not send the prompt because it starts with a word the Harness reserves\./,
+    );
+    assert.match(
+      flat,
+      /Next: Fix the Bundle prompt or choose another Harness\./,
+    );
+    assert.ok(frame.indexOf("Step · before") < frame.indexOf("Step · discuss"));
+    assert.equal(
+      colourOf(t, /┃/),
+      appearance === "dark" ? "230,126,128" : "248,85,82",
+    );
+    assert.equal(
+      colourOf(t, /Secant did not send/),
+      appearance === "dark" ? "122,132,120" : "166,176,160",
+    );
+    await type(t, "continue here");
+    assert.match(t.captureCharFrame(), /continue here/);
+    await press(t, renderer, "g", { ctrl: true });
+    assert.match(t.captureCharFrame(), /Code · prompt-refused/);
+    assert.match(t.captureCharFrame(), /Possible effects · No changes made/);
+    assert.match(t.captureCharFrame(), /Diagnostic · Expired after 90 days/);
+    noOverflow(t.captureCharFrame(), 100);
+  });
+}
+
+test("m11-pre-turn-agent-evidence: blocked Entry reason wraps at narrow widths and opens its diagnostic", async () => {
+  const { t, renderer, control } = await mountWorkbench(runOf(), 100, 40);
+  control.setRead("d:entry-diag", {
+    found: true,
+    type: "diagnostic",
+    content:
+      'Kind: prompt-refused\n\nHarness diagnostics:\nThe prompt starts with "/model".',
+  });
+  control.setRun(entryBlocked());
+  await t.waitForFrame((frame) => frame.includes("✗ Step Attempt failed"));
+  for (const [width, height] of [
+    [100, 40],
+    [40, 35],
+    [40, 12],
+  ] as const) {
+    resizeWorkbench(t, renderer, width, height);
+    await t.renderOnce();
+    noOverflow(t.captureCharFrame(), width);
+  }
+  resizeWorkbench(t, renderer, 100, 40);
+  await press(t, renderer, "g", { ctrl: true });
+  while (!/› failure diagnostic/.test(t.captureCharFrame()))
+    await press(t, renderer, "down");
+  await press(t, renderer, "return");
+  assert.match(t.captureCharFrame(), /The prompt starts with "\/model"/);
 });

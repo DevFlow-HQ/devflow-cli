@@ -911,6 +911,7 @@ export type RunTimelineKind =
   | "run-created"
   | "trust-granted"
   | "attempt-settled"
+  | "attempt-failure"
   | "iteration"
   | "checkpoint-blocked"
   | "gate-answered"
@@ -1046,7 +1047,7 @@ export interface RunConflictView {
 
 /** Failure facts narrowed at read, with wording derived for both clients. */
 export interface RunFailureView {
-  readonly source: "receipt" | "unknown";
+  readonly source: "receipt" | "agent" | "unknown";
   readonly code:
     | "receipt-missing"
     | "receipt-not-file"
@@ -1054,6 +1055,10 @@ export interface RunFailureView {
     | "receipt-too-large"
     | "receipt-invalid-utf8"
     | "receipt-blank"
+    | "session-unusable"
+    | "prompt-render-failed"
+    | "prompt-refused"
+    | "not-started"
     | "unknown";
   readonly phase?: string;
   readonly category?: string;

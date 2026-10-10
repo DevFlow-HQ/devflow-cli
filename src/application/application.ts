@@ -987,9 +987,9 @@ export function createApplication(deps: ApplicationDependencies): Application {
         if (result.ok) pushRunUpdate(runId, owner);
         return result;
       },
-      writeState(state, restingCause) {
+      writeState(state, restingCause, entryFailure) {
         const previous = tracking?.state;
-        const result = owner.writeState(state, restingCause);
+        const result = owner.writeState(state, restingCause, entryFailure);
         if (result.ok && tracking !== undefined) {
           tracking.state = state;
           pushRunUpdate(runId);

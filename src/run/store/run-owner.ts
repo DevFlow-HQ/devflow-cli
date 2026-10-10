@@ -10,6 +10,8 @@ import {
 import { join } from "node:path";
 import {
   asc,
+  and,
+  isNull,
   desc,
   DrizzleQueryError,
   eq,
@@ -43,7 +45,6 @@ import type {
   RecordGateAnswerRequest,
   RecordPendingGateRequest,
   RestingCauseRecord,
-  RestingCauseRequest,
   RunOwner,
   RunRecord,
   SelectedHarnessId,
@@ -645,6 +646,59 @@ interface TCommitAttemptParams {
   readonly runId: string;
   readonly request: PublishAttemptRequest;
   readonly versionId: string | undefined;
+  readonly diagnosticsDir: string;
+}
+
+/** Preserve the first evidence and diagnostic for an immutable Attempt or Turn. */
+function commitFailureEvidence(
+  db: SQLiteBunDatabase,
+  diagnosticsDir: string,
+  attemptId: string,
+  failure: NonNullable<PublishAttemptRequest["failureEvidence"]>,
+  at: string,
+): void {
+  const subject =
+    failure.turnId === undefined
+      ? and(
+          eq(failureEvidence.attempt_id, attemptId),
+          isNull(failureEvidence.turn_id),
+        )
+      : eq(failureEvidence.turn_id, failure.turnId);
+  if (
+    db
+      .select({ id: failureEvidence.evidence_id })
+      .from(failureEvidence)
+      .where(subject)
+      .get() !== undefined
+  )
+    return;
+  const details =
+    failure.details === undefined
+      ? null
+      : JSON.stringify(failureDetails.parse(failure.details));
+  if (details !== null && new TextEncoder().encode(details).byteLength > 4096) {
+    throw new Error("Failure evidence details exceed the 4096-byte limit.");
+  }
+  const diagnosticId =
+    failure.diagnostic === undefined
+      ? null
+      : writeDiagnostic(diagnosticsDir, renderDiagnostic(failure.diagnostic));
+  db.insert(failureEvidence)
+    .values({
+      evidence_id: randomUUID(),
+      attempt_id: attemptId,
+      turn_id: failure.turnId ?? null,
+      source: failure.source,
+      code: failure.code,
+      phase: failure.phase ?? null,
+      category: failure.category ?? null,
+      possible_effects: failure.possibleEffects,
+      native_code: failure.nativeCode ?? null,
+      details,
+      diagnostic_id: diagnosticId,
+      at,
+    })
+    .run();
 }
 
 function commitAttempt(params: TCommitAttemptParams): void {
@@ -702,35 +756,14 @@ function commitAttempt(params: TCommitAttemptParams): void {
       ended_by: params.request.endedBy ?? null,
     })
     .run();
-  const failure = params.request.failureEvidence;
-  if (failure !== undefined) {
-    const details =
-      failure.details === undefined
-        ? null
-        : JSON.stringify(failureDetails.parse(failure.details));
-    if (
-      details !== null &&
-      new TextEncoder().encode(details).byteLength > 4096
-    ) {
-      throw new Error("Failure evidence details exceed the 4096-byte limit.");
-    }
-    params.db
-      .insert(failureEvidence)
-      .values({
-        evidence_id: randomUUID(),
-        attempt_id: params.request.attemptId,
-        turn_id: failure.turnId ?? null,
-        source: failure.source,
-        code: failure.code,
-        phase: failure.phase ?? null,
-        category: failure.category ?? null,
-        possible_effects: failure.possibleEffects,
-        native_code: failure.nativeCode ?? null,
-        details,
-        diagnostic_id: null,
-        at,
-      })
-      .run();
+  if (params.request.failureEvidence !== undefined) {
+    commitFailureEvidence(
+      params.db,
+      params.diagnosticsDir,
+      params.request.attemptId,
+      params.request.failureEvidence,
+      at,
+    );
   }
   if (params.request.advanceState !== undefined) {
     updateRunState({
@@ -1008,8 +1041,21 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       if (receipt.ok) record = { ...record, modelChoice: { ...choice } };
       return receipt;
     },
-    writeState(state, restingCause?: RestingCauseRequest) {
+    writeState(state, restingCause, entryFailure) {
       const result = guardedWrite((tx) => {
+        if (entryFailure !== undefined) {
+          if (state !== "blocked" || entryFailure.failure.turnId !== undefined)
+            throw new Error(
+              "Entry failure evidence requires a blocked state and no Turn.",
+            );
+          commitFailureEvidence(
+            tx,
+            diagnosticsDir,
+            entryFailure.attemptId,
+            entryFailure.failure,
+            entryFailure.at.toISOString(),
+          );
+        }
         updateRunState({
           db: tx,
           runId: params.runId,
@@ -1055,6 +1101,7 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
           const committed = guardedWrite((tx) => {
             commitAttempt({
               db: tx,
+              diagnosticsDir,
               runId: params.runId,
               request,
               versionId: undefined,
@@ -1072,6 +1119,7 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
         const committed = guardedWrite((tx) => {
           commitAttempt({
             db: tx,
+            diagnosticsDir,
             runId: params.runId,
             request,
             versionId: staged.versionId,
@@ -1083,6 +1131,7 @@ function createRunOwner(params: TCreateRunOwnerParams): RunOwner {
       const committed = guardedWrite((tx) => {
         commitAttempt({
           db: tx,
+          diagnosticsDir,
           runId: params.runId,
           request,
           versionId: undefined,

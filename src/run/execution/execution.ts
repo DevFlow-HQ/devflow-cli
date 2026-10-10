@@ -23,6 +23,7 @@ import {
   type AttemptLogEntry,
   type CandidateOutput,
   type PublishAttemptRequest,
+  type FailureEvidenceRequest,
   type RunOwner,
 } from "../store/store.js";
 import { type ProcessAdapter } from "../../process/process.js";
@@ -319,6 +320,7 @@ export interface HumanTurnPause {
    *  instead of `blocked`, with no Attempt published. An Interrupt alone returns
    *  the Step to waiting (#353). */
   readonly halted?: true;
+  readonly failureEvidence?: FailureEvidenceRequest;
 }
 
 interface StepContext {
@@ -410,11 +412,14 @@ async function runInteractiveAgent(
   );
   const halted =
     entry !== undefined &&
-    interactiveTurnRest(entry.kind, context.cancelSignal) === "halted";
+    interactiveTurnRest(entry.result.kind, context.cancelSignal) === "halted";
   return {
     pause: true,
     awaitsHumanTurn: true,
     ...(halted ? { halted: true } : {}),
+    ...(entry?.failureEvidence === undefined
+      ? {}
+      : { failureEvidence: entry.failureEvidence }),
   };
 }
 
@@ -821,6 +826,13 @@ async function runStepAttempts(
         // this Step's Attempt. No Attempt here, no retry.
         if ("awaitsHumanTurn" in result) {
           if (result.halted !== true) {
+            if (result.failureEvidence !== undefined) {
+              writeStateOrThrow(context.step, "blocked", {
+                attemptId,
+                at: context.now(),
+                failure: result.failureEvidence,
+              });
+            }
             pause();
             return "blocked";
           }
@@ -1221,12 +1233,13 @@ function encode(text: string): Uint8Array {
 function writeStateOrThrow(
   { owner, observe }: Pick<StepContext, "owner" | "observe">,
   state: string,
+  entryFailure?: Parameters<RunOwner["writeState"]>[2],
 ): void {
   const result = observedWrite(
     observe,
     owner.runId,
     { write: "run-state", state },
-    () => owner.writeState(state),
+    () => owner.writeState(state, undefined, entryFailure),
   );
   // ponytail: a fenced owner mid-Run means another process took over this Run;
   // stopping is correct, and throwing hands that to composition. Return a typed

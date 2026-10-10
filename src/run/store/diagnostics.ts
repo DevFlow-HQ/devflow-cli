@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { translateCause, type SafeCause } from "../../harness/harness.js";
+import {
+  redactDiagnosticText,
+  translateCause,
+  type SafeCause,
+} from "../../harness/harness.js";
 import type { DiagnosticContent } from "./store.js";
 
 // Detailed diagnostics (ADR 0041, spec #527 decisions 12 and 13). Every writer
@@ -33,6 +37,22 @@ export function renderDiagnostic(content: DiagnosticContent): string {
   const sections = [`Kind: ${content.kind}`];
   if (content.cause !== undefined) {
     sections.push(renderCause(translateCause(content.cause)));
+  }
+  if (content.harnessDiagnostics !== undefined) {
+    const text = redactDiagnosticText(content.harnessDiagnostics);
+    const marker = "\n(Secant omitted further Harness diagnostics.)";
+    const bytes = new TextEncoder().encode(text);
+    const bounded =
+      bytes.byteLength <= 16384
+        ? text
+        : new TextDecoder().decode(
+            bytes.subarray(
+              0,
+              16384 - new TextEncoder().encode(marker).byteLength,
+            ),
+            { stream: true },
+          ) + marker;
+    sections.push(`Harness diagnostics:\n${bounded}`);
   }
   return `${sections.join("\n\n")}\n`;
 }

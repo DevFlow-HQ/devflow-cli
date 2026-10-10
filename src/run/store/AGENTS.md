@@ -65,7 +65,8 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   transaction, and every state write sets or clears it, so a resumed Run loses its old cause; only `halted` and `failed` may carry one. The code is stored
   as given, never branched on here; the Projection narrows it at read (`resting-cause.ts`). Details and the Failure evidence pointer have no writer yet.
 - `failure_evidence` (ADR 0041, #529) records immutable Failure evidence in Attempt publication's guarded transaction. Partial unique indexes
-  allow one row per Turn and one per Attempt without a Turn, even before Attempt publication. Scalar JSON details are bounded to 4 KiB.
+  allow one row per Turn and one per Attempt without a Turn, even before Attempt publication. Entry evidence rides `writeState("blocked")` (#531);
+  repeated blocked writes and later Attempt publication keep its original evidence and diagnostic. Scalar JSON details are bounded to 4 KiB.
   Source, code and effects stay open strings; `failureEvidence()` reads them as given and Application narrows unknown codes and malformed details.
   Neither M11 migration backfills: a predecessor rest keeps no cause and its Attempts no evidence, so both read as unknown (#536).
 - Every Detailed diagnostic goes through the private `diagnostics.ts` writer inside the guarded transaction, after the epoch check and before the row

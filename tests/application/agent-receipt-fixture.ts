@@ -1,13 +1,14 @@
 import { storedProcess } from "../helpers/wiringDoubles.js";
 import { ownPreparations } from "../harness/preparation-double.js";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import {
   CLAUDE_CODE_EXECUTABLE_ENV,
   type HarnessAdapter,
+  type HarnessProfile,
   type TurnResult,
 } from "../../src/harness/harness.js";
 import type { OperationOutcome } from "../../src/application/projection-port.js";
@@ -46,17 +47,26 @@ const RECEIPT_LINE =
  *  belongs, so only receipt preparation — not the area — is unusable. */
 export function receiptAgent(
   receipts: readonly (string | undefined | ((path: string) => void))[],
-  options: { readonly squatReceiptRoot?: boolean } = {},
+  options: {
+    readonly squatReceiptRoot?: boolean;
+    readonly profile?: HarnessProfile;
+    readonly prepareDirectory?: (path: string) => void;
+    readonly results?: readonly TurnResult[];
+  } = {},
 ): {
   adapter: HarnessAdapter;
   inputs: string[];
 } {
   const inner = createFake({
-    profile: fakeHarnessProfile({
-      executable: "/usr/bin/claude",
-      executableVersion: "1.2.3",
-    }),
-    turns: receipts.map(() => ({ result: COMPLETED })),
+    profile:
+      options.profile ??
+      fakeHarnessProfile({
+        executable: "/usr/bin/claude",
+        executableVersion: "1.2.3",
+      }),
+    turns: receipts.map((_, index) => ({
+      result: options.results?.[index] ?? COMPLETED,
+    })),
   })();
   const inputs: string[] = [];
   return {
@@ -74,6 +84,8 @@ export function receiptAgent(
         }
         const prepared = await inner.prepare(prepareOptions);
         if (!prepared.ok) return prepared;
+        if (prepareOptions.writableDirectory !== undefined)
+          options.prepareDirectory?.(prepareOptions.writableDirectory);
         const harness = prepared.harness;
         return {
           ok: true,
@@ -174,6 +186,8 @@ export async function launch(
   t: TestContext,
   adapter: HarnessAdapter,
   bundle: { folder: string; id: string },
+  supportsInteractiveTurns = false,
+  onAdmitted?: (wired: Wiring, runId: string) => void,
 ): Promise<{
   wired: Wiring;
   runId: string;
@@ -185,6 +199,7 @@ export async function launch(
   const workspace = makeTempDir("secant-agent-receipt-ws-");
   const home = makeTempDir("secant-agent-receipt-home-");
   const wired = wireApplication({
+    supportsInteractiveTurns,
     secantHome: home,
     launchCwd: workspace,
     process: storedProcess({ git: sharedGit }),
@@ -219,6 +234,22 @@ export async function launch(
   });
   assert.ok(admission.admitted, JSON.stringify(admission));
   assert.ok(admission.runId);
+  onAdmitted?.(wired, admission.runId);
   const launched = await awaitSettled(wired.projectionPort, "op-launch");
   return { wired, runId: admission.runId, launched, home, workspace };
+}
+
+/** Fill the next prompt with a reserved word only after Bundle validation. */
+export function refusedPromptBundle(kind: "agent" | "interactive-agent") {
+  const bundle = writeBundle("consume");
+  const path = join(bundle.folder, "manifest.json");
+  const manifest = JSON.parse(readFileSync(path, "utf8"));
+  manifest.routing[1].kind = kind;
+  if (kind === "interactive-agent") manifest.routing[1].entryTurn = true;
+  writeFileSync(path, JSON.stringify(manifest));
+  writeFileSync(
+    join(bundle.folder, "prompts/tickets.md"),
+    "{{artifact:spec-ref}}",
+  );
+  return bundle;
 }

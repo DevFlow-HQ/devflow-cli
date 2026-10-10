@@ -46,8 +46,9 @@ export function latestAttemptFailure(run: RunView) {
     .reverse()
     .find(
       (event) =>
-        event.event === "attempt-settled" &&
-        (event.detail === "failed" || event.detail === "indeterminate"),
+        event.event === "attempt-failure" ||
+        (event.event === "attempt-settled" &&
+          (event.detail === "failed" || event.detail === "indeterminate")),
     )?.failure;
 }
 
@@ -202,6 +203,7 @@ function durableLabel(event: RunTimelineEvent): string {
       return "○ Run created";
     case "trust-granted":
       return "✓ Trust granted";
+    case "attempt-failure":
     case "attempt-settled":
       return `▸ Step Attempt ${event.detail ?? "settled"}`;
     case "iteration":

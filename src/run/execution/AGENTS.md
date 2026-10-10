@@ -29,13 +29,14 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   Publication records `receipt-missing`, `receipt-not-file`, `receipt-symlink`, `receipt-too-large`, `receipt-invalid-utf8`, or `receipt-blank` with
   the output name and, for too-large, the size limit (#529). The Turn remains `completed`; other receipt I/O failures record no invented code.
 - Bundle prompts are matched after artifact-slot substitution and before Turn admission (#410), using the selected registration's rules.
-  A reserved Agent prompt fails through ordinary Attempt retries with no Turn; a reserved Entry leaves the Run blocked. Human text keeps Application admission.
+  A reserved Agent prompt fails through ordinary Attempt retries with no Turn; a reserved Entry leaves the Run blocked. Both keep `prompt-refused` evidence (#531).
+  An unadmitted Entry's evidence rides its blocked state write against the unpublished Attempt; Human text keeps Application admission.
 - Receipt paths reach the Agent only as appended prompt text — one `receiptInstruction` line per declared output after the rendered prompt — never as an env var
   or Harness option. A prompt-renderer or `produces` change that drops those lines fails every Agent Step that declares an output.
 - Execution never hands the working area to the Harness; composition's prepare does (#214). Here it only fills the `{{run:working-area}}` prompt slot
   (`WORKING_AREA_SLOT`), typing an unusable area `working-area-unavailable`/`not-started`; Command steps never see it — their `cwd` resolves against the
   Workspace. A producing Step consumes `outputReceiptDirectory`'s typed result once, with no separate area check: its Problem kind becomes the
-  `not-started` category (dropped with the rest of the detail until ADR 0041's evidence lands), so the failed Attempt admits and sends no Turn and
+  `not-started` evidence category with its translated cause (#531), so the failed Attempt admits and sends no Turn and
   follows the ordinary retry policy (#305).
 - Every Command-step spawn passes its resolved authored environment through the Run Store entry's `isolatedGitEnvironment`; the helper appends
   non-interactive signing, hook, credential, and editor overrides after authored Git config entries, without changing user files or hiding ordinary

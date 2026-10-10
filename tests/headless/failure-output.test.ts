@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import {
   launch,
   receiptAgent,
+  refusedPromptBundle,
   writeBundle,
 } from "../application/agent-receipt-fixture.js";
 import assert from "node:assert/strict";
@@ -15,6 +16,7 @@ import {
   launchInteractive,
   scriptedAdapter,
 } from "../application/interactive-agent-fixture.js";
+import { fakeHarnessProfile } from "../harness/fake-adapter.js";
 import { awaitSettled, followRun } from "../helpers/settleOperation.js";
 
 // `run show` for a resting Run (#528, ADR 0041): "Stopped because:" and "Next:"
@@ -213,3 +215,132 @@ for (const sql of [
     );
   });
 }
+
+for (const kind of ["agent", "interactive-agent"] as const) {
+  test(`m11-pre-turn-agent-evidence: run show text and JSON carry ${kind} refusal without renaming fields`, async (t) => {
+    const { wired, runId } = await launch(
+      t,
+      receiptAgent(["/model unsafe"]).adapter,
+      refusedPromptBundle(kind),
+      true,
+    );
+    const shown = await show(wired, [runId]);
+    assert.equal(shown.code, 0);
+    const event = kind === "agent" ? "attempt-settled" : "attempt-failure";
+    assert.ok(shown.out.includes(`${event}`));
+    assert.match(
+      shown.out,
+      /step tickets · Secant did not send the prompt because it starts with a word the Harness reserves\./,
+    );
+    const json = await show(wired, [runId, "--json"]);
+    assert.equal(json.code, 0);
+    const run = JSON.parse(json.out).result.run;
+    assert.equal(run.state, kind === "agent" ? "failed" : "blocked");
+    const failed = run.timeline.find(
+      (e: { step?: string }) => e.step === "tickets",
+    );
+    assert.equal(failed.event, event);
+    assert.equal(failed.failure.code, "prompt-refused");
+    assert.equal(failed.failure.source, "agent");
+    assert.equal(failed.failure.possibleEffects, "none");
+    assert.deepEqual(
+      Object.keys(failed).sort(),
+      kind === "agent"
+        ? ["at", "detail", "event", "failure", "step"]
+        : ["at", "event", "failure", "step"],
+    );
+    assert.equal(failed.failure.diagnostic.type, "diagnostic");
+    await wired.shutdown();
+  });
+}
+
+for (const delivery of ["skill", "file"] as const) {
+  test(`m11-pre-turn-agent-evidence: run show carries ${delivery} render failure and diagnostic`, async (t) => {
+    const profile = fakeHarnessProfile({
+      [delivery === "skill" ? "skillDelivery" : "fileDelivery"]: {
+        mode: "native",
+        evidence: "native only",
+      },
+    });
+    const { wired, runId } = await launch(
+      t,
+      receiptAgent([], { profile }).adapter,
+      writeBundle("none"),
+    );
+    const shown = await show(wired, [runId]);
+    assert.equal(shown.code, 0);
+    assert.match(
+      shown.out,
+      /attempt-settled failed · step publish · Secant could not prepare the prompt and did not send it\./,
+    );
+    const run = JSON.parse((await show(wired, [runId, "--json"])).out).result
+      .run;
+    assert.equal(run.timeline.at(-1).failure.code, "prompt-render-failed");
+    assert.equal(
+      run.timeline.at(-1).failure.category,
+      "unsupported-delivery-mode",
+    );
+    await wired.shutdown();
+  });
+}
+
+test("m11-pre-turn-agent-evidence: run show carries output preparation evidence through retries", async (t) => {
+  const { wired, runId } = await launch(
+    t,
+    receiptAgent([], { squatReceiptRoot: true }).adapter,
+    writeBundle("none", 1),
+  );
+  const shown = await show(wired, [runId]);
+  assert.equal(shown.code, 0);
+  assert.equal(
+    (
+      shown.out.match(
+        /Secant could not prepare the prompt and did not send it\./g,
+      ) ?? []
+    ).length,
+    2,
+  );
+  const run = JSON.parse((await show(wired, [runId, "--json"])).out).result.run;
+  assert.deepEqual(
+    run.timeline
+      .filter((e: { event: string }) => e.event === "attempt-settled")
+      .map((e: { failure: { code: string } }) => e.failure.code),
+    ["not-started", "not-started"],
+  );
+  await wired.shutdown();
+});
+
+test("m11-pre-turn-agent-evidence: run show names an unusable conversation without another Turn", async (t) => {
+  const agent = receiptAgent([undefined], {
+    results: [
+      {
+        kind: "failed",
+        detail: {
+          failure: {
+            phase: "recovery",
+            category: "cannot-recover",
+            possibleEffects: "none",
+          },
+          effectiveModel: { known: false },
+          session: { state: "unusable", reason: "cannot recover" },
+        },
+      },
+    ],
+  });
+  const { wired, runId } = await launch(
+    t,
+    agent.adapter,
+    writeBundle("none", 1),
+  );
+  const shown = await show(wired, [runId]);
+  assert.equal(shown.code, 0);
+  assert.match(
+    shown.out,
+    /This Step's agent conversation can no longer continue\./,
+  );
+  const run = JSON.parse((await show(wired, [runId, "--json"])).out).result.run;
+  assert.equal(run.timeline.at(-1).failure.code, "session-unusable");
+  assert.equal(run.timeline.at(-1).failure.possibleEffects, "none");
+  assert.equal(agent.inputs.length, 1);
+  await wired.shutdown();
+});
