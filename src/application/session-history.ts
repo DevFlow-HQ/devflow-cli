@@ -5,8 +5,11 @@ import {
 } from "./history-content.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { outlineTurnFact, readTurnFact } from "../run/store/store.js";
-import type { TurnFact } from "../harness/harness.js";
+import {
+  outlineTurnFact,
+  readTurnFact,
+  type TurnFact,
+} from "../run/store/store.js";
 import type {
   AdmitTurnRequest,
   AppendTurnEventRequest,

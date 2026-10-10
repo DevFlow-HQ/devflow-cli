@@ -3,7 +3,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { Database } from "bun:sqlite";
-import type { ToolCall, TurnFact } from "../../../src/harness/harness.js";
+import type { ToolCall } from "../../../src/harness/harness.js";
 import { turnFact, type TurnFactData } from "../../helpers/turnFact.js";
 import {
   outlineTurnFact,
@@ -11,6 +11,7 @@ import {
   type AdmitTurnRequest,
   type RunGroup,
   type RunOwner,
+  type TurnFact,
 } from "../../../src/run/store/store.js";
 import { makeTempDir } from "../../helpers/tempDir.js";
 import { openFakeRunGroup as openRunGroup } from "./fake-git-process.js";
@@ -1106,6 +1107,70 @@ for (const size of [29_999, 30_000, 30_001])
       },
     });
   });
+
+test("m10-followup-store-owned-facts: a row stored before the output tail reads retained through readTurnFact", (t) => {
+  const home = makeTempDir("secant-legacy-tail-");
+  const group = openRunGroup(home, WORKSPACE);
+  t.after(() => group.close());
+  const created = create(group, "legacy-tail");
+  const owner = group.acquireRun(created.runId);
+  assert.ok(owner);
+  t.after(() => owner.close());
+  owner.admitTurn({
+    turnId: "turn",
+    attemptId: "0.0:write",
+    session: "s",
+    origin: "managed",
+    kind: "agent",
+    input: "Prompt",
+    recoveryCoordinate: "private",
+    harness: "codex",
+    at: AT,
+  });
+  const call = {
+    callId: "call",
+    tool: "command",
+    input: "build",
+    outcome: { kind: "running" },
+  } as const;
+  const text = "OLD" + "x".repeat(30_000);
+  const runDb = new Database(join(groupDirOf(home), created.runId, "run.db"));
+  try {
+    const insert = runDb.query(
+      "INSERT INTO turn_event (turn_id, kind, payload, at) VALUES ('turn', ?, ?, '')",
+    );
+    insert.run("tool-call", JSON.stringify({ ...call, output: { text } }));
+    insert.run(
+      "tool-partial",
+      JSON.stringify({ ...call, output: { text, incomplete: true } }),
+    );
+  } finally {
+    runDb.close();
+  }
+  assert.deepEqual(
+    owner.turnEvents().map((event) => readTurnFact(event)),
+    [
+      {
+        kind: "tool-call",
+        data: {
+          ...call,
+          output: { text: "x".repeat(30_000), secantDropped: true },
+        },
+      },
+      {
+        kind: "tool-partial",
+        data: {
+          ...call,
+          output: {
+            text: "x".repeat(30_000),
+            secantDropped: true,
+            incomplete: true,
+          },
+        },
+      },
+    ],
+  );
+});
 
 test("m10-audit-turn-event-refusal: invalid facts and a storage fault refuse atomically, then the Turn settles", (t) => {
   const home = makeTempDir("secant-refusal-");

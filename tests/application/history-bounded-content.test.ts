@@ -1,4 +1,4 @@
-import type { TurnFact } from "../../src/harness/harness.js";
+import type { TurnFact } from "../../src/run/store/store.js";
 import { turnFact, type TurnFactData } from "../helpers/turnFact.js";
 import assert from "node:assert/strict";
 import test from "node:test";

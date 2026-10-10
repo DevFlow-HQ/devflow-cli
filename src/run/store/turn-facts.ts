@@ -1,5 +1,32 @@
 import { z } from "zod";
-import { retainCommandOutput } from "./harness.js";
+import {
+  retainCommandOutput,
+  type ToolCall,
+  type TurnDiff,
+  type TurnEvent,
+} from "../../harness/harness.js";
+
+// The Run Store owns the shape of every recorded Turn fact. Stored Harness evidence
+// reuses the live Harness types: each schema below that records one must, less
+// `historyOrder`, equal that type, so a field added to only one side fails
+// type-checking here as an argument "not assignable to parameter of type 'never'".
+// Readonly-ness is not part of the shape.
+type Shape<T> = T extends readonly (infer E)[]
+  ? Shape<E>[]
+  : T extends object
+    ? { -readonly [K in keyof T]: Shape<T[K]> }
+    : T;
+type SameShape<A, B> =
+  (<T>() => T extends Shape<A> ? 1 : 2) extends <T>() => T extends Shape<B>
+    ? 1
+    : 2
+    ? unknown
+    : never;
+function sameAsLive<Live>() {
+  return <S extends z.ZodType>(
+    schema: S & SameShape<Omit<z.output<S>, "historyOrder">, Live>,
+  ): S => schema;
+}
 
 const filePatch = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("unified"), content: z.string() }),
@@ -25,46 +52,50 @@ const fileChange = z.object({
   additions: z.number().int().nonnegative().optional(),
   removals: z.number().int().nonnegative().optional(),
 });
-const turnDiff = z.object({
-  content: z.string(),
-  files: z.array(fileChange).readonly(),
-  historyOrder: z.number().int().nonnegative().optional(),
-});
+const turnDiff = sameAsLive<TurnDiff>()(
+  z.object({
+    content: z.string(),
+    files: z.array(fileChange).readonly(),
+    historyOrder: z.number().int().nonnegative().optional(),
+  }),
+);
 const commandOutput = z.object({
   text: z.string(),
   secantDropped: z.literal(true).optional(),
   incomplete: z.literal(true).optional(),
 });
-const toolCall = z.object({
-  callId: z.string().min(1),
-  parentCallId: z.string().optional(),
-  tool: z.enum([
-    "read",
-    "search",
-    "command",
-    "file-change",
-    "web",
-    "mcp",
-    "subagent",
-    "other",
-  ]),
-  input: z.string(),
-  files: z.array(fileChange).readonly().optional(),
-  cwd: z.string().optional(),
-  exitCode: z.number().int().optional(),
-  nativeOmission: z.string().optional(),
-  output: commandOutput.transform(retainCommandOutput).optional(),
-  count: z
-    .object({ value: z.number().nonnegative(), unit: z.string() })
-    .optional(),
-  outcome: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("running") }),
-    z.object({ kind: z.literal("completed") }),
-    z.object({ kind: z.literal("failed"), error: z.string().optional() }),
-    z.object({ kind: z.literal("declined"), reason: z.string().optional() }),
-  ]),
-  historyOrder: z.number().int().nonnegative().optional(),
-});
+const toolCall = sameAsLive<ToolCall>()(
+  z.object({
+    callId: z.string().min(1),
+    parentCallId: z.string().optional(),
+    tool: z.enum([
+      "read",
+      "search",
+      "command",
+      "file-change",
+      "web",
+      "mcp",
+      "subagent",
+      "other",
+    ]),
+    input: z.string(),
+    files: z.array(fileChange).readonly().optional(),
+    cwd: z.string().optional(),
+    exitCode: z.number().int().optional(),
+    nativeOmission: z.string().optional(),
+    output: commandOutput.transform(retainCommandOutput).optional(),
+    count: z
+      .object({ value: z.number().nonnegative(), unit: z.string() })
+      .optional(),
+    outcome: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("running") }),
+      z.object({ kind: z.literal("completed") }),
+      z.object({ kind: z.literal("failed"), error: z.string().optional() }),
+      z.object({ kind: z.literal("declined"), reason: z.string().optional() }),
+    ]),
+    historyOrder: z.number().int().nonnegative().optional(),
+  }),
+);
 const assistantMessage = z.object({
   messageId: z.string().min(1).optional(),
   historyOrder: z.number().int().nonnegative().optional(),
@@ -149,15 +180,19 @@ export const turnFactSchemas = {
   thought: thoughtSummary,
   "turn-diff": turnDiff,
   "tool-call": toolCall,
-  "tool-partial": toolCall.extend({
-    outcome: z.object({ kind: z.literal("running") }),
-    output: commandOutput
-      .extend({ incomplete: z.literal(true) })
-      .transform((output) => ({
-        ...retainCommandOutput(output),
-        incomplete: output.incomplete,
-      })),
-  }),
+  "tool-partial": sameAsLive<
+    Extract<TurnEvent, { kind: "tool-partial" }>["call"]
+  >()(
+    toolCall.extend({
+      outcome: z.object({ kind: z.literal("running") }),
+      output: commandOutput
+        .extend({ incomplete: z.literal(true) })
+        .transform((output) => ({
+          ...retainCommandOutput(output),
+          incomplete: output.incomplete,
+        })),
+    }),
+  ),
   steer: steerEvent,
   model: model.extend(ordered),
   "agent-call": agentCallSchema.extend(ordered),
@@ -174,12 +209,3 @@ export type TurnFact = {
     readonly data: z.output<(typeof turnFactSchemas)[K]>;
   };
 }[keyof typeof turnFactSchemas];
-
-export type ToolCall = Readonly<
-  Omit<z.output<typeof toolCall>, "historyOrder">
->;
-export type TurnDiff = Readonly<
-  Omit<z.output<typeof turnDiff>, "historyOrder">
->;
-
-export type CommandOutput = z.output<typeof commandOutput>;

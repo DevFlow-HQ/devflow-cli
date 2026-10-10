@@ -1,4 +1,4 @@
-import type { TurnFact } from "../../src/harness/harness.js";
+import type { TurnFact } from "../../src/run/store/store.js";
 
 /** The data a Turn fact of `K` carries. */
 export type TurnFactData<K extends TurnFact["kind"]> = Extract<

@@ -21,9 +21,9 @@ import type {
   ModelChoice,
   SafeCause,
   SteerCapability,
-  TurnFact,
 } from "../../harness/harness.js";
 import { type ProcessAdapter } from "../../process/process.js";
+import type { TurnFact } from "./turn-facts.js";
 import type {
   ArtifactType,
   AttemptOutcome,
@@ -1460,3 +1460,4 @@ export {
   readSteerEvent,
   readToolCallEvent,
 } from "./turn-records.js";
+export type { TurnFact } from "./turn-facts.js";

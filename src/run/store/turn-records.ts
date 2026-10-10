@@ -15,7 +15,7 @@ import {
 } from "drizzle-orm";
 import type { SQLiteBunDatabase } from "drizzle-orm/bun-sqlite";
 import { z } from "zod";
-import { turnFactSchemas, type TurnFact } from "../../harness/harness.js";
+import { turnFactSchemas, type TurnFact } from "./turn-facts.js";
 import { harnessSessions, turnEvents, turns } from "./run-schema.js";
 import type {
   AdmitTurnRequest,

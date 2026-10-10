@@ -25,6 +25,9 @@ The [Run Store notes](../../src/run/store/AGENTS.md) keep ownership and fencing 
   Migration validates every old row before transactional drop; orphans fail and rollback preserves old rows/journal. `settleTurn` adds no final copy.
 - Turn ordering (#116): `turn.sequence` is `count(turn)` taken under the admit transaction, so it numbers every Turn in the Run regardless of Session.
   Two Sessions' Turns interleave in one numbering.
+- The Store owns the shape of every recorded Turn fact (ADR 0023). The schemas in `turn-facts.ts` stay private; the entry exports only the `TurnFact`
+  type. Stored `tool-call`, `tool-partial` and `turn-diff` reuse the Harness live types, and a type check in `turn-facts.ts` holds each, less
+  `historyOrder`, equal to its live type. Give a stored shape its own type and a translation only when the two must differ.
 - `appendTurnEvent` takes a typed `TurnFact`. The Store checks every kind, with its stamped `historyOrder`, against `turnFactSchemas` before writing and
   refuses a malformed fact or unknown kind as `unrecordable`, never a throw. `readTurnFact` is one keyed lookup over the same checks; its map is typed
   so a schema kind without an entry fails type-checking. Previous-release rows read through it unchanged.

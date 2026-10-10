@@ -10,7 +10,6 @@
 // private. It knows nothing of Routing, Step kind, retry budget, or Run policy,
 // all of which live above the Seam.
 
-import type { CommandOutput, ToolCall, TurnDiff } from "./stored-turn-facts.js";
 import type { ProcessAdapter } from "../process/process.js";
 
 // ---------------------------------------------------------------------------
@@ -382,7 +381,62 @@ type AnswerSource = "human" | "client-policy";
 // only coalesced, replaceable entries.
 // ---------------------------------------------------------------------------
 
-export type { ToolCall, TurnDiff } from "./stored-turn-facts.js";
+/** One file's change, as a Turn diff or a file-change tool call reports it. */
+type FileChange = {
+  readonly path: string;
+  readonly kind?: "create" | "update" | "delete";
+  readonly patch?:
+    | { readonly kind: "unified"; readonly content: string }
+    | {
+        readonly kind: "structured";
+        readonly hunks: readonly {
+          readonly oldStart: number;
+          readonly oldLines: number;
+          readonly newStart: number;
+          readonly newLines: number;
+          readonly lines: readonly string[];
+        }[];
+      };
+  readonly additions?: number;
+  readonly removals?: number;
+};
+
+export type TurnDiff = {
+  readonly content: string;
+  readonly files: readonly FileChange[];
+};
+
+type CommandOutput = {
+  readonly text: string;
+  readonly secantDropped?: true;
+  readonly incomplete?: true;
+};
+
+export type ToolCall = {
+  readonly callId: string;
+  readonly parentCallId?: string;
+  readonly tool:
+    | "read"
+    | "search"
+    | "command"
+    | "file-change"
+    | "web"
+    | "mcp"
+    | "subagent"
+    | "other";
+  readonly input: string;
+  readonly files?: readonly FileChange[];
+  readonly cwd?: string;
+  readonly exitCode?: number;
+  readonly nativeOmission?: string;
+  readonly output?: CommandOutput;
+  readonly count?: { readonly value: number; readonly unit: string };
+  readonly outcome:
+    | { readonly kind: "running" }
+    | { readonly kind: "completed" }
+    | { readonly kind: "failed"; readonly error?: string }
+    | { readonly kind: "declined"; readonly reason?: string };
+};
 
 /** Retained command text, independent of native omissions and display collapse. */
 /** The normalized tail budget applies before observations reach any consumer. */
@@ -1014,5 +1068,3 @@ export type { SafeCause } from "./safe-cause.js";
 // than copying their retention and initial-acquisition implementations.
 export { createTurnEventProducerForTest } from "./turn-event-producer.js";
 export { createPreparationOwnerForTest } from "./preparation-owner.js";
-
-export { turnFactSchemas, type TurnFact } from "./stored-turn-facts.js";

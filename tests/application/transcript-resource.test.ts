@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
-import type { TurnFact } from "../../src/harness/harness.js";
 import { turnFact, type TurnFactData } from "../helpers/turnFact.js";
 import test, { type TestContext } from "node:test";
 import {
@@ -12,7 +11,7 @@ import type {
   TranscriptPageReference,
 } from "../../src/application/projection-port.js";
 import { openCatalog } from "../../src/catalog/catalog.js";
-import type { RunGroup } from "../../src/run/store/store.js";
+import type { RunGroup, TurnFact } from "../../src/run/store/store.js";
 import { hostPlatform } from "../helpers/commandBundle.js";
 import { openLiveRun } from "../helpers/liveRun.js";
 import { makeTempDir } from "../helpers/tempDir.js";

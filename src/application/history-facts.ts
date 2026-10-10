@@ -1,8 +1,11 @@
-import type { TurnFact } from "../harness/harness.js";
 import { createHash } from "node:crypto";
 import { fitEncoded } from "./encoded-json.js";
 import { attemptStepId } from "../run/execution/execution.js";
-import type { TurnEventOutline, TurnRecord } from "../run/store/store.js";
+import type {
+  TurnEventOutline,
+  TurnFact,
+  TurnRecord,
+} from "../run/store/store.js";
 import type {
   SessionHistoryRow,
   SessionHistoryValue,

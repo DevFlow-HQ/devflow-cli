@@ -10,7 +10,6 @@ import {
   translateCause,
   type HarnessProfile,
   type PreparedHarness,
-  type TurnFact,
   type TurnRequest,
   type TurnResult,
 } from "../../../src/harness/harness.js";
@@ -22,7 +21,11 @@ import {
   type ExecutionEvent,
   type ExecutionObserver,
 } from "../../../src/run/execution/execution.js";
-import type { RunOwner, TurnRecord } from "../../../src/run/store/store.js";
+import type {
+  RunOwner,
+  TurnFact,
+  TurnRecord,
+} from "../../../src/run/store/store.js";
 import type {
   AgentStep,
   ArtifactType,

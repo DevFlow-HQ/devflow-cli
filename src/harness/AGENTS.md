@@ -19,8 +19,7 @@ Inherits the engineering baseline; records only non-obvious local facts. Ownersh
   semantic phase, an optional closed semantic `step` (#325), the Session key, elapsed time, and a typed `HarnessFailure`; no typed field carries a
   frame, argv, RPC name, or coordinate (mapping in harness-adapters), though a translated Codex cause may name its RPC method in bounded message or stack text.
   Recovery coordinates cross the Seam only as opaque `RecoveryCoordinate` values, never Run truth; callers never decide from their contents. Native
-  protocol models and qualification stay private to each Adapter and re-export nothing native. The shared stored Turn-fact schemas (`turnFactSchemas`,
-  `TurnFact`, `stored-turn-facts.ts`) are exported so the Run Store validates and the Application reads the normalized facts this Seam publishes.
+  protocol models and qualification stay private to each Adapter and re-export nothing native.
 - No Routing, Step kind, retry budget, or Run policy knowledge lives here; those are above the Seam. A Turn is one mechanical exchange, not a
   judgement that a Step succeeded — the closed Turn results (`not-started`, `completed`, `failed`, `interrupted`, `lost`) are mechanical truth, and the
   Step kind decides the Attempt outcome above the Seam.
