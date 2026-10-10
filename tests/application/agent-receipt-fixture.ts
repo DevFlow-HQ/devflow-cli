@@ -98,11 +98,11 @@ export function receiptAgent(
   };
 }
 
-/** publish (produces spec-ref) → then either a consumer that reads spec-ref, a
- *  second producer that republishes spec-ref, or nothing. */
+/** Publish a declared text output, then consume it, republish it, or finish. */
 export function writeBundle(
   second: "consume" | "republish" | "none",
   publishRetry = 0,
+  outputName = "spec-ref",
 ): {
   folder: string;
   id: string;
@@ -112,7 +112,7 @@ export function writeBundle(
   writeFileSync(join(folder, "prompts", "publish.md"), "Publish the spec.\n");
   writeFileSync(
     join(folder, "prompts", "tickets.md"),
-    "Slice the spec at {{artifact:spec-ref}}.\n",
+    `Slice the spec at {{artifact:${outputName}}}.\n`,
   );
   const id = `dev.secant.agent-receipt-${second}`;
   const manifest = {
@@ -136,7 +136,7 @@ export function writeBundle(
         retry: publishRetry,
         session: "planning",
         prompt: { asset: "prompts/publish.md" },
-        produces: [{ name: "spec-ref", type: "text" }],
+        produces: [{ name: outputName, type: "text" }],
       },
       ...(second === "none"
         ? []
@@ -147,7 +147,7 @@ export function writeBundle(
                   kind: "agent",
                   retry: 0,
                   session: "planning",
-                  requires: ["spec-ref"],
+                  requires: [outputName],
                   prompt: { asset: "prompts/tickets.md" },
                 }
               : {
@@ -156,7 +156,7 @@ export function writeBundle(
                   retry: 0,
                   session: "planning",
                   prompt: { asset: "prompts/publish.md" },
-                  produces: [{ name: "spec-ref", type: "text" }],
+                  produces: [{ name: outputName, type: "text" }],
                 },
           ]),
     ],

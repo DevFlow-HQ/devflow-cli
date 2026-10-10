@@ -1,15 +1,9 @@
 import { Database } from "bun:sqlite";
 import { readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  lstatSync,
-  mkdirSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { wireApplication, type Wiring } from "../../src/composition/main.js";
 import type { RunView } from "../../src/application/projection-port.js";
 import { storedProcess } from "../helpers/wiringDoubles.js";
@@ -291,38 +285,13 @@ for (const damaged of [
 }
 
 test("m11-receipt-failure-evidence: an unclassified receipt filesystem error fails without inventing a seventh code", async (t) => {
+  // Bun 1.4.2 rejects paths beyond its largest bound, 98,302 bytes on Windows,
+  // with ENAMETOOLONG before the OS lookup. This name meets the Bundle grammar.
+  const outputName = "x".repeat(128 * 1024);
   const { wired, runId } = await launch(
     t,
-    receiptAgent([
-      (path) => {
-        const directory = dirname(path);
-        let stage = "remove parent";
-        try {
-          rmSync(directory, { recursive: true });
-          stage = "create directory link";
-          symlinkSync(directory, directory, "dir");
-          stage = "lookup receipt";
-          assert.throws(
-            () => lstatSync(path),
-            (cause: unknown) => {
-              t.diagnostic(
-                `[DEBUG-529-receipt] lstat cause: ${cause instanceof Error ? cause.stack : String(cause)}`,
-              );
-              assert.ok(cause instanceof Error && "code" in cause);
-              assert.ok(typeof cause.code === "string");
-              assert.notEqual(cause.code, "ENOENT");
-              return true;
-            },
-          );
-        } catch (cause) {
-          t.diagnostic(
-            `[DEBUG-529-receipt] ${stage}: ${cause instanceof Error ? cause.stack : String(cause)}`,
-          );
-          throw cause;
-        }
-      },
-    ]).adapter,
-    writeBundle("none"),
+    receiptAgent([undefined]).adapter,
+    writeBundle("none", 0, outputName),
   );
   const run = readRun(wired.projectionPort, runId);
   assert.equal(run.state, "failed", JSON.stringify(run.problem));
