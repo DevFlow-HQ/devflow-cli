@@ -296,28 +296,36 @@ test("m11-receipt-failure-evidence: an unclassified receipt filesystem error fai
     receiptAgent([
       (path) => {
         const directory = dirname(path);
-        rmSync(directory, { recursive: true });
-        // A file parent reports ENOENT on Windows. A directory-link cycle
-        // exercises a non-missing lstat failure on every supported platform.
-        symlinkSync(directory, directory, "dir");
-        assert.throws(
-          () => lstatSync(path),
-          (cause: unknown) => {
-            assert.ok(cause instanceof Error && "code" in cause);
-            assert.ok(typeof cause.code === "string");
-            assert.notEqual(cause.code, "ENOENT");
-            t.diagnostic(
-              `Cyclic receipt parent lookup failed with ${cause.code} on ${process.platform}.`,
-            );
-            return true;
-          },
-        );
+        let stage = "remove parent";
+        try {
+          rmSync(directory, { recursive: true });
+          stage = "create directory link";
+          symlinkSync(directory, directory, "dir");
+          stage = "lookup receipt";
+          assert.throws(
+            () => lstatSync(path),
+            (cause: unknown) => {
+              t.diagnostic(
+                `[DEBUG-529-receipt] lstat cause: ${cause instanceof Error ? cause.stack : String(cause)}`,
+              );
+              assert.ok(cause instanceof Error && "code" in cause);
+              assert.ok(typeof cause.code === "string");
+              assert.notEqual(cause.code, "ENOENT");
+              return true;
+            },
+          );
+        } catch (cause) {
+          t.diagnostic(
+            `[DEBUG-529-receipt] ${stage}: ${cause instanceof Error ? cause.stack : String(cause)}`,
+          );
+          throw cause;
+        }
       },
     ]).adapter,
     writeBundle("none"),
   );
   const run = readRun(wired.projectionPort, runId);
-  assert.equal(run.state, "failed");
+  assert.equal(run.state, "failed", JSON.stringify(run.problem));
   assert.deepEqual(run.outputs, []);
   assert.equal(
     run.timeline.find((e) => e.event === "turn-settled")?.detail,
